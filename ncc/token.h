@@ -2,7 +2,7 @@
 #define _TOKEN_H
 /* token.h */
 
-#define KeywordDefTable \
+#define _KeywordDefTable_ \
     KeywordDef("true",     4, TOK_TRUE)           /**< Boolean truth constant `true`  */   \
     KeywordDef("false",    5, TOK_FALSE)          /**< Boolean false value constant `false`  */   \
     /* Storage class specifier */ \

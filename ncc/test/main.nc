@@ -1,8 +1,6 @@
 module main
 
 const main()
-{
-	puts("Hello, NihaoC!")
-	
+{	
 	return
 }

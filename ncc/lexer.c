@@ -2,7 +2,7 @@
 
 #define KeywordDef(str,len,token) {str, #token},
 TokenInfo token_table[]= {
-    KeywordDefTable
+    _KeywordDefTable_
 };
 #undef KeywordDef
 
@@ -10,8 +10,7 @@ TokenInfo token_table[]= {
 
 #define KeywordDef(str,len,tok) {str, len, tok},
 KeywordEntry keywords[] = {
-    // {.str = "]", .len = 1, .token = TOK_RBRACKET},
-    KeywordDefTable
+    _KeywordDefTable_
 };
 #undef KeywordDef
 
