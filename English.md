@@ -141,6 +141,7 @@ align 4 {
   }
 }  // 4-byte alignment
 ```
+
 ###### 3.3.1 Type nesting
 
 ```nihao
@@ -531,7 +532,6 @@ flow dynamic_var i32 = 42     // Dynamic storage duration, dynamic scope
 const safe_pointer_operations() {
     // Safe transfer: same scope or longer-lived scope
     flow ptr1 void = &dynamic_var     // Safe: flow -> flow
-    static ptr2 void = &MAX_SIZE      // Safe: const -> static
 
     // Unsafe transfer: short-lived scope to long-lived scope
     // static ptr3 void = &local_var   // Error: local variable cannot be passed to static pointer
@@ -554,14 +554,8 @@ const visibility_checks() {
     if visof(source_ptr) == _flow && visof(target_ptr) == _flow {
         target_ptr = source_ptr  // flow -> flow safe
     }
-    else if visof(source_ptr) == _static && visof(target_ptr) == _flow {
-        target_ptr = source_ptr  // static -> flow safe
-    }
     else if visof(source_ptr) == _static && visof(target_ptr) == _static {
         target_ptr = source_ptr  // static -> static safe
-    }
-    else if visof(source_ptr) == _const && visof(target_ptr) == _static {
-        target_ptr = source_ptr  // const -> static safe
     }
     else if visof(source_ptr) == _const && visof(target_ptr) == _const {
         target_ptr = source_ptr  // const -> const safe
@@ -577,28 +571,25 @@ const visibility_checks() {
 ### 13.1 Pointer Transfer Visibility Rules Table
 
 ```
-// Pointer assignment visibility compatibility matrix
+// Pointer assignment visibility compatibility matrix in the intersection of scopes,
 // Source -> Target    const    static    flow    local
-// const         Safe      Safe      Safe    Error
-// static        Error     Safe      Safe    Error  
-// flow          Error     Error     Safe    Error
-// local         Error     Error     Safe    Safe
+// const               Safe     Error     Error   Error
+// static              Safe     Safe      Error   Error  
+// flow                Safe     Error     Safe    Error
+// local               Safe     Error     Error   Safe
 
 const demonstrate_rules() {
     const GLOBAL i32 = 100
     static MODULE_VAR i32 = 200
     flow DYNAMIC_VAR i32 = 300
-    local LOCAL_VAR i32 = 400
+    LOCAL_VAR i32 = 400
 
     // Safe examples
     flow ptr1 void ?= &DYNAMIC_VAR     // flow -> flow: safe
-    static ptr2 void ?= &GLOBAL        // const -> static: safe
-    flow ptr3 void ?= &MODULE_VAR      // static -> flow: safe
-    flow ptr4 void ?= &LOCAL_VAR       // local -> flow: safe (within same function)
-
+    const ptr6 void ?= &MODULE_VAR     // static -> const: safe
+   
     // Error examples (compile-time check)
     // static ptr5 void ?= &DYNAMIC_VAR  // flow -> static: error
-    // const ptr6 void ?= &MODULE_VAR    // static -> const: error
     // static ptr7 void ?= &LOCAL_VAR    // local -> static: error
 }
 ```
@@ -635,7 +626,6 @@ const example_usage() {
     // Safe calls
     process_static_data(static_ptr)     // static -> static: safe
     process_dynamic_data(dynamic_ptr)  // flow -> flow: safe
-    process_dynamic_data(static_ptr)   // static -> flow: safe
 }
 ```
 
