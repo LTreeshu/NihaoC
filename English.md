@@ -8,124 +8,131 @@ NiHao is a new statically compiled language designed for system-level programmin
 
 ### 2.1 Comments
 
-```
+```nihao
 // Single-line comment
 /* Multi-line comment */
 ```
 
-### 2.2 Statement Separation
+### 2.2 Statement Termination
 
-- Statements are separated by newlines
-
-- Multiple statements on the same line use semicolons: `stmt1; stmt2`
+- Statements are terminated by newline or optional `;`
+- Multiple statements on the same line are separated by semicolons: `stmt1; stmt2`
 
 ### 2.3 Built-in Functions
 
-- `typeof(type)`Type checking, returns type
+- `typeof(type)` – type introspection, returns type
+- `sizeof(type)` – size inquiry, returns size in bytes
+- `alignof(type)` – alignment inquiry, returns alignment requirement
+- `structof(member)` – owner inquiry, returns the owner struct of a member
+- `unionof(member)` – owner inquiry, returns the owner union of a member
+- `offsetof(type, member)` – returns byte offset of a member
+- `bitoffsetof(type, bitmember)` – returns bit offset of a bit-field member
+- `visof(var)` – visibility inquiry, returns visibility attribute
 
-- `sizeof(type)`Size checking, returns size
+### 2.4 Keyword Reference
 
-- `holdof(type,member,ptr)`Ownership checking, returns member owner
-
-- `visof(var)`Visibility checking, returns visibility attribute
-
-### 2.4 Keyword Description
-
-- `alias`Type alias
-
-- `const`Modifier for immutability
-
-- `flow`Modifier for dynamic visibility
-
-- `static`Modifier for static visibility
-
-- `_flow`Dynamic visibility attribute enum value
-
-- `_static`Static visibility attribute enum value
-
-- `_undef`Undefined invisible attribute enum value
-
-- `cooking {...}`Compile-time execution code block keyword
-
-- `align n {...}`Byte alignment code block
-
-- `use` include the module extern
-
-- `module` define the current module name
-
-- `link ...`Auxiliary compilation, Export extern from linked file
+- `alias` – type alias
+- `const` – denotes fixed, immutable visibility
+- `flow` – denotes dynamic visibility
+- `static` – denotes static visibility
+- `var` – denotes local visibility, can be type‑inferred
+- `_undef` – undefined visibility enumeration value
+- `_const` – fixed/immutable visibility enumeration value
+- `_flow` – dynamic visibility enumeration value
+- `_static` – static visibility enumeration value
+- `_var` – local visibility enumeration value
+- `cooking { ... }` – compile‑time execution block
+- `align n { ... }` – byte‑alignment block
+- `use ...` – module import
+- `module ...` – module definition
+- `linkas "..."` – static library export naming
+- `link "..." ...` – static library import usage
+- `func` – denotes a function with no return attribute and no return value (but can have a return type when used with a return type)
+- `[[inline]]` – function attribute: inline hint
+- `[[weak]]` – function attribute: weak definition
+- `[[static]]` – function attribute: internal linkage
+- `[[used]]` – function attribute: force retain symbol
+- `[[unused]]` – function attribute: force discard (deprecate)
+- `[[export]".my_section"]` – function attribute: export to a specific section
 
 ## 3. Type System
 
-### 3.1 Basic Types
+### 3.1 Primitive Types
 
-| Type     | Description                           | Size         |
-| -------- | ------------------------------------- | ------------ |
-| `char`   | Character type                        | 1 byte       |
-| `string` | String type                           | Dynamic      |
-| `u8`     | Unsigned 8-bit integer                | 1 byte       |
-| `u16`    | Unsigned 16-bit integer               | 2 bytes      |
-| `u32`    | Unsigned 32-bit integer               | 4 bytes      |
-| `u64`    | Unsigned 64-bit integer               | 8 bytes      |
-| `i8`     | Signed 8-bit integer                  | 1 byte       |
-| `i16`    | Signed 16-bit integer                 | 2 bytes      |
-| `i32`    | Signed 32-bit integer                 | 4 bytes      |
-| `i64`    | Signed 64-bit integer                 | 8 bytes      |
-| `f32`    | Single-precision floating point       | 4 bytes      |
-| `f64`    | Double-precision floating point       | 8 bytes      |
-| `fx32`   | Single-precision fixed-point (Q16.16) | 4 bytes      |
-| `fx64`   | Double-precision fixed-point (Q32.32) | 8 bytes      |
-| `void`   | Generic pointer type                  | Pointer size |
+| Type     | Description                     | Size                 |
+| -------- | ------------------------------- | -------------------- |
+| `void`   | Generic pointer type            | machine pointer size |
+| `char[]` | String type                     | dynamic              |
+| `char`   | Character type                  | 1 byte               |
+| `u8`     | Unsigned 8‑bit integer          | 1 byte               |
+| `u16`    | Unsigned 16‑bit integer         | 2 bytes              |
+| `u32`    | Unsigned 32‑bit integer         | 4 bytes              |
+| `u64`    | Unsigned 64‑bit integer         | 8 bytes              |
+| `i8`     | Signed 8‑bit integer            | 1 byte               |
+| `i16`    | Signed 16‑bit integer           | 2 bytes              |
+| `i32`    | Signed 32‑bit integer           | 4 bytes              |
+| `i64`    | Signed 64‑bit integer           | 8 bytes              |
+| `f32`    | Single‑precision floating point | 4 bytes              |
+| `f64`    | Double‑precision floating point | 8 bytes              |
+| `fx32`   | Fixed‑point Q16.16              | 4 bytes              |
+| `fx64`   | Fixed‑point Q32.32              | 8 bytes              |
 
 ### 3.2 Composite Types
 
-**Array Declaration:**
+The basic declaration structure is `[attribute] [name] [type]`.
 
-```
-fixedArray char[3]       // Fixed-size array
-dynamicArray i8[...]     // Dynamic array without initial value
-initArray u16[6...]      // Dynamic array with initial size
-// Array access
+**Array declarations:**
+
+```nihao
+static fixedArray char[3]       // fixed‑size array, type is char[3]
+flow dynamicArray i8[...]       // dynamic array without initial size
+var initArray u16[6...]         // dynamic array with initial size
+
+// Array indexing assignment
+fixedArry[0] = 0
+
+// Array slice assignment
+dynamicArray[2..3] = {3,4}
 ```
 
-**Type Aliases:**
+**Type aliases:**
 
-```
+```nihao
 alias Byte = u8
 alias StringPtr = void[]
 ```
 
-**Type Definitions:**
+**Type definitions (struct):**
 
-```
+```nihao
 Person struct{
-    name string
+    name char[]
     age u8
-    flag u8:1 // Supports bitfield syntax
+    flag u8:1 // bit‑field syntax supported
 }
 ```
 
 **Unions:**
 
-```
+```nihao
 Data union{
     asInt i32
     asFloat f32
 }
 ```
 
-**Enums:**
+**Enumerations:**
 
-```
+```nihao
 Color enum{ RED, GREEN, BLUE }
 ```
 
 ### 3.3 Type Operations
 
-###### 3.3.1 Type align
+#### 3.3.1 Type Alignment
 
-```
-// Type checking
+```nihao
+// Type introspection
 if typeof(value) == i32 { ... }
 
 // Type size
@@ -139,13 +146,13 @@ align 4 {
     flag u32:1 
     tag  u32:2
   }
-}  // 4-byte alignment
+}  // 4‑byte aligned
 ```
 
-###### 3.3.1 Type nesting
+#### 3.3.2 Type Nesting
 
 ```nihao
-// Normal nesting
+// Regular nesting
 aunion union{
     value u16
     reg struct{
@@ -168,85 +175,92 @@ xunion union{
 xunion.r1 = 1
 ```
 
-## 4. Variable Declaration and Visibility
+## 4. Variable Declarations and Visibility
 
 ### 4.1 Declaration Modifiers
 
-| Modifier    | Description                         |
-| ----------- | ----------------------------------- |
-| `const`     | Defines fixed visibility variable   |
-| `flow`      | Defines dynamic visibility variable |
-| `static`    | Defines static visibility variable  |
-| No modifier | Defines local visibility variable   |
+| Modifier | Description                 |
+| -------- | --------------------------- |
+| `const`  | Fixed, immutable visibility |
+| `flow`   | Dynamic visibility          |
+| `static` | Static visibility           |
+| `var`    | Local visibility            |
 
 ### 4.2 Examples
 
-```
+```nihao
 const MAX_SIZE i32 = 1024
-flow counter i8 = 0
+flow counter i8 = 0 
 static globalVar f32 = 3.14
-{inferred string = "Hello"}
+{var inferred char[] = "Hello"}
+// Local variables do not require the var prefix; it can be omitted.
+{localstr char[] = "Hello"}
+
+// Multiple variable declarations
+var {a = 0, b = 1, c = 0} i8
+var {aa = "aa", bb = "bb", cc = "cc"} char[2]
+var {aaa = "aaa", bbb = "bbb", ccc = "ccc"} char[]
 ```
 
 ## 5. Pointers and Memory Management
 
 ### 5.1 Pointer Operations
 
-###### 5.1.1 Pointer Definition
+#### 5.1.1 Pointer Definition
 
 ```nihao
-// Declaring a null pointer is not allowed; it must be assigned at declaration.
+// Null pointers are not allowed; must be assigned upon declaration
 variable i8 = 0
 varptr void = &var
 
-// Single-level pointer
-ptr void = malloc(i32)   // Allocate memory
-ptr.(i32) = 42           // Dereference and assign
+// Single‑level pointer
+ptr void = malloc(i32)   // allocate memory
+ptr.(i32) = 42           // dereference and assign
+ptr?.(i64)               // safe dereference; compiler error because i64 > i32, out‑of‑bounds
 
-// Multi-level pointers
-ptr2 void[] = &ptr       // Define a second-level pointer
-ptr = ptr2.()            // One-level dereference
-variable = ptr2[].(i32)  // Two-level dereference
+// Multi‑level pointers
+ptr2 void[] = &ptr       // second‑level pointer definition
+ptr = ptr2.()            // one‑level dereference; when dereferencing void type, () may be omitted
+variable = ptr2[].(i32)  // two‑level dereference
 
-ptr3 void[][] ?= &ptr2    // Define a third-level pointer
-ptr2 = ptr3.()            // One-level dereference
-ptr  = ptr3[].()          // Two-level dereference
-variable = ptr3[][].(i32) // Three-level dereference
+ptr3 void[][] ?= &ptr2   // third‑level pointer definition
+ptr2 = ptr3.()           // one‑level dereference
+ptr  = ptr3[].()         // two‑level dereference
+variable = ptr3[][].(i32) // three‑level dereference
 ```
 
-###### 5.1.2 Array Pointer
+#### 5.1.2 Array Pointers
 
 ```nihao
 arry char[9] = {1,2,3,4,5,6,7,8,9}
-arryptr void = &arry           // Obtain the array pointer
+arryptr void = &arry           // get array pointer
 arryptr[0] = 0
-arryptr[9] = 9                 // Undefined behavior
-arryptr.(char[9])[9] = 9       // Compilation error: Out-of-bounds
-arryptr.(char[9])[0] = 0       // Dereference member [0]
-
+arryptr[9] = 9                 // undefined behavior
+arryptr.(char[9])[0] = 0       // dereference element [0]
+// arryptr.(char[9])[9] = 9    // compile error: out‑of‑bounds
 
 arrybuffer char[8] = arryptr.(char[9])[0..7]
 // arrybuffer == {0,1,2,4,5,6,7,8}
 
 // Array of array pointers
-arryptr2 void[2] = {&arry,&arrybuffer}
+arryptr2 void[2] = {&arry, &arrybuffer}
 arryptr2[0].(char[9])[8] = arry[8]
 arryptr2[1].(char[8])[7] = arrybuffer[7]
 ```
 
-###### 5.1.3 Pointer Array
+#### 5.1.3 Pointer Arrays
 
 ```nihao
-dptrarry1 void[3] = malloc(void[3]) // Dynamically allocate a 1D pointer array
+dptrarry1 void[3] = malloc(void[3]) // dynamically allocate 1‑D pointer array
 dptrarry1[2] = ptr
 dptrarry1[2].(i32) += 1
 
-dptr3 void[4][5] = malloc(void[4][5]) // Dynamically allocate a 2D pointer array
-dptr3[3][4] = ptr       // Safe pointer assignment
-// Error: dptr3[0][0].(int64) error: int64 type size > i32 type size!
-dptr3[3][4].(i32) += 1  // Multi-level pointer dereference
+dptr3 void[4][5] = malloc(void[4][5]) // dynamically allocate 2‑D pointer array
+dptr3[3][4] = ptr       // safe pointer assignment
+// error: dptr3[0][0].(int64) error: int64 type size > i32 type size!
+dptr3[3][4].(i32) += 1  // multi‑level dereference
 
-// Pointer to pointer array
+// Pointer to array of pointers
 ptrarry void = &arryptr2
 ptrarry.(void[2])[0].(char[9])[8] = 8
 ptrarry.(void[2])[1].(char[8])[7] = 7
@@ -255,35 +269,44 @@ ptrarry.(void[2])[1].(char[8])[7] = 7
 // arrybuffer == {0,1,2,4,5,6,7,7}
 ```
 
-###### 5.1.4 Composite Type Pointer
+#### 5.1.4 Composite Type Pointers
 
 ```nihao
 Say struct{
     name char[9]
-    say string
+    say char[]
 }
-xiaoming Say
+xiaoming Say 
 stptr void = &xiaoming
-stptr.(char[9])[0..8] = "xiaoming"  // Pointer slice assignment
-stptr.(Say).say = "NiHao I am xiaoming!" // Pointer type dereference
+stptr.(char[9])[0..8] = "xiaoming"  // pointer slice assignment
+stptr.(Say).say = "NiHao I am xiaoming!" // pointer type reference
 talk = xiaoming.say
 puts(talk)
 // puts(talk) out--> "NiHao I am xiaoming!"
 ```
 
-###### 5.1.5 Function Pointer
+#### 5.1.5 Function Pointers
+
+` void() ` represents a function pointer type; inside `()` you can declare the number and types of parameters. Examples:
+
+- ` func ptr void(u8,char[]) ` – no return value
+- ` func ptr void(u8,char[]) u32` – returns u32
+- ` const ptr void(u8,char[]) u32` – returns u32 with const attribute
+- ` flow ptr void(u8,char[]) void` – returns void with flow attribute
+- ` static ptr void(u8,char[]) char[]` – returns char[] with static attribute
 
 ```nihao
-const callback_handle(argc u16) {
+func callback_handle(argc u16) {
     puts("callback call!")
 }
 
-const callback void(u16) = callback_handle
+func callback void(u16) = callback_handle
 
-const callback_register(const cb void(u16), event u32) u32 {
+func callback_register(func cb void(u16), event u32) u32 {
     if event == 1 {
         callback = cb
     }
+    return event
 }
 
 flow callback_handle_with_return(argc u16) i32 {
@@ -293,25 +316,26 @@ flow callback_handle_with_return(argc u16) i32 {
 
 flow callback2 void(u16)i32 = callback_handle_with_return
 
-const callback_register_with_return(flow cb void(u16)i32 , event u32) u32 {
+func callback_register_with_return(flow cb void(u16)i32 , event u32) u32 {
     if event == 1 {
         callback2 = cb
     }
+    return event
 }
 ```
 
-### 5.2 Memory Checking
+### 5.2 Memory Introspection
 
-```
-// Visibility checking
+```nihao
+// Visibility check
 if visof(ptr) == _static { 
     // ...
 }
 
-// Ownership checking
-boy Person = {"xiaoming", 13}
-ptr void = &boy.name
-if holdof(ptr) == boy { 
+// Owner check
+var boy Person = {"xiaoming", 13}
+var ptr void = &boy.name
+if structof(Person, ptr) == boy { 
     // ...
 }
 ```
@@ -320,7 +344,7 @@ if holdof(ptr) == boy {
 
 ### 6.1 Conditional Statements
 
-```
+```nihao
 if condition {
     // ...
 } else if anotherCondition {
@@ -330,25 +354,25 @@ if condition {
 }
 ```
 
-### 6.2 Loop Structures
+### 6.2 Loops
 
-**do Loop:**
+**do loop:**
 
-```
+```nihao
 do value > 0 {
     value++
     if value == 100 {
         break
     }
-    else if value == 50{
+    else if value == 50 {
       continue
     }
 }
 ```
 
-**while Loop (with pattern matching):**
+**while loop (with pattern matching):**
 
-```
+```nihao
 var1 u8
 while var1 += 1 {
     is -1 {
@@ -361,9 +385,9 @@ while var1 += 1 {
 }
 ```
 
-**for Loop:**
+**for loop:**
 
-```
+```nihao
 for i = 0; i < 10; i++ {
     // ...
 }
@@ -371,22 +395,62 @@ for i = 0; i < 10; i++ {
 
 ## 7. Function Definitions
 
-### 7.1 Function Declaration
+### 7.1 Function Declarations
 
-```
-// Function with no return and no parameters
-const greet() {
+```nihao
+// No parameters, no return value
+func greet() {
     print("Hello")
 }
 
-// Function with return and parameters
-const add(a i8, b i8) i8 {
+// With parameters and return value
+func add(a i8, b i8) i8 {
     return a + b
 }
 
-// Function with multiple returns
-const swap(a i8, b i8) (i8, i8) {
-    return b, a
+Person struct {
+    id u32
+    name char[]
+}
+
+// Function returning a void pointer with flow attribute
+flow create(id u32) void {
+    flow person void = malloc(sizeof(Person))
+    person.(Person).id = id
+    return person
+}
+
+// Function returning a void pointer with const attribute
+const create(id u32) void {
+    static xxx Person = {32, "xxx"}
+    return &person
+}
+
+// Function returning a void pointer with static attribute
+static get_arry(size u32) void {
+    static arry char[u32]
+    return &arry
+}
+
+// Function with function attributes
+[[static]]
+func getCounter() u32 {
+    static counter u32
+    return (counter + 1)
+}
+
+[[inline]]
+const sub(a u8, b u8) {
+    return (a+b)
+}
+
+[[weak]]
+flow newCard(id u32) void {
+    flow card struct {
+        id u32
+        name char[]
+    } = {id, "obj"}
+    return &card
 }
 ```
 
@@ -394,23 +458,23 @@ const swap(a i8, b i8) (i8, i8) {
 
 ### 8.1 Module Definition
 
-```
+```nihao
 module mathUtils
 
-const add(a i32, b i32) i32 {
+func add(a i32, b i32) i32 {
     return a + b
 }
 ```
 
 ### 8.2 Module Usage
 
-```
+```nihao
 use mathUtils
 ```
 
 ### 8.3 Library Linking
 
-```
+```nihao
 link "libc.so" libc
 ```
 
@@ -418,16 +482,16 @@ link "libc.so" libc
 
 ### 9.1 Common Commands
 
-```
+```bash
 nihao init     # Initialize project
 nihao build    # Build project
 nihao run      # Build and run
 nihao debug    # Build in debug mode
 ```
 
-### 9.2 Compile-time Execution
+### 9.2 Compile‑time Execution
 
-```
+```nihao
 cooking {
     // Code executed at compile time
     const BUILD_TIME = time.now()
@@ -436,7 +500,7 @@ cooking {
 
 ## 10. Example Program
 
-```
+```nihao
 module main
 use stdio
 use stdlib
@@ -452,7 +516,7 @@ multireturn struct{
     value u8
 }
 
-const main() 
+func main() 
 {
     puts("Program starting\n")
 
@@ -481,11 +545,11 @@ const main()
 
     return
     /* If the flow variable: dynptr, temp, is not returned,
-     * they will be automatically free.
+     * they will be automatically freed.
     */
 }
 
-const calculate() multireturn  
+func calculate() multireturn  
 {
     if visof(value) != _undef {
       return {0,0}
@@ -500,57 +564,75 @@ const calculate() multireturn
 
 ### 11.1 Type Safety
 
-```
-// Safe pointer transfer
+```nihao
+// Safe pointer assignment
 flow safePtr void ?= ptr
 
-// Equivalent to
+// Equivalent to:
 if visof(ptr) == _flow {
     safePtr = ptr
 }
 ```
 
-## 12. NiHao Language Visibility System and Lifetime Management
+## 12. NiHao Visibility System and Lifetime Management
 
-Variable attributes determine visibility attributes
-![VisibilityDefinition](Visibility%20definition%20en.png)
+Visibility is categorized by variable attributes.
+
+![Visibility definition.png](Visibility%20definition.png)
+
+Pointer assignment visibility compatibility matrix (within intersecting scopes):
+
+| Source \ Target | const | static | flow  | local |
+| --------------- | ----- | ------ | ----- | ----- |
+| const           | safe  | error  | error | error |
+| static          | safe  | safe   | error | error |
+| flow            | safe  | error  | safe  | error |
+| local           | safe  | error  | error | safe  |
 
 ### 12.1 Storage Duration and Scope Combination Rules
 
-```
+```nihao
 // Storage duration and scope rules
-const MAX_SIZE i32 = 1024     // Static storage duration, global scope
-static counter i32 = 0        // Static storage duration, module scope  
-flow dynamic_var i32 = 42     // Dynamic storage duration, dynamic scope
+const MAX_SIZE i32 = 1024     // static storage duration, global scope
+static counter i32 = 0        // static storage duration, module scope  
+flow dynamic_var i32 = 42     // dynamic storage duration, dynamic scope
 
-// Local code block
+// Local block
 {
-    local_var i32 = 100       // Automatic storage duration, local scope
+    local_var i32 = 100       // automatic storage duration, local scope
 }
 
 // Pointer safety transfer rules
-const safe_pointer_operations() {
-    // Safe transfer: same scope or longer-lived scope
-    flow ptr1 void = &dynamic_var     // Safe: flow -> flow
+func safe_pointer_operations() {
+    // Safe transfer: same scope or longer‑lived scope
+    flow ptr1 void = &dynamic_var     // safe: flow -> flow
+    static ptr2 void = &counter       // safe: static -> static
 
-    // Unsafe transfer: short-lived scope to long-lived scope
-    // static ptr3 void = &local_var   // Error: local variable cannot be passed to static pointer
-    // const ptr4 void = &dynamic_var  // Error: flow cannot be passed to const
+    // Unsafe transfer: shorter‑lived to longer‑lived
+    // static ptr3 void = &local_var   // error: local variable cannot be assigned to static pointer
+    // const ptr4 void = &dynamic_var  // error: flow cannot be assigned to const
 }
 ```
 
-### 12.2 Visibility Check Safety Transfer
+### 12.2 Visibility‑checked Safe Transfer
 
-```
-// Visibility check rules for safe pointer assignment operator ?=
-const visibility_checks() {
-    source_ptr void = &some_variable
-    target_ptr void
+```nihao
+// Safe pointer assignment operator ?= visibility check rules
+func visibility_checks() {
+    var varconst u32
+    var source_ptr = &varconst
+
+    const target_ptr void
+
+    {
+        var undefptr void
+        source_ptr = undefptr
+    }
 
     // Safe assignment: check visibility compatibility
-    target_ptr ?= source_ptr  // Equivalent to the following check:
+    target_ptr ?= source_ptr  // equivalent to the following check:
 
-    // Compile-time generated check logic
+    // Compile‑time generated check logic
     if visof(source_ptr) == _flow && visof(target_ptr) == _flow {
         target_ptr = source_ptr  // flow -> flow safe
     }
@@ -560,25 +642,43 @@ const visibility_checks() {
     else if visof(source_ptr) == _const && visof(target_ptr) == _const {
         target_ptr = source_ptr  // const -> const safe
     }
+    else if visof(source_ptr) == _var && visof(target_ptr) == _var {
+        target_ptr = source_ptr  // var -> var safe
+    }
+    else if visof(source_ptr) == _flow && visof(target_ptr) == _const {
+        target_ptr = source_ptr  // flow -> const safe
+    }
+    else if visof(source_ptr) == _static && visof(target_ptr) == _const {
+        target_ptr = source_ptr  // static -> const safe
+    }
+    else if visof(source_ptr) == _const && visof(target_ptr) == _const {
+        target_ptr = source_ptr  // const -> const safe
+    }
+    else if visof(source_ptr) == _var && visof(target_ptr) == _const {
+        target_ptr = source_ptr  // var -> const safe
+    }
+    else if visof(source_ptr) == _undef {
+        panic("undefined pointer cannot be assigned")
+    }
     else {
-        panic("Incompatible visibility pointer assignment")
+        panic("incompatible visibility pointer assignment")
     }
 }
 ```
 
-## 13. Visibility-Based Pointer Safety System
+## 13. Visibility‑based Pointer Safety System
 
-### 13.1 Pointer Transfer Visibility Rules Table
+### 13.1 Visibility Matrix for Pointer Transfers
 
-```
-// Pointer assignment visibility compatibility matrix in the intersection of scopes,
+```nihao
+// Pointer assignment visibility compatibility matrix (within intersecting scopes)
 // Source -> Target    const    static    flow    local
-// const               Safe     Error     Error   Error
-// static              Safe     Safe      Error   Error  
-// flow                Safe     Error     Safe    Error
-// local               Safe     Error     Error   Safe
+// const                safe     error     error   error
+// static               safe     safe      error   error  
+// flow                 safe     error     safe    error
+// local                safe     error     error   safe
 
-const demonstrate_rules() {
+func demonstrate_rules() {
     const GLOBAL i32 = 100
     static MODULE_VAR i32 = 200
     flow DYNAMIC_VAR i32 = 300
@@ -586,40 +686,40 @@ const demonstrate_rules() {
 
     // Safe examples
     flow ptr1 void ?= &DYNAMIC_VAR     // flow -> flow: safe
-    const ptr6 void ?= &MODULE_VAR     // static -> const: safe
-   
-    // Error examples (compile-time check)
+    const ptr6 void ?= &MODULE_VAR    // static -> const: safe
+
+    // Error examples (compile‑time)
     // static ptr5 void ?= &DYNAMIC_VAR  // flow -> static: error
     // static ptr7 void ?= &LOCAL_VAR    // local -> static: error
 }
 ```
 
-### 13.2 Function Parameter Visibility Constraints
+### 13.2 Visibility Constraints on Function Parameters
 
-```
+```nihao
 // Function parameter visibility annotations
-const process_static_data(static ptr void) i32 {
-    // Can only accept static or const pointers
+func process_static_data(static ptr void) i32 {
+    // Only accepts static pointers
     return ptr.(i32)
 }
 
-const process_dynamic_data(flow ptr void) i32 {
-    // Can accept flow, static, const pointers
+func process_dynamic_data(flow ptr void) i32 {
+    // Only accepts flow pointers
     return ptr.(i32)
 }
 
 // Return value visibility constraints
-const get_static_pointer() static void {
+static get_static_pointer() void {
     static data i32 = 42
-    return &data  // Return static pointer
+    return &data  // returns static pointer
 }
 
-const get_dynamic_pointer() flow void {
+flow get_dynamic_pointer() void {
     flow data i32 = 42
-    return &data  // Return flow pointer
+    return &data  // returns flow pointer
 }
 
-const example_usage() {
+func example_usage() {
     static static_ptr void = get_static_pointer()
     flow dynamic_ptr void = get_dynamic_pointer()
 
@@ -633,100 +733,100 @@ const example_usage() {
 
 ### 14.1 Flow Variable Scope Inference
 
-```
-// Compiler automatically infers flow variable scope
-const scope_demonstration() {
+```nihao
+// Compiler automatically infers the scope of flow variables
+func scope_demonstration() {
     flow var1 i32 = 10
 
     if condition {
         flow var2 i32 = 20
-        flow ptr1 void ?= &var1     // Safe: var1 scope contains var2
-        flow ptr2 void ?= &var2     // Safe: same scope
+        flow ptr1 void ?= &var1     // safe: var1 scope contains var2
+        flow ptr2 void ?= &var2     // safe: same scope
 
-        // var2 scope ends here
+        // var2's scope ends here
     }
 
-    // ptr2 cannot be used here since var2 has left scope
-    flow ptr3 void ?= &var1         // Safe: var1 still in scope
+    // ptr2 cannot be used here because var2 has left scope
+    flow ptr3 void ?= &var1         // safe: var1 still in scope
 }
 
 // Nested scope lifetime checking
-const nested_scopes() {
+func nested_scopes() {
     flow outer_var i32 = 100
 
     {
         flow inner_var i32 = 200
-        flow inner_ptr void ?= &outer_var  // Safe: outer scope contains inner
-        flow outer_ptr void ?= &inner_var  // Safe: same function scope
+        flow inner_ptr void ?= &outer_var  // safe: outer scope contains inner
+        flow outer_ptr void ?= &inner_var  // safe: same function scope
     }
 
-    // After leaving inner scope, inner_var becomes invalid
-    // But outer_var remains valid
+    // After leaving inner scope, inner_var is invalid
+    // outer_var remains valid
 }
 ```
 
-### 14.2 Cross-Function Call Scope Management
+### 14.2 Cross‑Function Call Scope Management
 
-```
-// Scope transfer during function calls
-const caller_function() {
+```nihao
+// Scope transfer across function calls
+func caller_function() {
     flow local_dynamic i32 = 42
     flow result i32 = process_with_callback(local_dynamic, &callback_function)
 }
 
-const process_with_callback(flow data i32, 
+flow process_with_callback(flow data i32, 
                            flow callback void(i32)i32
-                           )flow i32 {
-    // Both data and callback are flow, ensuring lifetime compatibility
+                           ) i32 {
+    // data and callback are both flow, ensuring lifetime compatibility
     return callback(data)
 }
 
-const callback_function(value i32) i32 {
+func callback_function(value i32) i32 {
     return value * 2
 }
 ```
 
 ## 15. Safe Pointer Operation Patterns
 
-### 15.1 Visibility-Based Safe Dereferencing
+### 15.1 Visibility‑based Safe Dereference
 
-```
-// Visibility check for safe dereference operator !
-const safe_dereference_examples() {
+```nihao
+// Safe dereference operator ! visibility check
+func safe_dereference_examples() {
     flow dynamic_ptr void = &some_flow_variable
     static static_ptr void = &some_static_variable
 
-    // Safe dereferencing
-    value1 = dynamic_ptr?.(i32)     // Safe dereference of flow pointer
-    value2 = static_ptr?.(i32)     // Safe dereference of static pointer
+    // Safe dereference
+    value1 = dynamic_ptr?.(i32)     // safe dereference of flow pointer
+    value2 = static_ptr?.(i32)     // safe dereference of static pointer
 
-    // Safe dereference equivalent to
+    // Safe dereference equivalent to:
     if visof(dynamic_ptr) != _undef && dynamic_ptr != null {
         value1 = dynamic_ptr.(i32)
     } else {
-        panic("Unsafe dereference")
+        panic("unsafe dereference")
     }
 }
 ```
 
-### 15.2 Safe Access to Array and Structure Pointers
+### 15.2 Safe Access to Arrays and Structs
 
-```
-// Structure definition
+```nihao
+// Struct definition
 Person struct {
-    name string   // Dynamic string
-    age i32   // Static age
+    name char[]   // dynamic string
+    age i32       // static age
 }
 
 flow some_person Person
 dynamic_array u8[10...]
 
-const safe_structure_access() {
+func safe_structure_access() {
     flow person_ptr void = &some_person
 
-    // Safe access to structure fields
-    flow   name_ptr void ?= person_ptr.(Person).name  // Safe flow field transfer
-    static age_ptr  void ?= person_ptr.(Person).age   // Safe static field transfer
+    // Safe access to struct fields
+    flow   name_ptr void ?= person_ptr.(Person).name  // flow field safe transfer
+    static age_ptr  void ?= person_ptr.(Person).age   // static field safe transfer
 
     // Array bounds checking combined with visibility
     flow array_ptr void = &dynamic_array
@@ -746,26 +846,27 @@ const safe_structure_access() {
 
 ### 16.1 Visibility Error Diagnostics
 
-```
-// Detailed visibility error information
-const demonstrate_visibility_errors() {
+```nihao
+// Detailed visibility error messages
+func demonstrate_visibility_errors() {
     flow dynamic_var i32 = 42
     static static_var i32 = 100
 
-    // Diagnostic information when visibility error occurs
+    // Trigger visibility error with diagnostic info
     static error_ptr void ?= &dynamic_var  
-    // Compilation error: Cannot assign flow visibility (_flow) to static visibility (_static)
-    // Reason: Static pointer may outlive flow variable, causing dangling pointer
+    // Compile error: cannot assign flow visibility (_flow) to static visibility (_static)
+    // Reason: static pointer may outlive the flow variable, causing dangling pointer
 }
 
-// Runtime visibility checking
-const runtime_visibility_check(ptr void) {
+// Runtime visibility check
+func runtime_visibility_check(ptr void) {
 
     while visof(ptr) {
-        is _const => puts("Constant pointer, global lifetime")
-        is _static => puts("Static pointer, module lifetime") 
-        is _flow => puts("Dynamic pointer, requires scope analysis")
-        is _undef => puts("Undefined or invalid pointer")
+        is _const => puts("constant pointer, global lifetime")
+        is _static => puts("static pointer, module lifetime") 
+        is _flow => puts("dynamic pointer, needs scope analysis")
+        is _var => puts("local pointer, needs scope analysis")
+        is _undef => puts("undefined or invalid pointer")
         break
     }
 }
@@ -773,41 +874,40 @@ const runtime_visibility_check(ptr void) {
 
 ### 16.2 Scope Debugging Tools
 
-```
-// Compile-time scope analysis report
-const analyzed_function() {
-    flow var1 i32 = 10        // [Scope: Function level]
+```nihao
+// Compile‑time scope analysis report
+func analyzed_function() {
+    flow var1 i32 = 10        // [scope: function‑level]
     {
-        flow var2 i32 = 20    // [Scope: Undetermined]
-        var3 i32 = 30    // [Scope: Block level]
+        flow var2 i32 = 20    // [scope: undetermined]
+        var3 i32 = 30    // [scope: block‑level]
     }
-    // [Warning: var2, var3 leaving scope]
+    // [warning: var2, var3 leaving scope]
 
-    /* [Warning: var2 scope change]
+    /* [warning: var2 scope change]
         function {
             {---------------scope start
 
             }---------------scope end old
 
         }-------------------scope end new
-
     */
     var4 i32 = var2; 
-    // [Compilation error: var3 left scope --> undefined]
+    // [compile error: var3 left scope --> undefined]
     var4 = var3;
 
-    // [Warning: tracked_var scope change]
+    // [warning: tracked_var scope change]
     flow ptrvar1 void = scope_tracing_example()
 
-    // [Compilation error: tracked_var can only be passed to flow variables]
+    // [compile error: tracked_var can only be assigned to flow variable]
     ptrvar2 void = scope_tracing_example()
 }
 
-const scope_tracing_example() flow i32{
+flow scope_tracing_example() i32{
     flow tracked_var i32 = 42
 
-    return &tracked_var  // Enable scope tracing
-    // Record scope entry/exit in debug mode
+    return &tracked_var  // enable scope tracing
+    // In debug mode, record scope entry/exit
 }
 ```
 
@@ -815,10 +915,10 @@ const scope_tracing_example() flow i32{
 
 ### 17.1 Complete Module Example
 
-```
+```nihao
 module security_module
 
-// Module-level static data
+// Module‑level static data
 static module_counter i32 = 0
 const MAX_CONNECTIONS i32 = 1000
 
@@ -828,9 +928,8 @@ SecurityProcessor struct {
     state flow ProcessorState
 }
 
-
-const process_request(flow self SecurityProcessor, flow request Request) flow Response {
-    // Secure state access
+flow process_request(flow self SecurityProcessor, flow request Request) Response {
+    // Safe state access
     self.state.current_request ?= request
 
     // Static configuration access
@@ -842,11 +941,11 @@ const process_request(flow self SecurityProcessor, flow request Request) flow Re
     return create_response(429, "Too Many Requests")
 }
 
-const main() {
+func main() {
     flow processor SecurityProcessor = create_processor()
     flow request Request = receive_request()
 
-    // Secure method call
+    // Safe method call
     flow response Response = processor.process_request(request)
     send_response(response)
 }
@@ -854,51 +953,49 @@ const main() {
 
 ### 17.2 Memory Safety Patterns
 
-```
-// Visibility-based memory safety patterns
-const memory_safe_patterns() {
-    // Pattern 1: Dynamic data processed within enclosed scope
+```nihao
+// Visibility‑based memory safety patterns
+func memory_safe_patterns() {
+    // Pattern 1: dynamic data processed within a closed scope
     {
         flow temporary_data Data = load_temporary_data()
-        process_data(temporary_data)  // Data automatically cleaned up after processing
+        process_data(temporary_data)  // data automatically cleaned after processing
     }
 
-    // Pattern 2: Static data held long-term
+    // Pattern 2: static data held long‑term
     static persistent_cache Cache = initialize_cache()
     use_cache(persistent_cache)
 
-    // Pattern 3: Safe data transfer chain
+    // Pattern 3: safe data transfer chain
     flow source_data Data = acquire_data()
     flow processed_data Data = transform_data(source_data)
     flow result Result = analyze_data(processed_data)
-    // All flow data automatically cleaned up when function ends
+    // All flow data automatically cleaned at function exit
 }
 ```
 
 ## Summary
 
-This design is based on NiHao language's existing visibility system, implementing memory safety through:
+This design leverages NiHao's existing visibility system to achieve memory safety through:
 
-1. **Clear Storage Duration and Scope**: Clear lifetime rules for const/static/flow/local variables
+1. **Clear storage duration and scope**: const/static/flow/local variables have well‑defined lifetime rules.
+2. **Visibility‑checked pointer safety**: the `?=` operator verifies visibility compatibility at assignment.
+3. **Dynamic scope management**: flow variable scopes are automatically inferred by the compiler.
+4. **Gradual safety**: from local safety to module safety and finally to global safety.
 
-2. **Visibility-Checked Pointer Safety**: Visibility compatibility checked during assignment using `?=`operator
+Key advantages:
 
-3. **Dynamic Scope Management**: Flow variable scope automatically inferred by compiler
-
-4. **Progressive Safety**: From local safety to module safety, finally to global safety
-
-Key Advantages:
-
-- No complex ownership system introduced
-
-- Utilizes existing visibility modifiers
-
-- Combined compile-time and runtime safety checks
-
-- Highly consistent with NiHao language design philosophy
+- No complex ownership system introduced.
+- Utilizes existing visibility modifiers.
+- Combines compile‑time and run‑time safety checks.
+- Highly consistent with NiHao's design philosophy.
 
 This maintains language simplicity while providing powerful memory safety guarantees.
 
 ---
 
 *NiHao v1.0 Language Specification - © 2025 NiHao Development Team*
+
+```
+
+```

@@ -15,66 +15,82 @@ NiHao 是一种新型静态编译语言，专为系统级编程和高性能应�
 
 ### 2.2 语句分隔
 
-- 语句以换行符分隔
+- 语句以换行符分隔或者`;`换行,可选
 - 多语句同行使用分号分隔：`stmt1; stmt2`
 
 ### 2.3 内置函数
 
 - `typeof(type)` 类型判断 返回类型
 - `sizeof(type)` 长度判断 返回长度
-- `holdof(type,member,ptr)` 从属判断 返回成员所有者
+- `alignof(type)` 对齐判断 返回对齐长度
+- `structof(member)` 从属判断 返回成员所有者
+- `unionof(member)` 从属判断 返回成员所有者
+- `offsetof(type,member)` 返回偏移量
+- `bitoffsetof(type,bitmember)` 返回偏移量
 - `visof(var)` 可见性判断 返回可见属性
 
 ### 2.4 关键字说明
 
 - `alias` 类型别名
-- `const` 修饰不可变
+- `const` 修饰固定可见不可变
 - `flow` 修饰动态可见
 - `static` 修饰静态可见
+- `var` 修饰局部可见 可自动推断
+- `_undef` 未定义不可见属性枚举值
+- `_const` 固定可见不可变属性枚举值
 - `_flow` 动态可见属性枚举值
 - `_static` 静态可见属性枚举值
-- `_undef` 未定义不可见属性枚举值
+- `_var` 局部可见属性枚举值
 - `cooking {...}` 编译期执行代码块关键字
 - `align n {...}` 字节对齐代码块
-- `use` 模块引用
-- `module` 模块定义
-- `link ... ` 静态库导出使用
+- `use ...` 模块引用
+- `module ...` 模块定义
+- `linkas "..."` 静态库导出命名
+- `link "..." ... ` 静态库导入使用
+- `func` 无返回值属性 和 无返回值 函数定义
+- `[[inline]]` 内联函数属性修饰
+- `[[weak]]` 弱定义函数属性修饰
+- `[[static]]` 内部链接函数属性修饰
+- `[[used]]` 强制保留函数属性修饰
+- `[[unused]]` 强制弃用函数属性修饰
+- `[[export]".my_section"]` 导出到指定段函数属性修饰
 
 ## 3. 类型系统
 
 ### 3.1 基础类型
 
-| 类型       | 描述             | 大小     |
-| -------- | -------------- | ------ |
-| `char`   | 字符类型           | 1字节    |
-| `string` | 字符串类型          | 动态     |
-| `u8`     | 无符号8位整型        | 1字节    |
-| `u16`    | 无符号16位整型       | 2字节    |
-| `u32`    | 无符号32位整型       | 4字节    |
-| `u64`    | 无符号64位整型       | 8字节    |
-| `i8`     | 有符号8位整型        | 1字节    |
-| `i16`    | 有符号16位整型       | 2字节    |
-| `i32`    | 有符号32位整型       | 4字节    |
-| `i64`    | 有符号64位整型       | 8字节    |
-| `f32`    | 单精度浮点          | 4字节    |
-| `f64`    | 双精度浮点          | 8字节    |
-| `fx32`   | 单精度定点数(Q16.16) | 4字节    |
-| `fx64`   | 双精度定点数(Q32.32) | 8字节    |
+| 类型     | 描述                 | 大小         |
+| -------- | -------------------- | ------------ |
 | `void`   | 通用指针类型         | 机器指针大小 |
+| `char[]` | 字符串类型           | 动态         |
+| `char`   | 字符类型             | 1字节        |
+| `u8`     | 无符号8位整型        | 1字节        |
+| `u16`    | 无符号16位整型       | 2字节        |
+| `u32`    | 无符号32位整型       | 4字节        |
+| `u64`    | 无符号64位整型       | 8字节        |
+| `i8`     | 有符号8位整型        | 1字节        |
+| `i16`    | 有符号16位整型       | 2字节        |
+| `i32`    | 有符号32位整型       | 4字节        |
+| `i64`    | 有符号64位整型       | 8字节        |
+| `f32`    | 单精度浮点           | 4字节        |
+| `f64`    | 双精度浮点           | 8字节        |
+| `fx32`   | 单精度定点数(Q16.16) | 4字节        |
+| `fx64`   | 双精度定点数(Q32.32) | 8字节        |
+
 
 ### 3.2 复合类型
-
+基本的定义声明结构 ` [属性] [名字] [类型] `
 **数组声明：**
 
 ```nihao
-fixedArray char[3]       // 固定大小数组
-dynamicArray i8[...]   // 无初始值动态数组
-initArray u16[6...]   // 有初始大小的动态数组
+static fixedArray char[3]       // 固定大小数组 char[3] 为类型
+flow dynamicArray i8[...]   // 无初始值动态数组
+var initArray u16[6...]   // 有初始大小的动态数组
 
-// 数组索引访问
+// 数组索引访问赋值
 fixedArry[0] = 0
 
-// 数组切片访问
+// 数组切片访问赋值
 dynamicArray[2..3] = {3,4}
 ```
 
@@ -89,7 +105,7 @@ alias StringPtr = void[]
 
 ```nihao
 Person struct{
-    name string
+    name char[]
     age u8
     flag u8:1 // 支持位域语法
 }
@@ -162,20 +178,27 @@ xunion.r1 = 1
 
 ### 4.1 声明修饰符
 
-| 修饰符      | 描述       |
-| -------- | -------- |
-| `const`  | 定义固定可见变量 |
-| `flow`   | 定义动态可见变量 |
-| `static` | 定义静态可见变量 |
-| `无修饰`    | 定义局部可见变量 |
+| 修饰符      | 描述          |
+| -------- | ----------- |
+| `const`  | 定义固定可见不可变变量 |
+| `flow`   | 定义动态可见变量    |
+| `static` | 定义静态可见变量    |
+| `var`    | 定义局部可见变量    |
 
 ### 4.2 示例
 
 ```nihao
 const MAX_SIZE i32 = 1024
-flow counter i8 = 0
+flow counter i8 = 0 
 static globalVar f32 = 3.14
-{inferred string = "Hello"}
+{var inferred char[] = "Hello"}
+// 局部变量不强制 var 前缀, 可以忽略不写
+{localstr char[] = "Hello"}
+
+// 多变量声明
+var {a = 0,b = 1,c = 0} i8
+var {aa = "aa",bb = "bb",cc = "cc"} char[2]
+var {aaa = "aaa",bbb = "bbb",ccc = "ccc"} char[]
 ```
 
 ## 5. 指针与内存管理
@@ -192,10 +215,11 @@ varptr void = &var
 // 单级指针
 ptr void = malloc(i32)   // 分配内存
 ptr.(i32) = 42           // 解引用赋值
+ptr?.(i64)               // 安全解引用 编译将报错 因为 i64 > i32 不能越界
 
 // 多级指针
 ptr2 void[] = &ptr       // 二级指针定义
-ptr = ptr2.()            // 一层解引用
+ptr = ptr2.()            // 一层解引用 解引用void类型时()内可以略写
 variable = ptr2[].(i32)  // 二层解引用
 
 ptr3 void[][] ?= &ptr2    //三级指针定义
@@ -211,8 +235,9 @@ arry char[9] = {1,2,3,4,5,6,7,8,9}
 arryptr void = &arry           // 获取数组指针
 arryptr[0] = 0
 arryptr[9] = 9                 // 未定义行为
-arryptr.(char[9])[9] = 9       // 编译错误:越界
 arryptr.(char[9])[0] = 0       // 对[0]成员解引用
+// arryptr.(char[9])[9] = 9       // 编译错误:越界
+
 
 
 arrybuffer char[8] = arryptr.(char[9])[0..7]
@@ -250,7 +275,7 @@ ptrarry.(void[2])[1].(char[8])[7] = 7
 ```nihao
 Say struct{
     name char[9]
-    say string
+    say char[]
 }
 xiaoming Say 
 stptr void = &xiaoming
@@ -262,18 +287,26 @@ puts(talk)
 ```
 
 ###### 5.1.5 函数指针
+` void() ` 代表函数指针类型, ` () ` 内可以声明参数个数和类型 例如:
+` func ptr void(u8,char[]) ` 无返回值
+` func ptr void(u8,char[]) u32` 有返回值类型u32
+` const ptr void(u8,char[]) u32` 有属性为const的返回值类型u32
+` flow ptr void(u8,char[]) void` 有属性为flow的返回值类型void 
+` static ptr void(u8,char[]) char[]` 有属性为static的返回值类型char[]
 
 ```nihao
-onst callback_handle(argc u16) {
+func callback_handle(argc u16) {
     puts("callback call!")
 }
 
-const callback void(u16) = callback_handle
+func callback void(u16) = callback_handle
 
-const callback_register(const cb void(u16), event u32) u32 {
+func callback_register(func cb void(u16), event u32) u32 {
     if event == 1 {
         callback = cb
     }
+
+    return event
 }
 
 flow callback_handle_with_return(argc u16) i32 {
@@ -283,10 +316,11 @@ flow callback_handle_with_return(argc u16) i32 {
 
 flow callback2 void(u16)i32 = callback_handle_with_return
 
-const callback_register_with_return(flow cb void(u16)i32 , event u32) u32 {
+func callback_register_with_return(flow cb void(u16)i32 , event u32) u32 {
     if event == 1 {
         callback2 = cb
     }
+    return event
 }
 ```
 
@@ -299,9 +333,9 @@ if visof(ptr) == _static {
 }
 
 // 从属判断
-boy Person = {"xiaoming", 13}
-ptr void = &boy.name
-if holdof(ptr) == boy { 
+var boy Person = {"xiaoming", 13}
+var ptr void = &boy.name
+if structof(Person,ptr) == boy { 
     // ...
 }
 ```
@@ -365,19 +399,60 @@ for i = 0; i < 10; i++ {
 
 ```nihao
 // 无返回无参函数
-const greet() {
+func greet() {
     print("Hello")
 }
 
-// 有返回有参函数
-const add(a i8, b i8) i8 {
+// 有返回有参无void返回值函数
+func add(a i8, b i8) i8 {
     return a + b
 }
 
-// 多返回值函数
-const swap(a i8, b i8) (i8, i8) {
-    return b, a
+Person struct {
+    id u32
+    name char[]
 }
+
+// 有void返回值属性函数 
+flow create(id u32) void {
+    flow person void = malloc(sizeof(Person))
+    person.(Person).id = id
+    return person
+}
+
+const create(id u32) void {
+    static xxx Person = {32, "xxx"}
+    return &person
+}
+
+static get_arry(size u32) void {
+    static arry char[u32]
+    return &arry
+}
+
+// 有函数属性函数
+[[static]]
+func getCounter() u32 {
+    static counter u32
+    return (counter + 1)
+}
+
+[[inline]]
+const sub(a u8, b u8) {
+    return (a+b)
+}
+
+[[weak]]
+flow newCard(id u32) void {
+    flow card struct {
+        id u32
+        name char[]
+    } = {id,"obj"}
+
+    return &card
+}
+
+
 ```
 
 ## 8. 模块系统
@@ -387,7 +462,7 @@ const swap(a i8, b i8) (i8, i8) {
 ```nihao
 module mathUtils
 
-const add(a i32, b i32) i32 {
+func add(a i32, b i32) i32 {
     return a + b
 }
 ```
@@ -442,7 +517,7 @@ multireturn struct{
     value u8
 }
 
-const main() 
+func main() 
 {
     puts("Program starting\n")
 
@@ -475,7 +550,7 @@ const main()
     */
 }
 
-const calculate() multireturn  
+func calculate() multireturn  
 {
     if visof(value) != _undef {
       return {0,0}
@@ -505,7 +580,12 @@ if visof(ptr) == _flow {
 根据变量属性划分可见属性
 
 ![Visibility definition.png](Visibility%20definition.png)
-
+指针赋值可见性兼容矩阵 作用域交集中
+源 -> 目标    const    static    flow    local
+const         安全      错误      错误    错误
+static        安全      安全      错误    错误  
+flow          安全      错误      安全    错误
+local         安全      错误      错误    安全
 ### 12.1 存储期和作用域的组合规则
 
 ```nihao
@@ -520,7 +600,7 @@ flow dynamic_var i32 = 42     // 动态存储期，动态作用域
 }
 
 // 指针安全传递规则
-const safe_pointer_operations() {
+func safe_pointer_operations() {
     // 安全传递：同作用域或更长寿作用域
     flow ptr1 void = &dynamic_var     // 安全：flow -> flow
     static ptr2 void = &counter       // 安全：static -> static
@@ -535,9 +615,16 @@ const safe_pointer_operations() {
 
 ```nihao
 // 安全指针赋值操作符 ?= 的可见性检查规则
-const visibility_checks() {
-    source_ptr void = &some_variable
-    target_ptr void
+func visibility_checks() {
+    var varconst u32
+    var source_ptr = &varconst
+    
+    const target_ptr void
+
+    {
+        var undefptr void
+        source_ptr = undefptr
+    }
 
     // 安全赋值：检查可见性兼容性
     target_ptr ?= source_ptr  // 等价于以下检查：
@@ -552,6 +639,24 @@ const visibility_checks() {
     else if visof(source_ptr) == _const && visof(target_ptr) == _const {
         target_ptr = source_ptr  // const -> const 安全
     }
+    else if visof(source_ptr) == _var && visof(target_ptr) == _var {
+        target_ptr = source_ptr  // var -> var 安全
+    }
+    else if visof(source_ptr) == _flow && visof(target_ptr) == _const {
+        target_ptr = source_ptr  // flow -> const 安全
+    }
+    else if visof(source_ptr) == _static && visof(target_ptr) == _const {
+        target_ptr = source_ptr  // static -> const 安全
+    }
+    else if visof(source_ptr) == _const && visof(target_ptr) == _const {
+        target_ptr = source_ptr  // const -> const 安全
+    }
+    else if visof(source_ptr) == _var && visof(target_ptr) == _const {
+        target_ptr = source_ptr  // var -> const 安全
+    }
+    else if visof(source_ptr) == _undef{
+        panic("未定义指针不能赋值")
+    }
     else {
         panic("可见性不兼容的指针赋值")
     }
@@ -563,14 +668,14 @@ const visibility_checks() {
 ### 13.1 指针传递的可见性规则表
 
 ```nihao
-// 指针赋值可见性兼容矩阵
+// 指针赋值可见性兼容矩阵 作用域交集中
 // 源 -> 目标    const    static    flow    local
 // const         安全      错误      错误    错误
 // static        安全      安全      错误    错误  
-// flow          错误      错误      安全    错误
-// local         错误      错误      错误    安全
+// flow          安全      错误      安全    错误
+// local         安全      错误      错误    安全
 
-const demonstrate_rules() {
+func demonstrate_rules() {
     const GLOBAL i32 = 100
     static MODULE_VAR i32 = 200
     flow DYNAMIC_VAR i32 = 300
@@ -590,28 +695,28 @@ const demonstrate_rules() {
 
 ```nihao
 // 函数参数的可见性注解
-const process_static_data(static ptr void) i32 {
-    // 只能接受static或const指针
+func process_static_data(static ptr void) i32 {
+    // 只能接受static指针
     return ptr.(i32)
 }
 
-const process_dynamic_data(flow ptr void) i32 {
-    // 可以接受flow、static、const指针
+func process_dynamic_data(flow ptr void) i32 {
+    // 只能接受flow指针
     return ptr.(i32)
 }
 
 // 返回值的可见性约束
-const get_static_pointer() static void {
+static get_static_pointer() void {
     static data i32 = 42
     return &data  // 返回static指针
 }
 
-const get_dynamic_pointer() flow void {
+flow get_dynamic_pointer() void {
     flow data i32 = 42
     return &data  // 返回flow指针
 }
 
-const example_usage() {
+func example_usage() {
     static static_ptr void = get_static_pointer()
     flow dynamic_ptr void = get_dynamic_pointer()
 
@@ -627,7 +732,7 @@ const example_usage() {
 
 ```nihao
 // 编译器自动推导flow变量的作用域
-const scope_demonstration() {
+func scope_demonstration() {
     flow var1 i32 = 10
 
     if condition {
@@ -643,7 +748,7 @@ const scope_demonstration() {
 }
 
 // 嵌套作用域的生命周期检查
-const nested_scopes() {
+func nested_scopes() {
     flow outer_var i32 = 100
 
     {
@@ -661,19 +766,19 @@ const nested_scopes() {
 
 ```nihao
 // 函数调用时的作用域传递
-const caller_function() {
+func caller_function() {
     flow local_dynamic i32 = 42
     flow result i32 = process_with_callback(local_dynamic, &callback_function)
 }
 
-const process_with_callback(flow data i32, 
+flow process_with_callback(flow data i32, 
                            flow callback void(i32)i32
-                           )flow i32 {
+                           ) i32 {
     // data和callback都是flow，保证生命周期兼容
     return callback(data)
 }
 
-const callback_function(value i32) i32 {
+func callback_function(value i32) i32 {
     return value * 2
 }
 ```
@@ -684,7 +789,7 @@ const callback_function(value i32) i32 {
 
 ```nihao
 // 安全解引用操作符 ! 的可见性检查
-const safe_dereference_examples() {
+func safe_dereference_examples() {
     flow dynamic_ptr void = &some_flow_variable
     static static_ptr void = &some_static_variable
 
@@ -706,14 +811,14 @@ const safe_dereference_examples() {
 ```nihao
 // 结构体定义
 Person struct {
-    name string   // 动态字符串
+    name char[]   // 动态字符串
     age i32   // 静态年龄
 }
 
 flow some_person Person
 dynamic_array u8[10...]
 
-const safe_structure_access() {
+func safe_structure_access() {
     flow person_ptr void = &some_person
 
     // 安全访问结构体字段
@@ -740,7 +845,7 @@ const safe_structure_access() {
 
 ```nihao
 // 详细的可见性错误信息
-const demonstrate_visibility_errors() {
+func demonstrate_visibility_errors() {
     flow dynamic_var i32 = 42
     static static_var i32 = 100
 
@@ -751,12 +856,13 @@ const demonstrate_visibility_errors() {
 }
 
 // 运行时可见性检查
-const runtime_visibility_check(ptr void) {
+func runtime_visibility_check(ptr void) {
 
     while visof(ptr) {
         is _const => puts("常量指针，全局生命周期")
         is _static => puts("静态指针，模块生命周期") 
         is _flow => puts("动态指针，需要作用域分析")
+        is _var => puts("局部指针，需要作用域分析")
         is _undef => puts("未定义或无效指针")
         break
     }
@@ -767,7 +873,7 @@ const runtime_visibility_check(ptr void) {
 
 ```nihao
 // 编译时作用域分析报告
-const analyzed_function() {
+func analyzed_function() {
     flow var1 i32 = 10        // [作用域: 函数级]
     {
         flow var2 i32 = 20    // [作用域: 未确定]
@@ -795,7 +901,7 @@ const analyzed_function() {
     ptrvar2 void = scope_tracing_example()
 }
 
-const scope_tracing_example() flow i32{
+flow scope_tracing_example() i32{
     flow tracked_var i32 = 42
 
     return &tracked_var  // 启用作用域追踪
@@ -821,7 +927,7 @@ SecurityProcessor struct {
 }
 
 
-const process_request(flow self SecurityProcessor, flow request Request) flow Response {
+flow process_request(flow self SecurityProcessor, flow request Request) Response {
     // 安全的状态访问
     self.state.current_request ?= request
 
@@ -834,7 +940,7 @@ const process_request(flow self SecurityProcessor, flow request Request) flow Re
     return create_response(429, "Too Many Requests")
 }
 
-const main() {
+func main() {
     flow processor SecurityProcessor = create_processor()
     flow request Request = receive_request()
 
@@ -848,7 +954,7 @@ const main() {
 
 ```nihao
 // 基于可见性的内存安全模式
-const memory_safe_patterns() {
+func memory_safe_patterns() {
     // 模式1：动态数据在封闭作用域内处理
     {
         flow temporary_data Data = load_temporary_data()

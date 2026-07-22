@@ -1,127 +1,131 @@
-## NihaoC Language Keywords and Syntax Elements Table
+# NihaoC Language Keywords and Syntax Elements
 
 ###### Reserved Keywords
 
-- `const` Constant / function definition keyword
-- `flow` Dynamically allocated variable declaration keyword
-- `static` Static variable declaration keyword
-- `var` Local variable declaration keyword
-- `_const` Constant visibility attribute enumeration value
-- `_flow` Dynamic visibility attribute enumeration value
-- `_static` Static visibility attribute enumeration value
-- `_undef` Undefined / invisible attribute enumeration value
-- `_var` Local visibility attribute enumeration value
-- `cooking {...}` Compile-time execution block keyword
-- `align n {...}` Byte alignment block
-- `module` Module definition
-- `use` Module import
-- `alias` Type alias
-- `link ...` Static library export / usage
-- `struct` Structure definition
-- `union` Union definition
-- `enum` Enumeration definition
-- `typeof` Type inspection
-- `sizeof` Get type size
-- `alignof` Get type alignment size
-- `offsetof` Get structure member offset
-- `holdof` Get base address of the structure containing a member
-- `if` Conditional branch
-- `else` Else branch
-- `for` Loop control
-- `while` Loop control
-- `do` Loop control
-- `switch` Multi-way branch
-- `case` Branch option
-- `break` Break out of branch/loop
-- `return` Function return
-- `visof` Visibility check
-- `malloc` Dynamic memory allocation
+- `const` – constant/function definition keyword
+- `flow` – dynamically allocated variable declaration keyword
+- `static` – static variable declaration keyword
+- `var` – local variable declaration keyword
+- `_const` – constant visibility attribute enumeration value
+- `_flow` – dynamic visibility attribute enumeration value
+- `_static` – static visibility attribute enumeration value
+- `_undef` – undefined invisible attribute enumeration value
+- `_var` – local visibility attribute enumeration value
+- `cooking { ... }` – compile‑time execution block keyword
+- `align n { ... }` – byte‑alignment block
+- `module` – module definition
+- `use` – module import
+- `func` no return value function return value no attribute function definition
+- `alias` – type alias
+- `link ...` – static library export usage
+- `struct` – structure definition
+- `union` – union definition
+- `enum` – enumeration definition
+- `typeof` – type introspection
+- `sizeof` – get type size
+- `alignof` – get type alignment
+- `offsetof` – get struct member offset
+- `structof` – get base address of the struct containing a member
+- `unionof` – get base address of the union containing a member
+- `if` – conditional branch
+- `else` – else branch
+- `for` – loop control
+- `while` – loop control
+- `is` – pattern matching control
+- `do` – loop control
+- `switch` – multi‑way branch
+- `case` – branch option
+- `break` – exit branch
+- `return` – function return
+- `visof` – visibility check
+- `malloc` – dynamic memory allocation
 
 ###### Type Keywords
 
-- `void` Void type
-- `bool` Boolean type
-- `i8` 8-bit signed integer type
-- `i16` 16-bit signed integer type
-- `i32` 32-bit signed integer type
-- `u8` 8-bit unsigned integer type
-- `u16` 16-bit unsigned integer type
-- `u32` 32-bit unsigned integer type
-- `u64` 64-bit unsigned integer type
-- `f32` 32-bit floating point type
-- `f64` 64-bit floating point type
-- `fx32` 32-bit fixed-point type
-- `fx64` 64-bit fixed-point type
-- `char` Character type
-- `short` Character type
-- `int` Character type
-- `long` Character type
-- `float` Character type
-- `double` Character type
+- `void` – pointer type
+- `bool` – boolean type
+- `i8` – 8‑bit signed integer type
+- `i16` – 16‑bit signed integer type
+- `i32` – 32‑bit signed integer type
+- `u8` – 8‑bit unsigned integer type
+- `u16` – 16‑bit unsigned integer type
+- `u32` – 32‑bit unsigned integer type
+- `u64` – 64‑bit unsigned integer type
+- `f32` – 32‑bit floating‑point type
+- `f64` – 64‑bit floating‑point type
+- `fx32` – 32‑bit fixed‑point type
+- `fx64` – 64‑bit fixed‑point type
+- `char` – character type
+- `char[]` – string type
+- `short` – character type (legacy)
+- `int` – character type (legacy)
+- `long` – character type (legacy)
+- `float` – character type (legacy)
+- `double` – character type (legacy)
 
 ###### Reserved Operators
 
-- `&` Address-of operator
-- `=` Assignment operator
-- `?=` Safe assignment operator (with pointer checking)
-- `.` Structure/union member access
-- `.()` Pointer dereference
-- `.(type)` Type‑specified dereference (with built‑in bounds checking)
-- `->` Structure/union pointer member access
-- `{}` Code block / initializer list / multiple return values
-- `()` Function call, type cast
-- `[]` Array subscript
-- `[start..end]` Array/slice range operator
-- `?:` Conditional (ternary) operator
-- `,` Comma operator
+- `&` – address‑of operator
+- `=` – assignment operator
+- `?=` – safe assignment operator (with pointer checking)
+- `.` – struct/union member access
+- `.()` – void pointer dereference
+- `.(type)` – typed dereference (with built‑in out‑of‑bounds check)
+- `->` – struct/union pointer member access
+- `{}` – block / initializer list / multiple return values
+- `()` – function call, type cast
+- `[]` – array subscript, multi‑level pointer
+- `[start..end]` – array/slice range operator
+- `?:` – conditional (ternary) operator
+- `,` – comma operator
 
 ###### Arithmetic Operators
 
-- `+` Addition
-- `-` Subtraction, unary negation
-- `*` Multiplication
-- `/` Division
-- `%` Modulo (remainder)
-- `++` Increment (prefix or postfix)
-- `--` Decrement (prefix or postfix)
+- `+` – addition
+- `-` – subtraction, unary negation
+- `*` – multiplication
+- `/` – division
+- `%` – modulo (remainder)
+- `++` – increment (prefix or postfix)
+- `--` – decrement (prefix or postfix)
 
 ###### Relational (Comparison) Operators
 
-- `==` Equal to
-- `!=` Not equal to
-- `<` Less than
-- `>` Greater than
-- `<=` Less than or equal to
-- `>=` Greater than or equal to
+- `==` – equal to
+- `!=` – not equal to
+- `<` – less than
+- `>` – greater than
+- `<=` – less than or equal to
+- `>=` – greater than or equal to
 
 ###### Logical Operators
 
-- `&&` Logical AND
-- `||` Logical OR
-- `!` Logical NOT (unary)
+- `&&` – logical AND
+- `||` – logical OR
+- `!` – logical NOT (unary)
 
 ###### Bitwise Operators
 
-- `&` Bitwise AND
-- `|` Bitwise OR
-- `^` Bitwise XOR
-- `~` Bitwise NOT (unary)
-- `<<` Left shift
-- `>>` Right shift
+- `&` – bitwise AND
+- `|` – bitwise OR
+- `^` – bitwise XOR
+- `~` – bitwise NOT (unary)
+- `<<` – left shift
+- `>>` – right shift
 
 ###### Assignment Operators
 
-- `=` Simple assignment
-- `+=` Addition assignment
-- `-=` Subtraction assignment
-- `*=` Multiplication assignment
-- `/=` Division assignment
-- `%=` Modulo assignment
-- `&=` Bitwise AND assignment
-- `|=` Bitwise OR assignment
-- `^=` Bitwise XOR assignment
-- `<<=` Left shift assignment
-- `>>=` Right shift assignment
+- `=` – simple assignment
+- `+=` – add and assign
+- `-=` – subtract and assign
+- `*=` – multiply and assign
+- `/=` – divide and assign
+- `%=` – modulo and assign
+- `&=` – bitwise AND and assign
+- `|=` – bitwise OR and assign
+- `^=` – bitwise XOR and assign
+- `<<=` – left shift and assign
+- `>>=` – right shift and assign
 
 ###### Other Operators
 
