@@ -23,12 +23,12 @@ alias time = stdlib.time
 
 const ConstValue i8 = 100
 
-multireturn struct{
-    value1 u8
-    value u8
+Structreturn struct {
+    value1 u8:4
+    value u8:4
 }
 
-const main() 
+func main() 
 {
     puts("Program starting\n")
 
@@ -57,7 +57,7 @@ const main()
     }
 
     // Multiple return value handling
-    returnValue multireturn = calculate()
+    result Structreturn = calculate()
 
     return
     /* If the flow variable: dynptr, temp, is not returned,
@@ -65,7 +65,7 @@ const main()
     */
 }
 
-const calculate() multireturn  
+func calculate() Structreturn  
 {
     if visof(value) != _undef {
       return {0,0}
@@ -76,34 +76,34 @@ const calculate() multireturn
 }
 
 // Inline function definition
-inline add(a int, b int)
+[[inline]]
+func add(a int, b int) int
 {
     return (a+b)
 }
 
+// Static function definition
+[[static]]
+func mul(a int, b int) int
+{
+    return (a-b)
+}
+
 // Compile-time definitions
 
-// Compile-time type define 
-cooking arry_i8_t struct {
-    icopy const(size_t, arry_i8_t)
-    arry i8[...]
+// Compile-time function define 
+cooking maker(name char[], id u8) var_name {
+    return `name``id`
 }
 
-// Compile-time array copy function definition
-cooking icopy(len size_t, src arry_i8_t){
-    target arry_i8_t = holdof(icopy)
-    target.arry.(struct{_ i8[len]}) = src.arry.(struct{_ i8[len]})
-
+// define const u8 variable: var0, var1, var2 in Compile-time
+cooking {
+    var id u8 = 0
+    const maker("var", id++)
+    const maker("var", id++)
+    const maker("var", id++)
 }
 
-// Compile-time maker function definition
-cooking obj_maker(len size_t) struct 
-{
-    return {
-        .icopy = icopy
-        .arry  = i8[len]
-    }
-}
 
 // Assign values at compile time
 cooking PI = 3.1415926
