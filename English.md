@@ -578,7 +578,7 @@ if visof(ptr) == _flow {
 
 Visibility is categorized by variable attributes.
 
-![Visibility definition.png](Visibility%20definition.png)
+![Visibility definition.png](Visibility%20definition%20en.png)
 
 Pointer assignment visibility compatibility matrix (within intersecting scopes):
 
