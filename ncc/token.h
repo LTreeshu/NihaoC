@@ -149,7 +149,7 @@ typedef enum {
     TOK_ELLIPSIS,
     TOK_DOUBLE_COLON,
 
-    KeywordDefTable
+    _KeywordDefTable_
 
     TOK_COUNT
 } TokenType;

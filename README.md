@@ -4,6 +4,19 @@ A new better C language for my fantasy， a better programing world for void !
 
 一个新的 "better C" 语言，给void一个更好的编程世界!
 
+"Empty your mind, be formless, shapeless, like water. You put water into a cup, it becomes the cup; you put it into a bottle, it becomes the bottle; you put it into a teapot, it becomes the teapot. Now water can flow, or it can crash. Be water, my friend."
+— Bruce Lee
+
+"清空你的思绪，无形无相，如水一般。
+
+水入杯，则成杯形；入瓶，则成瓶形；入茶壶，则成茶壶之形。
+
+水可缓缓流淌，亦可奔涌冲击。
+
+像水一样吧，我的朋友。"
+
+— 李小龙
+
 语法文档|Document
 
 [中文](./Chinese.md) | [English](./English.md)
@@ -113,10 +126,9 @@ const DoublePI f64 = PI * 2
 cooking {
     // Compile-time calculation
     const COMPILE_TIME_VALUE i32 = 10 * 20 + 5
-    
+
     // Compile-time assert
     static_assert(sizeof(i32) == 4, "i32必须是4字节")
     static_assert(COMPILE_TIME_VALUE == 205, "编译期计算错误")
 }
-
 ```
