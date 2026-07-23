@@ -128,7 +128,7 @@ Color enum{ RED, GREEN, BLUE }
 
 ### 3.3 类型操作
 
-###### 3.3.1 类型对齐
+#### 3.3.1 类型对齐
 
 ```nihao
 // 类型判断
@@ -148,7 +148,7 @@ align 4 {
 }  // 4字节对齐
 ```
 
-###### 3.3.2 类型嵌套
+#### 3.3.2 类型嵌套
 
 ```nihao
 // 普通嵌套
@@ -205,7 +205,7 @@ var {aaa = "aaa",bbb = "bbb",ccc = "ccc"} char[]
 
 ### 5.1 指针操作
 
-###### 5.1.1 指针定义
+#### 5.1.1 指针定义
 
 ```nihao
 // 不允许声明空指针，声明时必须赋值
@@ -228,7 +228,7 @@ ptr  = ptr3[].()          // 二层解引用
 variable = ptr3[][].(i32) // 三层解引用
 ```
 
-###### 5.1.2 数组指针
+#### 5.1.2 数组指针
 
 ```nihao
 arry char[9] = {1,2,3,4,5,6,7,8,9}
@@ -249,7 +249,7 @@ arryptr2[0].(char[9])[8] = arry[8]
 arryptr2[1].(char[8])[7] = arrybuffer[7]
 ```
 
-###### 5.1.3 指针数组
+#### 5.1.3 指针数组
 
 ```nihao
 dptrarry1 void[3] = malloc(void[3]) // 动态分配一维指针数组
@@ -270,7 +270,7 @@ ptrarry.(void[2])[1].(char[8])[7] = 7
 // arrybuffer == {0,1,2,4,5,6,7,7}
 ```
 
-###### 5.1.4 复合体指针
+#### 5.1.4 复合体指针
 
 ```nihao
 Say struct{
@@ -286,44 +286,120 @@ puts(talk)
 // puts(talk) out--> "NiHao I am xiaoming!"
 ```
 
-###### 5.1.5 函数指针
+#### 5.1.5 函数指针
 
-` void() ` 代表函数指针类型, ` () ` 内可以声明参数个数和类型 例如:
-` func ptr void(u8,char[]) ` 无返回值
-` func ptr void(u8,char[]) u32` 有返回值类型u32
-` const ptr void(u8,char[]) u32` 有属性为const的返回值类型u32
-` flow ptr void(u8,char[]) void` 有属性为flow的返回值类型void 
-` static ptr void(u8,char[]) char[]` 有属性为static的返回值类型char[]
+**类型语法：**  
+函数指针类型由 `void(参数类型列表)` 表示，若函数有返回值，则在末尾加上返回值类型。例如：  
+
+- `void(u8, char[])` 表示无返回值、参数为 `u8` 和 `char[]` 的函数指针；  
+- `void(u8, char[]) i32` 表示返回 `i32` 的函数指针；  
+- 若返回通用指针（`void` 指针），则需在返回值位置写 `void`，同时**必须**在变量声明时使用对应的属性前缀（`flow`/`static`/`const`）来标明内存类别，例如 `flow cb void(u8) void` 表示返回动态内存的函数指针。
+
+**变量声明：**  
+完全遵循 `[属性] [变量名] [类型]` 的通用范式，例如：  
 
 ```nihao
+func call void(i32, i32)        // 无返回的函数指针
+func add_cb void(i32, i32) i32  // 返回 i32 的函数指针
+flow factory void(char[]) void  // 返回动态内存指针的函数指针
+static loader void() void       // 返回静态内存指针的函数指针
+const getter void() void        // 返回只读指针的函数指针
+```
+
+**函数指针的赋值与调用：**
+
+```nihao
+// 定义目标函数（无返回值）
 func callback_handle(argc u16) {
     puts("callback call!")
 }
+// 赋值给函数指针变量（类型匹配）
+func cb void(u16) = callback_handle
+// 调用
+cb(100)
 
-func callback void(u16) = callback_handle
+// 有返回值的函数指针
+func add(a i32, b i32) i32 { return a + b }
+func calc void(i32, i32) i32 = add
+result = calc(10, 20)  // result == 30
 
-func callback_register(func cb void(u16), event u32) u32 {
-    if event == 1 {
-        callback = cb
-    }
-
-    return event
+// 返回动态内存的函数指针（必须用 flow 接收）
+flow create_user(name char[]) void {
+    flow user void = malloc(sizeof(User))
+    user.(User).name = name
+    return user
 }
+flow factory void(char[]) void = create_user
+flow user = factory("Alice")  // 自动管理生命周期
 
-flow callback_handle_with_return(argc u16) i32 {
-    puts("callback call!")
-    return 42
+// 返回静态内存的函数指针（可用 func 或 static 接收）
+static get_config() void {
+    static config Config = { .port = 8080 }
+    return &config
 }
+static loader void() void = get_config   // 推荐用 static
+func loader2 void() void = get_config    // 也可用 func（安全，但丢失静态属性）
 
-flow callback2 void(u16)i32 = callback_handle_with_return
-
-func callback_register_with_return(flow cb void(u16)i32 , event u32) u32 {
-    if event == 1 {
-        callback2 = cb
-    }
-    return event
+// 返回只读指针（必须用 const 接收）
+const get_version() void {
+    static ver char[] = "v2026"
+    return &ver
 }
+const version_getter void() void = get_version
 ```
+
+**函数指针作为参数：**
+
+```nihao
+// 注册回调（参数类型直接写 void(u32)）
+func register_callback(cb void(u32)) {
+    global_cb = cb
+}
+
+// 带动态内存返回的回调参数（必须用 flow 接收）
+func process_async(flow handler void(i32) void) {
+    flow data = handler(100)
+    // ...
+}
+
+// 调用示例
+func my_handler(x i32) void { return malloc(16); }
+process_async(my_handler)   // 自动匹配 flow 属性
+```
+
+**函数指针数组（类型名 `void(...)` 后直接加 `[n]`）：**
+
+```nihao
+// 无返回值函数指针数组
+func handle_a(u8) { puts("A"); }
+func handle_b(u8) { puts("B"); }
+func table void(u8)[2] = { handle_a, handle_b }
+table[0](1)  // 调用 handle_a
+
+// 返回动态指针的函数指针数组（每个元素都是 flow 回调）
+flow create_packet(u8) void { return malloc(64); }
+flow create_frame(u8) void { return malloc(128); }
+flow dispatcher void(u8)void[2] = { create_packet, create_frame }
+flow packet = dispatcher[0](0x01)
+```
+
+**类型别名（alias）简化复杂类型：**
+
+```nihao
+alias Callback = void(u8, i32) i32
+alias AsyncFactory = void(char[]) void
+alias ConfigLoader = void() void
+
+var handler Callback = some_function
+flow factory AsyncFactory = create_async
+static loader ConfigLoader = get_config
+```
+
+**函数指针的接收规则（强制遵循第7.3节）：**  
+
+- 若函数指针类型为 `void(...) void`（返回 `void` 指针），变量前缀必须与其返回属性一致：返回动态指针用 `flow`，返回静态指针用 `static`，返回只读指针用 `const`。  
+- 若返回非指针类型（如 `i32`、`char[]`）或无返回值，则前缀可为 `func` 或 `var`（可省略）。  
+- 错误示例（编译报错）：`flow bad void() void = get_static_ptr`（静态返回赋给 flow 被拒绝）。
 
 ### 5.2 内存判断
 
@@ -396,63 +472,459 @@ for i = 0; i < 10; i++ {
 
 ## 7. 函数定义
 
-### 7.1 函数声明
+### 7.1 函数声明语法
+
+#### 7.1.1 核心规则
+
+> **所有函数声明遵循统一的布局：**
+> 
+> ```
+> [方括号属性] [返回值属性] 函数名(参数列表) [返回类型] { 函数体 }
+> ```
+> 
+> - **方括号属性**（可选）：修饰函数的链接性或编译器行为，如 `[[static]]`、`[[inline]]` 等
+> - **返回值属性**（必选）：决定函数返回值（或函数自身）的可见性/生命周期
+> - **返回类型**：当返回 `void` 指针时必须写 `void`；当返回非指针类型时写具体类型；无返回值时可省略
+
+#### 7.1.2 返回值属性的选择规则
+
+| 返回情况                                | 必须使用的属性  | 说明                    |
+| ----------------------------------- | -------- | --------------------- |
+| 无返回值                                | `func`   | 普通函数，无返回值             |
+| 返回非指针类型（如 `i32`, `f64`, `Person` 等） | `func`   | 返回值是普通类型              |
+| 返回 `void` 指针（动态内存）                  | `flow`   | 返回动态分配的指针，由调用方拥有，自动释放 |
+| 返回 `void` 指针（静态存储期）                 | `static` | 返回指向静态内存的指针，生命周期为程序全程 |
+| 返回 `void` 指针（只读）                    | `const`  | 返回只读指针，不可修改指向的内容      |
+
+#### 7.1.3 方括号属性（链接性与编译器行为）
+
+| 属性                     | 作用              | 适用场景         |
+| ---------------------- | --------------- | ------------ |
+| `[[static]]`           | 内部链接，仅当前文件可见    | 私有辅助函数       |
+| `[[inline]]`           | 建议编译器内联展开       | 频繁调用的短小函数    |
+| `[[weak]]`             | 弱符号定义，可被同名强符号覆盖 | 库提供的默认实现     |
+| `[[used]]`             | 强制保留符号，即使未被引用   | 被调试器或汇编调用的函数 |
+| `[[unused]]`           | 标记为已弃用，触发编译警告   | 过渡期旧接口       |
+| `[[export".section"]]` | 导出到指定的段         | 链接器脚本控制的特殊段  |
+
+**组合规则**：方括号属性与返回值属性**可共存**，方括号属性在前。
+
+---
+
+### 7.2 完整函数修饰表
+
+| 场景          | 写法示例                                                | 说明            |
+| ----------- | --------------------------------------------------- | ------------- |
+| 外部链接，无返回值   | `func greet() { ... }`                              | 最常见的无返回函数     |
+| 外部链接，返回非指针  | `func add(a i8, b i8) i8 { ... }`                   | 返回普通类型        |
+| 外部链接，返回动态指针 | `flow create_buffer(size u32) void { ... }`         | 返回动态内存        |
+| 外部链接，返回静态指针 | `static get_counter() void { ... }`                 | 返回静态变量地址      |
+| 外部链接，返回只读指针 | `const get_version() void { ... }`                  | 返回只读数据        |
+| 内部链接，返回动态指针 | `[[static]] flow create() void { ... }`             | 仅本文件可见，返回动态内存 |
+| 内部链接，返回静态指针 | `[[static]] static get() void { ... }`              | 仅本文件可见，返回静态内存 |
+| 内部链接，返回非指针  | `[[static]] func helper(x i32) i32 { ... }`         | 仅本文件可见的普通函数   |
+| 内联，返回动态指针   | `[[inline]] flow create_small() void { ... }`       | 建议内联          |
+| 弱符号，返回静态指针  | `[[weak]] static get_default() void { ... }`        | 允许覆盖的默认实现     |
+| 弃用，返回动态指针   | `[[unused]] flow old_api() void { ... }`            | 触发弃用警告        |
+| 导出到段，返回静态指针 | `[[export".init"]] static init_data() void { ... }` | 放入指定段         |
+
+---
+
+### 7.3 调用方接收规则
+
+函数返回值属性决定了**调用方必须使用何种属性来接收返回值**，以保证内存安全。
+
+| 函数返回属性   | 调用方可使用的接收属性               | 禁止的属性                     | 原因                        |
+| -------- | ------------------------- | ------------------------- | ------------------------- |
+| `flow`   | `flow`                    | `func`, `static`, `const` | 所有权必须转移，只有 `flow` 拥有内存管理权 |
+| `static` | `func`, `static`, `const` | `flow`                    | 静态内存生命周期最长，可安全借用，但不可被释放   |
+| `const`  | `const`                   | `func`, `static`, `flow`  | 只读约束必须保持，禁止可修改的接收方式       |
 
 ```nihao
-// 无返回无参函数
+// 接收示例
+flow buf void = create_buffer(1024)      // flow → flow ✅
+static p void = get_counter()            // static → static ✅
+func p2 void = get_counter()             // static → func ✅
+const ver void = get_version()           // const → const ✅
+// flow bad = get_version()              // const → flow ❌ 编译错误
+```
+
+---
+
+### 7.4 完整示例集
+
+#### 7.4.1 `func` 修饰 —— 无返回值或返回值非指针
+
+```nihao
+// 无返回值
 func greet() {
-    print("Hello")
+    print("Hello, Nihao C!")
 }
 
-// 有返回有参无void返回值函数
+// 无返回值，有参数
+func log(msg char[]) {
+    print("[LOG] ", msg)
+}
+
+// 返回非指针类型
 func add(a i8, b i8) i8 {
     return a + b
 }
 
-Person struct {
-    id u32
-    name char[]
+// 返回结构体（非指针）
+Person struct { name char[], age i32 }
+func make_person(name char[], age i32) Person {
+    return Person{name, age}
 }
 
-// 有void返回值属性函数 
-flow create(id u32) void {
-    flow person void = malloc(sizeof(Person))
-    person.(Person).id = id
-    return person
-}
-
-const create(id u32) void {
-    static xxx Person = {32, "xxx"}
-    return &person
-}
-
-static get_arry(size u32) void {
-    static arry char[u32]
-    return &arry
-}
-
-// 有函数属性函数
-[[static]]
-func getCounter() u32 {
-    static counter u32
-    return (counter + 1)
-}
-
-[[inline]]
-const sub(a u8, b u8) {
-    return (a+b)
-}
-
-[[weak]]
-flow newCard(id u32) void {
-    flow card struct {
-        id u32
-        name char[]
-    } = {id,"obj"}
-
-    return &card
+// 返回数组
+func make_array() i32[3] {
+    return {1, 2, 3}
 }
 ```
+
+#### 7.4.2 `flow` 修饰 —— 返回动态内存指针
+
+```nihao
+// 返回动态内存指针
+flow create_buffer(size u32) void {
+    return malloc(size)
+}
+
+// 返回动态结构体指针
+flow create_person(name char[], age i32) void {
+    flow p void = malloc(sizeof(Person))
+    p.(Person).name = name
+    p.(Person).age = age
+    return p
+}
+
+// 内部链接 + 返回动态指针（仅本文件可见）
+[[static]] flow create_internal_buffer(size u32) void {
+    return malloc(size)
+}
+```
+
+#### 7.4.3 `static` 修饰 —— 返回静态内存指针
+
+```nihao
+// 返回静态计数器指针
+static get_counter() void {
+    static count i32 = 0
+    return &count
+}
+
+// 返回静态配置结构体指针
+static get_default_config() void {
+    static config Config = {.timeout = 30, .retries = 3}
+    return &config
+}
+
+// 内部链接 + 返回静态指针
+[[static]] static get_internal_config() void {
+    static config Config = {.timeout = 10}
+    return &config
+}
+```
+
+#### 7.4.4 `const` 修饰 —— 返回只读指针
+
+```nihao
+// 返回只读版本字符串
+const get_version() void {
+    static version char[] = "v1.0.0"
+    return &version
+}
+
+// 返回只读构建信息
+const get_build_info() void {
+    static info BuildInfo = {.date = "2025-01-01", .commit = "abc123"}
+    return &info
+}
+
+// 内部链接 + 返回只读指针
+[[static]] const get_internal_version() void {
+    static version char[] = "v1.0.0-internal"
+    return &version
+}
+```
+
+#### 7.4.5 方括号属性组合示例
+
+```nihao
+// 内联 + 返回动态指针
+[[inline]] flow create_small_buffer() void {
+    return malloc(64)
+}
+
+// 弱符号 + 返回静态指针（可被覆盖）
+[[weak]] static get_default_handler() void {
+    static handler Handler = {.id = 0}
+    return &handler
+}
+
+// 强制保留 + 无返回值（即使未调用也保留符号）
+[[used]] func debug_dump() {
+    print("Debug dump called")
+}
+
+// 弃用标记 + 返回动态指针（触发警告）
+[[unused]] flow old_create() void {
+    return malloc(1024)
+}
+
+// 导出到初始化段 + 返回静态指针
+[[export".init"]] static get_init_data() void {
+    static data InitData = {.magic = 0xDEADBEEF}
+    return &data
+}
+
+// 多重组合：内部 + 内联 + 返回动态指针
+[[static, inline]] flow create_fast() void {
+    return malloc(32)
+}
+```
+
+---
+
+### 7.5 函数原型声明（无函数体）
+
+函数原型（声明）用于告诉编译器函数的存在，不提供实现，通常用于头文件或交叉引用。
+
+```nihao
+// 普通函数声明
+func add(a i8, b i8) i8;
+flow create_buffer(size u32) void;
+static get_counter() void;
+const get_version() void;
+
+// 带方括号属性的声明
+[[static]] flow create_internal() void;
+[[inline]] func square(x i32) i32;
+[[weak]] static get_default() void;
+```
+
+---
+
+### 7.6 函数指针类型
+
+#### 7.6.1 语法定义
+
+函数指针类型使用 `ptr` 关键字，后跟参数类型列表和返回类型（可选）：
+
+```
+ptr ( 参数类型列表 ) [返回值类型]
+```
+
+如果返回类型带有属性（如 `flow`, `static`, `const`），则需在返回值类型前加上属性。
+
+#### 7.6.2 示例
+
+```nihao
+// 无返回值函数指针：ptr void(u16)
+func callback_handle(argc u16) {
+    puts("callback called")
+}
+func cb void(u16) = callback_handle   // cb 是函数指针变量
+
+// 有返回值函数指针：ptr void(u16) i32
+flow callback_with_return(argc u16) i32 {
+    return 42
+}
+flow cb2 void(u16)i32 = callback_with_return
+
+// 作为参数传递
+func register_callback(flow cb void(u16)i32, event u32) u32 {
+    if event == 1 {
+        return cb(event)
+    }
+    return 0
+}
+
+// 使用 flow 函数指针
+flow async_cb void(u8)void = async_handler
+```
+
+---
+
+### 7.7 函数定义速查表
+
+| 需求          | 写法                                      | 返回值属性    | 方括号属性（可选）    |
+| ----------- | --------------------------------------- | -------- | ------------ |
+| 普通无返回值      | `func greet() { ... }`                  | `func`   | —            |
+| 返回非指针       | `func add(a i8, b i8) i8 { ... }`       | `func`   | —            |
+| 返回动态指针      | `flow create() void { ... }`            | `flow`   | —            |
+| 返回静态指针      | `static get() void { ... }`             | `static` | —            |
+| 返回只读指针      | `const get() void { ... }`              | `const`  | —            |
+| 内部链接，返回动态指针 | `[[static]] flow create() void { ... }` | `flow`   | `[[static]]` |
+| 内部链接，返回非指针  | `[[static]] func helper() i32 { ... }`  | `func`   | `[[static]]` |
+| 内联，返回动态指针   | `[[inline]] flow create() void { ... }` | `flow`   | `[[inline]]` |
+| 弱符号，返回静态指针  | `[[weak]] static get() void { ... }`    | `static` | `[[weak]]`   |
+| 弃用，返回动态指针   | `[[unused]] flow old() void { ... }`    | `flow`   | `[[unused]]` |
+
+---
+
+### 7.8 函数声明 BNF 语法定义
+
+以下 BNF 规则涵盖了 Nihao C 中函数声明、参数、类型及周边语法的完整定义。
+
+```ebnf
+(* ================================================================= *)
+(*                         顶层程序结构                                *)
+(* ================================================================= *)
+Program           ::= { ModuleDecl | UseDecl | LinkDecl | FuncDecl | TypeDecl | VarDecl }
+
+(* ================================================================= *)
+(*                         函数声明                                   *)
+(* ================================================================= *)
+FuncDecl          ::= [ FuncAttrList ] ReturnAttr FuncName "(" [ ParamList ] ")" [ ReturnType ] FuncBody
+FuncName          ::= identifier
+
+(* 返回值属性：决定函数修饰词 *)
+ReturnAttr        ::= "func" | "flow" | "static" | "const"
+
+(* 方括号函数属性列表 *)
+FuncAttrList      ::= "[" "[" FuncAttr { "," FuncAttr } "]" "]"
+FuncAttr          ::= "static"                (* 内部链接 *)
+                   | "inline"                 (* 内联提示 *)
+                   | "weak"                   (* 弱符号 *)
+                   | "used"                   (* 强制保留 *)
+                   | "unused"                 (* 弃用标记 *)
+                   | "export" StringLiteral   (* 导出到指定段 *)
+
+(* 参数列表 *)
+ParamList         ::= Param { "," Param }
+Param             ::= [ ParamAttr ] ParamName ParamType
+ParamAttr         ::= "func" | "flow" | "static" | "const" | "var"
+ParamName         ::= identifier
+ParamType         ::= TypeName
+
+(* 返回类型 *)
+ReturnType        ::= TypeName
+                   | "void"                  (* 通用指针类型，用于返回指针 *)
+
+(* 函数体 *)
+FuncBody          ::= "{" { Statement } "}"
+                   | ";"                     (* 函数声明/原型 *)
+
+(* ================================================================= *)
+(*                         类型系统                                   *)
+(* ================================================================= *)
+TypeName          ::= PrimitiveType
+                   | StructType
+                   | UnionType
+                   | EnumType
+                   | ArrayType
+                   | PointerType
+                   | FunctionPtrType
+                   | identifier              (* 用户定义类型 *)
+
+(* 基础类型 *)
+PrimitiveType     ::= "i8" | "i16" | "i32" | "i64"
+                   | "u8" | "u16" | "u32" | "u64"
+                   | "f32" | "f64"
+                   | "fx32" | "fx64"
+                   | "char" | "char[]"
+                   | "bool"
+                   | "void"
+
+(* 数组类型 *)
+ArrayType         ::= TypeName "[" [ Integer | "..." ] "]"
+
+(* 指针类型（仅 void 指针） *)
+PointerType       ::= "void" [ "[" [ "..." | Integer ] "]" ]
+
+(* 结构体/联合体/枚举类型 *)
+StructType        ::= "struct" "{" { FieldDecl } "}"
+UnionType         ::= "union" "{" { FieldDecl } "}"
+EnumType          ::= "enum" "{" { EnumVariant } "}"
+
+(* 字段声明 *)
+FieldDecl         ::= [ FieldAttr ] FieldName FieldType [ ":" Integer ] [ "=" Expr ]
+FieldAttr         ::= "const" | "flow" | "static" | "var"
+FieldName         ::= identifier
+FieldType         ::= TypeName
+
+(* 函数指针类型 *)
+FunctionPtrType   ::= "ptr" "(" [ ParamTypeList ] ")" [ ReturnType ]
+                   | "ptr" "(" [ ParamTypeList ] ")" ReturnAttr ReturnType
+
+(* ================================================================= *)
+(*                         语句和表达式                               *)
+(* ================================================================= *)
+Statement         ::= DeclStmt
+                   | AssignStmt
+                   | IfStmt
+                   | LoopStmt
+                   | ReturnStmt
+                   | BlockStmt
+                   | ExprStmt
+                   | NullStmt
+
+(* 表达式（核心） *)
+Expr              ::= UnaryExpr
+                   | BinaryExpr
+                   | DerefExpr
+                   | MemberAccess
+                   | CallExpr
+                   | Literal
+                   | identifier
+
+(* 指针解引用 *)
+DerefExpr         ::= Expr "." "(" [ TypeName ] ")"        (* 普通解引用 *)
+                   | Expr "?." "(" [ TypeName ] ")"        (* 安全解引用 *)
+                   | Expr "[" [ Expr ".." Expr ] "]"       (* 数组/切片访问 *)
+
+(* 成员访问 *)
+MemberAccess      ::= Expr "." identifier
+                   | Expr "?." identifier                  (* 安全成员访问 *)
+
+(* 赋值 *)
+AssignStmt        ::= Expr "=" Expr
+                   | Expr "?=" Expr                        (* 安全赋值 *)
+
+(* 变量声明 *)
+DeclStmt          ::= VarAttr identifier [ TypeName ] [ "=" Expr ]
+VarAttr           ::= "const" | "flow" | "static" | "var"
+
+(* 控制结构 *)
+IfStmt            ::= "if" Expr BlockStmt [ "else" ( IfStmt | BlockStmt ) ]
+LoopStmt          ::= "for" ForHeader BlockStmt
+                   | "while" Expr BlockStmt
+                   | "do" Expr BlockStmt
+ForHeader         ::= identifier "=" Expr ";" Expr ";" identifier [ AssignOp ] Expr
+                   | identifier "=" Expr ";" Expr ";" identifier "++" | identifier "--"
+
+BlockStmt         ::= "{" { Statement } "}"
+ReturnStmt        ::= "return" [ Expr ]
+ExprStmt          ::= Expr
+NullStmt          ::= ";"                                 (* 空语句 *)
+
+(* 字面量 *)
+Literal           ::= IntegerLiteral | FloatLiteral | StringLiteral | CharLiteral | BooleanLiteral
+
+(* ================================================================= *)
+(*                         内置函数调用                               *)
+(* ================================================================= *)
+BuiltinCall       ::= "typeof" "(" TypeName ")"
+                   | "sizeof" "(" TypeName ")"
+                   | "alignof" "(" TypeName ")"
+                   | "offsetof" "(" TypeName "," identifier ")"
+                   | "bitoffsetof" "(" TypeName "," identifier ")"
+                   | "structof" "(" TypeName "," Expr ")"
+                   | "unionof" "(" TypeName "," Expr ")"
+                   | "visof" "(" Expr ")"
+                   | "malloc" "(" TypeName ")"
+
+(* ================================================================= *)
+(*                         模块和链接                                 *)
+(* ================================================================= *)
+ModuleDecl        ::= "module" identifier
+UseDecl           ::= "use" identifier [ "." identifier ]
+LinkDecl          ::= "link" StringLiteral identifier
+```
+
+---
 
 ## 8. 模块系统
 
@@ -574,7 +1046,7 @@ if visof(ptr) == _flow {
 }
 ```
 
-## 12.NiHao语言可见性系统与生命周期管理
+## 12. NiHao语言可见性系统与生命周期管理
 
 根据变量属性划分可见属性
 
