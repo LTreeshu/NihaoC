@@ -124,7 +124,8 @@ ncc/
 - [ ] **PB-1 类型系统**：IrFn 无类型表，参数/返回/局部全固定 int/64 位；需为 IR 增加类型表（i8~u64/f32/f64/char[]/指针）
 - [x] **PB-2 一元与复合运算（全部完成 2026-08-06）**：一元 `-x`（IR_NEG）、`!x`（==0 比较）、`~x`（新增 IR_NOT 指令，双后端实现）、复合赋值 `+= -= *= /= %=`、后缀 `x++`/`x--`、前缀 `++x`/`--x` 全部实现。用例：ir_expr.nc（IR_SUBSET，四后端）+ ir_prefix.nc（IR_ONLY，前缀专用）。
 - [ ] **P1 全量 parser（parser.c）缺口：前缀 `++x`/`--x` 未支持**——当前被误解析为 `0++` 导致 lvalue 错误；IR 前端已支持，需在 parser.c 表达式解析中补前缀自增/自减。
-- [ ] **PB-3 数组**：声明、下标、切片 [a..b]、动态数组 [...] / [6...]
+- [x] **PB-3 数组（部分完成 2026-08-06）**：声明 `name i32[N]`（N 个连续 8 字节 ALLOCA 槽）、下标 `arr[i]` 读写（地址 = &arr[0] + idx*8，复用 ADDR/LOAD/STORE）、初始化列表 `= {1,2,3}` 逐个 STORE。用例 ir_array.nc（IR_ONLY）双后端通过。剩余：切片 `[a..b]`、动态数组 `[...]`/`[6...]`、按类型宽度元素（当前统一 8 字节）。
+- [ ] **P1 全量 parser（parser.c）缺口：数组初始化列表 `= {1,2,3}` 未支持**——报 unexpected token '{'；IR 前端已支持
 - [ ] **PB-4 struct/union/enum**：匿名嵌套、位域 u8:1、.成员访问
 - [ ] **PB-5 存储期属性**：flow/static/const/var 前缀 + visof
 - [ ] **PB-6 内置函数**：malloc / sizeof / typeof / offsetof / structof 等

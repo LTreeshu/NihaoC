@@ -196,10 +196,14 @@ int irgen_native_emit(IrProg *p, const char *outfile)
                     nb_put(&b, "\n");
                     break;
                 case IR_ADDR:
-                    /* dst = 局部变量 a 的栈槽地址 */
+                    /* dst = 局部变量 a 的栈槽地址 + imm*8（数组元素偏移） */
                     nb_put(&b, "  leaq ");
                     slot(&b, in->a);
-                    nb_put(&b, ", %%rax\n  movq %%rax, ");
+                    nb_put(&b, ", %%rax\n");
+                    if (in->imm > 0) {
+                        nb_put(&b, "  addq $%lld, %%rax\n", (long long)in->imm * 8);
+                    }
+                    nb_put(&b, "  movq %%rax, ");
                     slot(&b, in->dst);
                     nb_put(&b, "\n");
                     break;

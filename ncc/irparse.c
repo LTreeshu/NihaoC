@@ -17,6 +17,7 @@ static IrProg *P;
 static IrFn *F;
 static int *vt;             /* 局部变量: name 序号 -> vreg（ALLOCA 槽） */
 static const char **vn;
+static int *ve;             /* 数组元素数（0=标量）；数组元素槽 vreg = vt[i]+k */
 static int vn_count, vn_cap;
 
 /* ---- 局部变量表 ---- */
@@ -27,6 +28,7 @@ static void var_reset(void)
         vn_cap = 32;
         vt = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vn = nihao_malloc(g_cs, vn_cap * sizeof(char *));
+        ve = nihao_malloc(g_cs, vn_cap * sizeof(int));
     }
 }
 
@@ -37,7 +39,9 @@ static int var_find(const char *name)
     return -1;
 }
 
-static int var_declare(const char *name)
+/* elems: 数组元素数（0=标量）。数组分配 elems 个连续 8 字节 ALLOCA 槽，
+ * vt[i] 指向第 0 元素槽 vreg，元素 k 槽 vreg = vt[i] + k。 */
+static int var_declare(const char *name, int elems)
 {
     int i = var_find(name);
     if (i >= 0) return i;
@@ -45,13 +49,32 @@ static int var_declare(const char *name)
         vn_cap *= 2;
         vt = nihao_realloc(g_cs, vt, vn_cap * sizeof(int));
         vn = nihao_realloc(g_cs, vn, vn_cap * sizeof(char *));
+        ve = nihao_realloc(g_cs, ve, vn_cap * sizeof(int));
     }
     vn[vn_count] = name;
-    /* ALLOCA 一个 8 字节槽 */
-    int vr = ir_new_vreg(F);
-    ir_emit(F, IR_ALLOCA, vr, -1, -1, 8);
-    vt[vn_count] = vr;
+    ve[vn_count] = elems > 0 ? elems : 0;
+    int base = -1;
+    for (int k = 0; k < (elems > 0 ? elems : 1); k++) {
+        int vr = ir_new_vreg(F);
+        ir_emit(F, IR_ALLOCA, vr, -1, -1, 8);
+        if (k == 0) base = vr;
+    }
+    vt[vn_count] = base;
     return vn_count++;
+}
+
+/* 数组元素地址：&arr[0] + idx*8（元素统一 8 字节，与 vreg 模型一致） */
+static int ir_elem_addr(CompilerState *cs, int base_vreg, int idx_vreg)
+{
+    int base = ir_new_vreg(F);
+    ir_emit(F, IR_ADDR, base, base_vreg, -1, 0);
+    int eight = ir_new_vreg(F);
+    ir_emit(F, IR_CONST, eight, -1, -1, 8);
+    int off = ir_new_vreg(F);
+    ir_emit(F, IR_MUL, off, idx_vreg, eight, 0);
+    int addr = ir_new_vreg(F);
+    ir_emit(F, IR_ADD, addr, base, off, 0);
+    return addr;
 }
 
 /* ---- 表达式：返回持有结果的 vreg ---- */
@@ -154,6 +177,16 @@ static int ir_primary(CompilerState *cs)
         if (vi < 0) {
             nihao_error(cs, "ir: undeclared variable '%s'", name);
             return ir_new_vreg(F);
+        }
+        if (cur_tok(cs) == TOK_LBRACKET) {
+            /* 数组下标 arr[idx] -> LOAD(&arr[0] + idx*8) */
+            next_tok(cs);
+            int idx = ir_expr(cs);
+            expect(cs, TOK_RBRACKET);
+            int addr = ir_elem_addr(cs, vt[vi], idx);
+            int vr = ir_new_vreg(F);
+            ir_emit(F, IR_LOAD, vr, addr, -1, 0);
+            return vr;
         }
         int vr = ir_new_vreg(F);
         ir_emit(F, IR_MOV, vr, vt[vi], -1, 0);
@@ -320,7 +353,7 @@ static void ir_stmt(CompilerState *cs)
             next_tok(cs);           /* name */
             next_tok(cs);           /* = */
             int vi = var_find(name);
-            if (vi < 0) vi = var_declare(name);
+            if (vi < 0) vi = var_declare(name, 0);
             int vr = ir_expr(cs);
             ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             skip_newlines(cs);
@@ -367,13 +400,57 @@ static void ir_stmt(CompilerState *cs)
             ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             skip_newlines(cs);
         } else if (is_type_token(nt)) {
-            /* 声明: name i32 = expr */
+            /* 声明: name i32 [N] = expr | = {e0, e1, ...} */
             next_tok(cs);           /* name */
             next_tok(cs);           /* 类型 */
+            int elems = 0;
+            if (cur_tok(cs) == TOK_LBRACKET) {
+                next_tok(cs);
+                if (cur_tok(cs) == TOK_INT_CONST) {
+                    elems = (int)cs->parser.lex->tok_val.i;
+                    next_tok(cs);
+                }
+                expect(cs, TOK_RBRACKET);
+            }
             expect(cs, TOK_ASSIGN); /* 消费 =（expect 已推进） */
-            int vi = var_declare(name);
-            int vr = ir_expr(cs);
-            ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
+            int vi = var_declare(name, elems);
+            if (cur_tok(cs) == TOK_LBRACE) {
+                /* 数组初始化列表 {e0, e1, ...}：逐个 STORE 到元素槽 */
+                next_tok(cs);
+                int k = 0;
+                if (cur_tok(cs) != TOK_RBRACE) {
+                    for (;;) {
+                        int v = ir_expr(cs);
+                        int addr = ir_new_vreg(F);
+                        ir_emit(F, IR_ADDR, addr, vt[vi], -1, k);
+                        ir_emit(F, IR_STORE, -1, addr, v, 0);
+                        k++;
+                        if (cur_tok(cs) != TOK_COMMA) break;
+                        next_tok(cs);
+                    }
+                }
+                expect(cs, TOK_RBRACE);
+            } else {
+                int vr = ir_expr(cs);
+                ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
+            }
+            skip_newlines(cs);
+        } else if (nt == TOK_LBRACKET) {
+            /* 数组元素赋值 arr[idx] = expr */
+            next_tok(cs);           /* name */
+            next_tok(cs);           /* [ */
+            int vi = var_find(name);
+            if (vi < 0) {
+                nihao_error(cs, "ir: undeclared variable '%s'", name);
+                skip_newlines(cs);
+                return;
+            }
+            int idx = ir_expr(cs);
+            expect(cs, TOK_RBRACKET);
+            expect(cs, TOK_ASSIGN);
+            int v = ir_expr(cs);
+            int addr = ir_elem_addr(cs, vt[vi], idx);
+            ir_emit(F, IR_STORE, -1, addr, v, 0);
             skip_newlines(cs);
         } else {
             /* 表达式语句（如 puts(...) 调用） */
@@ -445,7 +522,7 @@ static void ir_func(CompilerState *cs)
             const char *pname = cs->parser.lex->tok_str;
             next_tok(cs);
             next_tok(cs);           /* 跳过类型 */
-            var_declare(pname);
+            var_declare(pname, 0);
             nparam++;
             if (cur_tok(cs) != TOK_COMMA) break;
             next_tok(cs);
