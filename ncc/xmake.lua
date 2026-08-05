@@ -104,6 +104,11 @@ for _, src in ipairs(os.files("tests/pos/*.nc")) do
         add_files(src)
         add_rules("nihao")
         add_deps("ncc")
+        -- IR 专属用例（子集语法，如 ir_demo/ir_ptr）仅在 IR 后端下编译，
+        -- 默认后端无法构建，设为非默认 target（xmake build 不会自动构建）
+        if name == "ir_ptr" or name == "ir_demo" then
+            set_default(false)
+        end
     target_end()
 end
 

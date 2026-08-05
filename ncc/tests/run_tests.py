@@ -32,9 +32,14 @@ os.makedirs(TMP, exist_ok=True)
 BACKENDS = ["c", "native", "ir-c", "ir-native"]
 
 # IR 中间层（方案 B）目前只支持最小子集语法。
-# pos 中可在 IR 双后端（ir-c/ir-native）下编译运行的用例名白名单：
-# 每扩展一个语法点，就把对应的回归用例加入此集合，并同步移除 skip。
+# pos 中的用例分两类：
+#  - IR_SUBSET：IR 双后端（ir-c/ir-native）可编译运行的通用用例（全量后端也能跑）
+#  - IR_ONLY ：IR 专属用例——子集语法（如无类型指针声明），全量 parser 无法编译
+# 每扩展一个语法点，就把对应的回归用例加入对应集合。
 IR_SUBSET = {"hello", "ir_demo"}
+IR_ONLY = {"ir_ptr"}
+IR_ONLY = {"ir_ptr"}
+IR_ONLY = {"ir_ptr"}
 
 
 def norm(lines):
@@ -119,10 +124,17 @@ def run_backend(backend, filt):
     for fname in pos_cases:
         if filt and filt not in fname:
             continue
-        if is_ir and fname[:-3] not in IR_SUBSET:
-            skipped += 1
-            print("  [SKIP] pos/%s (IR 子集未覆盖)" % fname)
-            continue
+        stem = fname[:-3]
+        if is_ir:
+            if stem not in IR_SUBSET and stem not in IR_ONLY:
+                skipped += 1
+                print("  [SKIP] pos/%s (IR 子集未覆盖)" % fname)
+                continue
+        else:
+            if stem in IR_ONLY:
+                skipped += 1
+                print("  [SKIP] pos/%s (IR 专属用例，全量 parser 不支持子集语法)" % fname)
+                continue
         status, why = run_pos(fname, backend)
         print("  [%s] pos/%s" % (status, fname))
         if status == "PASS":

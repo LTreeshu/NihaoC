@@ -27,6 +27,7 @@ typedef enum {
     IR_RET,         /* return dst (-1 = bare return)  */
     IR_LABEL,
     IR_ALLOCA,      /* dst = address of a stack slot of size imm */
+    IR_ADDR,        /* dst = address of local variable vreg a */
     IR_LOAD,        /* dst = *(a)                     */
     IR_STORE,       /* *(a) = b                       */
     IR_LD_ADDR,     /* dst = address of global sym    */

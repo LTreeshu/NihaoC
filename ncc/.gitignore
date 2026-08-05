@@ -8,3 +8,5 @@ build/
 
 test/*.c
 myapp/
+test/f1b
+test/f4

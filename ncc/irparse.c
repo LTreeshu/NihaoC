@@ -60,6 +60,33 @@ static int ir_expr(CompilerState *cs);
 static int ir_primary(CompilerState *cs)
 {
     TokenType t = cur_tok(cs);
+    if (t == TOK_STAR) {
+        /* 一元解引用 *p -> LOAD */
+        next_tok(cs);
+        int a = ir_primary(cs);
+        int vr = ir_new_vreg(F);
+        ir_emit(F, IR_LOAD, vr, a, -1, 0);
+        return vr;
+    }
+    if (t == TOK_BITWISE_AND) {
+        /* 取地址 &x -> ADDR（当前仅支持局部变量） */
+        next_tok(cs);
+        if (cur_tok(cs) == TOK_IDENTIFIER) {
+            const char *name = cs->parser.lex->tok_str;
+            int vi = var_find(name);
+            if (vi < 0) {
+                nihao_error(cs, "ir: cannot take address of undeclared '%s'", name);
+                return ir_new_vreg(F);
+            }
+            next_tok(cs);
+            int vr = ir_new_vreg(F);
+            ir_emit(F, IR_ADDR, vr, vt[vi], -1, 0);
+            return vr;
+        }
+        nihao_error(cs, "ir: '&' requires a variable identifier");
+        next_tok(cs);
+        return ir_new_vreg(F);
+    }
     if (t == TOK_INT_CONST) {
         int vr = ir_new_vreg(F);
         ir_emit(F, IR_CONST, vr, -1, -1, cs->parser.lex->tok_val.i);
@@ -124,13 +151,16 @@ static int ir_binop(CompilerState *cs, IrOp op)
     return a;
 }
 
-/* 简单优先级：add > mul > cmp（子集够用） */
-static int ir_mul(CompilerState *cs)
+/* 简单优先级：add > mul > cmp（子集够用）。
+ * 函数体内换行不产生 NEWLINE token（lexer 仅顶层发 NEWLINE），
+ * 语句边界用"运算符与表达式首 token 是否同行"判定：换行即停止表达式。 */
+static int ir_mul(CompilerState *cs, int line)
 {
     int a = ir_primary(cs);
     for (;;) {
         TokenType t = cur_tok(cs);
         IrOp op;
+        if (cs->parser.lex->last_line_num != line) break;
         if (t == TOK_STAR) op = IR_MUL;
         else if (t == TOK_SLASH) op = IR_DIV;
         else if (t == TOK_PERCENT) op = IR_MOD;
@@ -144,17 +174,18 @@ static int ir_mul(CompilerState *cs)
     return a;
 }
 
-static int ir_add(CompilerState *cs)
+static int ir_add(CompilerState *cs, int line)
 {
-    int a = ir_mul(cs);
+    int a = ir_mul(cs, line);
     for (;;) {
         TokenType t = cur_tok(cs);
         IrOp op;
+        if (cs->parser.lex->last_line_num != line) break;
         if (t == TOK_PLUS) op = IR_ADD;
         else if (t == TOK_MINUS) op = IR_SUB;
         else break;
         next_tok(cs);
-        int b = ir_mul(cs);
+        int b = ir_mul(cs, line);
         int vr = ir_new_vreg(F);
         ir_emit(F, op, vr, a, b, 0);
         a = vr;
@@ -162,12 +193,13 @@ static int ir_add(CompilerState *cs)
     return a;
 }
 
-static int ir_cmp(CompilerState *cs)
+static int ir_cmp(CompilerState *cs, int line)
 {
-    int a = ir_add(cs);
+    int a = ir_add(cs, line);
     for (;;) {
         TokenType t = cur_tok(cs);
         IrOp op;
+        if (cs->parser.lex->last_line_num != line) return a;
         switch (t) {
             case TOK_LT:  op = IR_CMP_LT; break;
             case TOK_LE:  op = IR_CMP_LE; break;
@@ -178,7 +210,7 @@ static int ir_cmp(CompilerState *cs)
             default: return a;
         }
         next_tok(cs);
-        int b = ir_add(cs);
+        int b = ir_add(cs, line);
         int vr = ir_new_vreg(F);
         ir_emit(F, op, vr, a, b, 0);
         a = vr;
@@ -187,7 +219,8 @@ static int ir_cmp(CompilerState *cs)
 
 static int ir_expr(CompilerState *cs)
 {
-    return ir_cmp(cs);
+    /* 表达式首 token 的行号 = 语句起始行，用于块内换行边界判定 */
+    return ir_cmp(cs, cs->parser.lex->last_line_num);
 }
 
 /* ---- 语句 ---- */
@@ -279,6 +312,19 @@ static void ir_stmt(CompilerState *cs)
             ir_expr(cs);
             skip_newlines(cs);
         }
+    } else if (t == TOK_STAR) {
+        /* *p = expr（STORE）或 *p 表达式（LOAD） */
+        next_tok(cs);
+        int addr = ir_primary(cs);
+        if (cur_tok(cs) == TOK_ASSIGN) {
+            next_tok(cs);
+            int vr = ir_expr(cs);
+            ir_emit(F, IR_STORE, -1, addr, vr, 0);
+        } else {
+            int vr = ir_new_vreg(F);
+            ir_emit(F, IR_LOAD, vr, addr, -1, 0);
+        }
+        skip_newlines(cs);
     } else if (t == TOK_LBRACE) {
         ir_block(cs);
     } else {
@@ -368,6 +414,22 @@ int ir_compile(CompilerState *cs, const char *filename, int backend, int verbose
     (void)verbose;
     if (ir_parse_file(cs, filename) != 0) return -1;
     if (cs->error_count > 0) return -1;
+
+    /* verbose: dump IR 指令序列（调试用） */
+    if (verbose) {
+        for (int fi = 0; fi < P->fn_count; fi++) {
+            IrFn *f = &P->fns[fi];
+            printf("IR fn: %s (params=%d, vregs=%d)\n",
+                   f->name, f->param_count, f->vreg_count);
+            for (int i = 0; i < f->ins_count; i++) {
+                IrIns *in = &f->ins[i];
+                printf("  %2d: op=%-3d dst=%2d a=%2d b=%2d imm=%lld%s%s\n",
+                       i, (int)in->op,
+                       in->dst, in->a, in->b, (long long)in->imm,
+                       in->sym ? " sym=" : "", in->sym ? in->sym : "");
+            }
+        }
+    }
 
     char out[1024];
     snprintf(out, sizeof(out), "%s.%s", cs->output_file ? cs->output_file : "a.out",

@@ -133,7 +133,9 @@ ncc/
 - [ ] **PB-11 字符串池去重**（当前每字面量独立 __str_N）
 
 ### IR 指令集/数据模型待办
-- [ ] **PB-12 🔴 IR_LOAD/IR_STORE 后端未实现**：指令已定义但 ir_to_c / ir_to_native 均无 case，发射即被静默丢弃
+- [x] **PB-12 IR_ADDR/IR_LOAD/IR_STORE 实现（已于 2026-08-05 完成）**：ir.h 新增 IR_ADDR（局部变量取地址）；ir_to_c / ir_to_native 实现 ADDR（leaq/&tN）、LOAD、STORE；irparse 支持一元 `*`（解引用）、`&`（取地址，局部变量）、`*p = expr` 语句；ir_to_c 的 vreg 统一 int64_t（8 字节槽，防 STORE 越界）。
+  配套修复：**块内换行语句边界**——lexer 仅顶层发 NEWLINE，函数体内 `*p = 43` 的 `*` 会被上一表达式当乘法吞掉；用"运算符与表达式首 token 同行"判定语句边界（ir_mul/ir_add/ir_cmp 传行号）。
+  用例：tests/pos/ir_ptr.nc（IR_ONLY），四后端全矩阵 32 PASS / 0 FAIL。
 - [ ] **PB-13 浮点指令**：f32/f64 运算、比较、转换、调用 ABI（xmm）
 - [ ] **PB-14 类型化内存访问**：按类型宽度 load/store（当前假定 8 字节）
 

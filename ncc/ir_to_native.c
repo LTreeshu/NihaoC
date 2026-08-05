@@ -188,6 +188,30 @@ int irgen_native_emit(IrProg *p, const char *outfile)
                     slot(&b, in->dst);
                     nb_put(&b, "\n");
                     break;
+                case IR_ADDR:
+                    /* dst = 局部变量 a 的栈槽地址 */
+                    nb_put(&b, "  leaq ");
+                    slot(&b, in->a);
+                    nb_put(&b, ", %%rax\n  movq %%rax, ");
+                    slot(&b, in->dst);
+                    nb_put(&b, "\n");
+                    break;
+                case IR_LOAD:
+                    /* dst = *(a) */
+                    nb_put(&b, "  movq ");
+                    slot(&b, in->a);
+                    nb_put(&b, ", %%rax\n  movq (%%rax), %%rax\n  movq %%rax, ");
+                    slot(&b, in->dst);
+                    nb_put(&b, "\n");
+                    break;
+                case IR_STORE:
+                    /* *(a) = b */
+                    nb_put(&b, "  movq ");
+                    slot(&b, in->a);
+                    nb_put(&b, ", %%rax\n  movq ");
+                    slot(&b, in->b);
+                    nb_put(&b, ", %%rcx\n  movq %%rcx, (%%rax)\n");
+                    break;
                 case IR_ALLOCA:
                     break;   /* 槽即栈位置 */
                 case IR_PARAM:
