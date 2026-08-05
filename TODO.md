@@ -128,7 +128,7 @@ ncc/
 - [ ] **PB-4 struct/union/enum**：匿名嵌套、位域 u8:1、.成员访问
 - [ ] **PB-5 存储期属性**：flow/static/const/var 前缀 + visof
 - [ ] **PB-6 内置函数**：malloc / sizeof / typeof / offsetof / structof 等
-- [ ] **PB-7 控制流补齐**：for / do / break / continue / is 模式匹配 / switch
+- [x] **PB-7 控制流补齐（部分完成 2026-08-06）**：for（init;cond;step，step 记录重放）、break/continue（循环栈）；剩余：do 循环、is 模式匹配、switch
 - [ ] **PB-8 多返回值、函数指针、多变量声明** var {a=0,b=1} i8
 - [ ] **PB-9 编译期**：cooking / align / static_assert
 - [ ] **PB-10 use 跨文件模块**（当前直接跳过）

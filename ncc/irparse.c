@@ -20,6 +20,12 @@ static const char **vn;
 static int *ve;             /* 数组元素数（0=标量）；数组元素槽 vreg = vt[i]+k */
 static int vn_count, vn_cap;
 
+/* ---- 循环上下文栈（break/continue 目标 label） ---- */
+#define IR_MAX_LOOP 32
+static int loop_end_label[IR_MAX_LOOP];    /* break 目标 */
+static int loop_cont_label[IR_MAX_LOOP];   /* continue 目标 */
+static int loop_depth;
+
 /* ---- 局部变量表 ---- */
 static void var_reset(void)
 {
@@ -322,6 +328,9 @@ static void ir_stmt(CompilerState *cs)
         next_tok(cs);
         int l_loop = ir_new_label(F);
         int l_end = ir_new_label(F);
+        loop_end_label[loop_depth] = l_end;
+        loop_cont_label[loop_depth] = l_loop;
+        loop_depth++;
         ir_emit(F, IR_LABEL, -1, -1, -1, 0);
         F->ins[F->ins_count - 1].label = l_loop;
         int c = ir_expr(cs);
@@ -332,6 +341,102 @@ static void ir_stmt(CompilerState *cs)
         F->ins[F->ins_count - 1].label = l_loop;
         ir_emit(F, IR_LABEL, -1, -1, -1, 0);
         F->ins[F->ins_count - 1].label = l_end;
+        loop_depth--;
+    } else if (t == TOK_FOR) {
+        /* for init; cond; step { body }
+         * IR 布局：cond 检查 → body → L_cont(step) → JMP cond
+         * 源码 step 在 body 前解析，但指令需在 body 后发射 → 先记录后重放 */
+        typedef struct { int vi, kind, val, has_val; } ForStep;
+        ForStep fs = { -1, 0, -1, 0 };
+        next_tok(cs);
+        if (cur_tok(cs) == TOK_IDENTIFIER) {
+            const char *vname = cs->parser.lex->tok_str;
+            next_tok(cs);
+            expect(cs, TOK_ASSIGN);
+            int vi = var_find(vname);
+            if (vi < 0) vi = var_declare(vname, 0);
+            int v = ir_expr(cs);
+            ir_emit(F, IR_MOV, vt[vi], v, -1, 0);
+        }
+        expect(cs, TOK_SEMICOLON);
+        int l_cond = ir_new_label(F);
+        int l_end = ir_new_label(F);
+        int l_cont = ir_new_label(F);
+        loop_end_label[loop_depth] = l_end;
+        loop_cont_label[loop_depth] = l_cont;
+        loop_depth++;
+        ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+        F->ins[F->ins_count - 1].label = l_cond;
+        int c = ir_expr(cs);
+        ir_emit(F, IR_JZ, -1, c, -1, 0);
+        F->ins[F->ins_count - 1].label = l_end;
+        expect(cs, TOK_SEMICOLON);   /* cond 与 step 之间的 ; */
+        /* 解析 step（只记录，不发射写回） */
+        if (cur_tok(cs) == TOK_IDENTIFIER) {
+            const char *sname = cs->parser.lex->tok_str;
+            next_tok(cs);
+            TokenType st = cur_tok(cs);
+            fs.vi = var_find(sname);
+            if (fs.vi >= 0) {
+                if (st == TOK_INCREMENT) { fs.kind = 0; next_tok(cs); }
+                else if (st == TOK_DECREMENT) { fs.kind = 1; next_tok(cs); }
+                else if (st == TOK_ASSIGN) {
+                    fs.kind = 4; next_tok(cs);
+                    fs.val = ir_expr(cs); fs.has_val = 1;
+                } else if (st == TOK_PLUS_ASSIGN) {
+                    fs.kind = 2; next_tok(cs);
+                    fs.val = ir_expr(cs); fs.has_val = 1;
+                } else if (st == TOK_MINUS_ASSIGN) {
+                    fs.kind = 3; next_tok(cs);
+                    fs.val = ir_expr(cs); fs.has_val = 1;
+                }
+            }
+        }
+        /* NihaoC for 语法：for init; cond; step { body } —— step 后无分号 */
+        ir_block(cs);
+        /* body 后发射 step */
+        ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+        F->ins[F->ins_count - 1].label = l_cont;
+        if (fs.vi >= 0) {
+            if (fs.kind == 0 || fs.kind == 1) {
+                IrOp sop = (fs.kind == 0) ? IR_ADD : IR_SUB;
+                int one = ir_new_vreg(F);
+                ir_emit(F, IR_CONST, one, -1, -1, 1);
+                int sv = ir_new_vreg(F);
+                ir_emit(F, sop, sv, vt[fs.vi], one, 0);
+                ir_emit(F, IR_MOV, vt[fs.vi], sv, -1, 0);
+            } else if (fs.kind == 2 || fs.kind == 3) {
+                IrOp sop = (fs.kind == 2) ? IR_ADD : IR_SUB;
+                int sv = ir_new_vreg(F);
+                ir_emit(F, sop, sv, vt[fs.vi], fs.val, 0);
+                ir_emit(F, IR_MOV, vt[fs.vi], sv, -1, 0);
+            } else if (fs.kind == 4 && fs.has_val) {
+                ir_emit(F, IR_MOV, vt[fs.vi], fs.val, -1, 0);
+            }
+        }
+        ir_emit(F, IR_JMP, -1, -1, -1, 0);
+        F->ins[F->ins_count - 1].label = l_cond;
+        ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+        F->ins[F->ins_count - 1].label = l_end;
+        loop_depth--;
+    } else if (t == TOK_BREAK) {
+        next_tok(cs);
+        if (loop_depth > 0) {
+            ir_emit(F, IR_JMP, -1, -1, -1, 0);
+            F->ins[F->ins_count - 1].label = loop_end_label[loop_depth - 1];
+        } else {
+            nihao_error(cs, "ir: 'break' outside loop");
+        }
+        skip_newlines(cs);
+    } else if (t == TOK_CONTINUE) {
+        next_tok(cs);
+        if (loop_depth > 0) {
+            ir_emit(F, IR_JMP, -1, -1, -1, 0);
+            F->ins[F->ins_count - 1].label = loop_cont_label[loop_depth - 1];
+        } else {
+            nihao_error(cs, "ir: 'continue' outside loop");
+        }
+        skip_newlines(cs);
     } else if (t == TOK_RETURN) {
         next_tok(cs);
         if (cur_tok(cs) == TOK_NEWLINE || cur_tok(cs) == TOK_RBRACE) {
