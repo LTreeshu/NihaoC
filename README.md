@@ -132,3 +132,38 @@ cooking {
     static_assert(COMPILE_TIME_VALUE == 205, "编译期计算错误")
 }
 ```
+
+## 构建与运行 | Build & Run
+
+编译器源码位于 `ncc/`，构建统一使用 [xmake](https://xmake.io)（Makefile 已标为 legacy）：
+
+```bash
+cd ncc
+xmake                          # 构建 ncc.exe（需预先安装 tcc，见下方 TCC 说明）
+xmake test                     # 默认 c 后端回归测试
+xmake test --all               # 四后端全矩阵（c / native / ir-c / ir-native）
+xmake test -b ir-c             # 指定后端
+```
+
+### 后端 | Backends
+
+| 后端 | 说明 |
+| ---- | ---- |
+| `c`（默认） | 生成 C 文本，调用外部 tcc 编译为可执行文件 |
+| `native`（方案 A） | libtcc 进程内编译生成的 C 为机器码（无需外部 tcc） |
+| `ir-c` / `ir-native`（方案 B） | IR 中间层双后端：→C 文本 / →x86-64 汇编（Windows x64 ABI） |
+
+TCC 安装目录通过 `NIHAO_TCC_DIR` 环境变量指定（如 `/d/devtools/tcc`，MSYS 路径自动归一化），否则从 PATH 探测。
+
+### `-run` 内存执行（Linux only）
+
+`-run` 将程序编译到内存并直接执行，**仅 Linux 可用**：
+
+```bash
+nihao build src/main.nc -run -- arg1 arg2    # Linux
+```
+
+- 原因：libtcc 0.9.27 的 Windows 版 `TCC_OUTPUT_MEMORY` 存在缺陷（relocate 失败，错误码 251）
+- Windows 下使用 `-run` 会得到明确报错；请改用 `-backend=native -o out.exe` 输出文件模式
+- 能力检测由 `native_memory_available()` 完成（Windows 返回 0，其余平台返回 1）
+- 程序参数在 `-run` 之后直接透传给 `main(argc, argv)`（PA-6）
