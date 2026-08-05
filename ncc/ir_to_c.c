@@ -73,6 +73,18 @@ int irgen_c_emit(IrProg *p, const char *outfile)
     }
     if (p->str_count) cb_put(&b, "\n");
 
+    /* 用户函数前置原型：消除"调用先于定义"导致的隐式声明
+     * （Windows tcc 对隐式声明的未知符号生成 __imp_ 外部引用而链接失败） */
+    for (int fi = 0; fi < p->fn_count; fi++) {
+        IrFn *f = &p->fns[fi];
+        cb_put(&b, "int %s(", f->name);
+        for (int i = 0; i < f->param_count; i++) {
+            cb_put(&b, "%sint arg%d", i ? ", " : "", i);
+        }
+        cb_put(&b, ");\n");
+    }
+    if (p->fn_count) cb_put(&b, "\n");
+
     for (int fi = 0; fi < p->fn_count; fi++) {
         IrFn *f = &p->fns[fi];
         cb_put(&b, "int %s(", f->name);

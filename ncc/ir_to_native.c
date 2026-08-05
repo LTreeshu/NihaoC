@@ -84,10 +84,12 @@ int irgen_native_emit(IrProg *p, const char *outfile)
 
     for (int fi = 0; fi < p->fn_count; fi++) {
         IrFn *f = &p->fns[fi];
-        /* 帧大小：保证 rsp 在 call 点 16 字节对齐。
-         * 入口 rsp≡0 -> push rbp 后 ≡8 -> sub frame 后需 ≡8 (mod 16)。 */
+        /* 帧大小：向上取整到 16 的倍数，保证 call 点 rsp 16 字节对齐。
+         * Windows x64：函数入口 rsp≡8(返回地址已压栈) -> push rbp 后 ≡0
+         * -> sub frame(frame≡0 mod 16) 后 ≡0 -> call 前 sub $32(影子空间)
+         * -> 仍 ≡0 mod 16，符合 ABI（call 压栈返回地址后 callee 入口 ≡8）。 */
         int frame = 8 * (f->vreg_count + 1);
-        if (frame % 16 == 0) frame += 8;
+        if (frame % 16 != 0) frame += 16 - (frame % 16);
         if (f->is_main) {
             nb_put(&b, ".globl main\n");
         }
@@ -217,13 +219,27 @@ int irgen_native_emit(IrProg *p, const char *outfile)
                         }
                     }
                     nb_put(&b, "  subq $32, %%rsp\n");   /* shadow space */
+                    /* 区分用户函数（程序内定义）与外部导入符号：
+                     *  - 用户函数：直接相对调用 call sym
+                     *  - 外部符号（puts 等 DLL 导入）：Windows 必须经
+                     *    __imp_ 间接调用（tcc 对 call 未知符号会跳 IAT 数据区导致段错误） */
+                    int is_user_fn = 0;
+                    for (int k = 0; k < p->fn_count; k++) {
+                        if (p->fns[k].name && in->sym &&
+                            strcmp(p->fns[k].name, in->sym) == 0) {
+                            is_user_fn = 1;
+                            break;
+                        }
+                    }
+                    if (is_user_fn) {
+                        nb_put(&b, "  call %s\n", in->sym);
+                    } else {
 #ifdef _WIN32
-                    /* tcc 汇编器对 call sym 会直接跳 IAT 槽(数据区)；
-                     * 外部导入函数须经 __imp_ 间接调用 */
-                    nb_put(&b, "  call *__imp_%s(%%rip)\n", in->sym);
+                        nb_put(&b, "  call *__imp_%s(%%rip)\n", in->sym);
 #else
-                    nb_put(&b, "  call %s\n", in->sym);
+                        nb_put(&b, "  call %s\n", in->sym);
 #endif
+                    }
                     nb_put(&b, "  addq $%d, %%rsp\n", 32 + (got > 4 ? 8 * (got - 4) : 0));
                     nb_put(&b, "  movq %%rax, ");
                     slot(&b, in->dst);
@@ -243,6 +259,16 @@ int irgen_native_emit(IrProg *p, const char *outfile)
                 default:
                     break;
             }
+        }
+        /* 函数尾：源文件没有显式 return（如 main 隐式返回）时，
+         * IR 中无 IR_RET，必须补 leave; ret，否则执行流落入下一段代码 */
+        int last_real_op = -1;
+        for (int i = 0; i < f->ins_count; i++) {
+            if (f->ins[i].op != IR_LABEL && f->ins[i].op != IR_END)
+                last_real_op = f->ins[i].op;
+        }
+        if (last_real_op != IR_RET) {
+            nb_put(&b, "  xorl %%eax, %%eax\n  leave\n  ret\n");
         }
         nb_put(&b, "\n");
     }
