@@ -1,0 +1,164 @@
+%YAML 1.2
+---
+# NihaoC syntax highlighting for Sublime Text
+# Put this file in:
+#   <Packages>/NihaoC/nihaoc.sublime-syntax
+# or with the rest of the NihaoC tooling ecosystem under editors/sublime/.
+name: NihaoC
+file_extensions:
+  - nc
+  - nihao
+  - nh
+scope: source.nihao
+contexts:
+  main:
+    - include: comments
+    - include: attributes
+    - include: module-header
+    - include: visibility-enums
+    - include: keywords
+    - include: storage-modifiers
+    - include: types
+    - include: constants
+    - include: function-definition
+    - include: strings
+    - include: chars
+    - include: numbers
+    - include: operators
+    - include: punctuation
+    - include: identifiers
+
+  # --- comments -----------------------------------------------------
+  comments:
+    - match: /\*
+      scope: punctuation.definition.comment.begin.nihao
+      push:
+        - meta_scope: comment.block.nihao
+        - match: \*/
+          scope: punctuation.definition.comment.end.nihao
+          pop: true
+    - match: (//).*$\n?
+      captures:
+        1: punctuation.definition.comment.nihao
+      scope: comment.line.double-slash.nihao
+
+  # --- [[inline]] style attributes ---------------------------------
+  # Matches a complete [[...]] group only; never swallows the
+  # function/declaration it annotates on the same line.
+  attributes:
+    - match: "(\\[\\[)([^\\]]*)(\\]\\])"
+      captures:
+        1: punctuation.definition.annotation.begin.nihao
+        2: variable.annotation.nihao
+        3: punctuation.definition.annotation.end.nihao
+
+  # --- module / use / link / alias header lines --------------------
+  module-header:
+    - match: \b(module|use|link)\b
+      scope: keyword.other.module.nihao
+    - match: \blinkas\b
+      scope: keyword.other.module.nihao
+    - match: \bas\b
+      scope: keyword.other.module.nihao
+
+  # --- visibility enum values: _undef _const _flow _static _var -----
+  visibility-enums:
+    - match: \b_(undef|const|flow|static|var)\b
+      scope: constant.language.visibility.nihao
+
+  # --- control flow / compile-time keywords ------------------------
+  keywords:
+    - match: \b(if|else|switch|case|default|for|do|while|break|continue|goto|return)\b
+      scope: keyword.control.nihao
+    - match: \b(cooking|align|is|func)\b
+      scope: keyword.control.nihao
+    - match: \b(sizeof|typeof|alignof|offsetof|holdof|visof|structof|unionof|bitoffsetof)\b
+      scope: keyword.other.introspection.nihao
+    - match: \b(alias|true|false)\b
+      scope: keyword.other.nihao
+
+  # --- storage duration / lifetime qualifiers ----------------------
+  storage-modifiers:
+    - match: \b(const|flow|static|var|register|restrict|volatile)\b
+      scope: storage.modifier.nihao
+
+  # --- type names ---------------------------------------------------
+  types:
+    - match: \b(void|i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|fx32|fx64|char|string|short|int|long|float|double|bool)\b
+      scope: storage.type.primitive.nihao
+    - match: \b(struct|union|enum)\b
+      scope: storage.type.nihao
+
+  # --- boolean literals ---------------------------------------------
+  constants:
+    - match: \b(true|false)\b
+      scope: constant.language.boolean.nihao
+
+  # --- func name(params) ret { ... } --------------------------------
+  function-definition:
+    - match: \bfunc\b\s+([A-Za-z_][A-Za-z0-9_]*)
+      scope: meta.function.nihao
+      captures:
+        1: entity.name.function.nihao
+      push:
+        - meta_scope: meta.function.nihao
+        - match: (?=\{|;)
+          pop: true
+        - include: main
+    - match: (?=[A-Za-z_][A-Za-z0-9_]*\s*\()
+      push:
+        - meta_scope: meta.function-call.nihao
+        - match: \)
+          scope: punctuation.definition.arguments.end.nihao
+          pop: true
+        - match: ([A-Za-z_][A-Za-z0-9_]*)(\s*)(\()
+          captures:
+            1: entity.name.function.nihao
+            2: meta.whitespace
+            3: punctuation.definition.arguments.begin.nihao
+
+  # --- strings -------------------------------------------------------
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.nihao
+      push:
+        - meta_scope: string.quoted.double.nihao
+        - match: \\.
+          scope: constant.character.escape.nihao
+        - match: '"'
+          scope: punctuation.definition.string.end.nihao
+          pop: true
+
+  # --- char literals -------------------------------------------------
+  chars:
+    - match: "'"
+      scope: punctuation.definition.string.begin.nihao
+      push:
+        - meta_scope: string.quoted.single.nihao
+        - match: \\.
+          scope: constant.character.escape.nihao
+        - match: "'"
+          scope: punctuation.definition.string.end.nihao
+          pop: true
+
+  # --- numbers (with optional type suffix) ---------------------------
+  numbers:
+    - match: \b(0[xX][0-9a-fA-F]+|0[bB][01]+|[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?)(u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|fx32|fx64)?\b
+      scope: constant.numeric.nihao
+
+  # --- operators (incl. NihaoC-specific) -----------------------------
+  operators:
+    - match: "\\.\\(|\\.\\(\\)|\\?\\.|\\.\\.|->|\\?\\=|\\?\\:"
+      scope: keyword.operator.dereference.nihao
+    - match: "\\+\\+|--|==|!=|<=|>=|&&|\\|\\||<<=|>>=|<<|>>|\\+=|-=|\\*=|\\/=|%=|&=|\\|=|\\^=|\\+|-|\\*|/|%|!|&|\\||\\^|~|=|<|>|\\?"
+      scope: keyword.operator.nihao
+
+  # --- punctuation ---------------------------------------------------
+  punctuation:
+    - match: "[\\\\(\\\\)\\[\\]\\{\\},;:#]"
+      scope: punctuation.section.nihao
+
+  # --- identifiers ---------------------------------------------------
+  identifiers:
+    - match: \b([A-Za-z_][A-Za-z0-9_]*)\b
+      scope: variable.other.nihao
