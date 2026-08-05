@@ -60,6 +60,24 @@ static int ir_expr(CompilerState *cs);
 static int ir_primary(CompilerState *cs)
 {
     TokenType t = cur_tok(cs);
+    if (t == TOK_MINUS) {
+        /* 一元负号 -x -> IR_NEG */
+        next_tok(cs);
+        int a = ir_primary(cs);
+        int vr = ir_new_vreg(F);
+        ir_emit(F, IR_NEG, vr, a, -1, 0);
+        return vr;
+    }
+    if (t == TOK_LOGICAL_NOT) {
+        /* 逻辑非 !x -> (x == 0) */
+        next_tok(cs);
+        int a = ir_primary(cs);
+        int z = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, z, -1, -1, 0);
+        int vr = ir_new_vreg(F);
+        ir_emit(F, IR_CMP_EQ, vr, a, z, 0);
+        return vr;
+    }
     if (t == TOK_STAR) {
         /* 一元解引用 *p -> LOAD */
         next_tok(cs);
@@ -296,6 +314,48 @@ static void ir_stmt(CompilerState *cs)
             int vi = var_find(name);
             if (vi < 0) vi = var_declare(name);
             int vr = ir_expr(cs);
+            ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
+            skip_newlines(cs);
+        } else if (nt == TOK_PLUS_ASSIGN || nt == TOK_MINUS_ASSIGN ||
+                   nt == TOK_STAR_ASSIGN || nt == TOK_SLASH_ASSIGN ||
+                   nt == TOK_PERCENT_ASSIGN) {
+            /* 复合赋值 x op= expr */
+            IrOp op;
+            switch (nt) {
+                case TOK_PLUS_ASSIGN:    op = IR_ADD; break;
+                case TOK_MINUS_ASSIGN:   op = IR_SUB; break;
+                case TOK_STAR_ASSIGN:    op = IR_MUL; break;
+                case TOK_SLASH_ASSIGN:   op = IR_DIV; break;
+                default:                 op = IR_MOD; break;
+            }
+            next_tok(cs);           /* name */
+            next_tok(cs);           /* op= */
+            int vi = var_find(name);
+            if (vi < 0) {
+                nihao_error(cs, "ir: undeclared variable '%s'", name);
+                skip_newlines(cs);
+                return;
+            }
+            int b = ir_expr(cs);
+            int vr = ir_new_vreg(F);
+            ir_emit(F, op, vr, vt[vi], b, 0);
+            ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
+            skip_newlines(cs);
+        } else if (nt == TOK_INCREMENT || nt == TOK_DECREMENT) {
+            /* 后缀自增/自减 x++ / x-- */
+            IrOp op = (nt == TOK_INCREMENT) ? IR_ADD : IR_SUB;
+            next_tok(cs);           /* name */
+            next_tok(cs);           /* ++ / -- */
+            int vi = var_find(name);
+            if (vi < 0) {
+                nihao_error(cs, "ir: undeclared variable '%s'", name);
+                skip_newlines(cs);
+                return;
+            }
+            int one = ir_new_vreg(F);
+            ir_emit(F, IR_CONST, one, -1, -1, 1);
+            int vr = ir_new_vreg(F);
+            ir_emit(F, op, vr, vt[vi], one, 0);
             ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             skip_newlines(cs);
         } else if (is_type_token(nt)) {
