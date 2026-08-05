@@ -106,7 +106,7 @@ for _, src in ipairs(os.files("tests/pos/*.nc")) do
         add_deps("ncc")
         -- IR 专属用例（子集语法，如 ir_demo/ir_ptr）仅在 IR 后端下编译，
         -- 默认后端无法构建，设为非默认 target（xmake build 不会自动构建）
-        if name == "ir_ptr" or name == "ir_demo" then
+        if name == "ir_ptr" or name == "ir_demo" or name == "ir_prefix" then
             set_default(false)
         end
     target_end()
@@ -116,7 +116,7 @@ end
 -- IR_SUBSET: IR 双后端（ir-c/ir-native）可编译运行的通用用例（全量后端也可跑）
 -- IR_ONLY  : IR 专属用例——子集语法（如无类型指针声明），全量 parser 无法编译
 local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true}
-local IR_ONLY = {ir_ptr = true}
+local IR_ONLY = {ir_ptr = true, ir_prefix = true}
 
 task("test")
     on_run(function ()

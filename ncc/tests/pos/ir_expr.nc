@@ -35,5 +35,12 @@ func main() {
     } else {
         puts("dec bad")
     }
+    n i32 = 0
+    w i32 = ~n
+    if w == -1 {
+        puts("bitnot ok")
+    } else {
+        puts("bitnot bad")
+    }
     return
 }

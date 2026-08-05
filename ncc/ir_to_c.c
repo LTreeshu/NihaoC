@@ -123,6 +123,9 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                 case IR_NEG:
                     cb_put(&b, "    t%d = -t%d;\n", in->dst, in->a);
                     break;
+                case IR_NOT:
+                    cb_put(&b, "    t%d = ~t%d;\n", in->dst, in->a);
+                    break;
                 case IR_CMP_EQ: case IR_CMP_NE: case IR_CMP_LT:
                 case IR_CMP_LE: case IR_CMP_GT: case IR_CMP_GE:
                     cb_put(&b, "    t%d = (t%d %s t%d);\n",

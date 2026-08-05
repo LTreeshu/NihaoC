@@ -17,6 +17,7 @@ typedef enum {
     IR_MOV,         /* dst = a                        */
     IR_ADD, IR_SUB, IR_MUL, IR_DIV, IR_MOD,
     IR_NEG,         /* dst = -a                       */
+    IR_NOT,         /* dst = ~a（按位取反）            */
     IR_CMP_EQ, IR_CMP_NE, IR_CMP_LT, IR_CMP_LE,
     IR_CMP_GT, IR_CMP_GE,
     IR_JMP,         /* goto label                     */

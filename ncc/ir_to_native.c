@@ -160,6 +160,13 @@ int irgen_native_emit(IrProg *p, const char *outfile)
                     slot(&b, in->dst);
                     nb_put(&b, "\n");
                     break;
+                case IR_NOT:
+                    nb_put(&b, "  movq ");
+                    slot(&b, in->a);
+                    nb_put(&b, ", %%rax\n  notq %%rax\n  movq %%rax, ");
+                    slot(&b, in->dst);
+                    nb_put(&b, "\n");
+                    break;
                 case IR_CMP_EQ: case IR_CMP_NE: case IR_CMP_LT:
                 case IR_CMP_LE: case IR_CMP_GT: case IR_CMP_GE:
                     nb_put(&b, "  movq ");

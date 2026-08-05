@@ -78,6 +78,14 @@ static int ir_primary(CompilerState *cs)
         ir_emit(F, IR_CMP_EQ, vr, a, z, 0);
         return vr;
     }
+    if (t == TOK_BITWISE_NOT) {
+        /* 位非 ~x -> IR_NOT */
+        next_tok(cs);
+        int a = ir_primary(cs);
+        int vr = ir_new_vreg(F);
+        ir_emit(F, IR_NOT, vr, a, -1, 0);
+        return vr;
+    }
     if (t == TOK_STAR) {
         /* 一元解引用 *p -> LOAD */
         next_tok(cs);
@@ -372,6 +380,29 @@ static void ir_stmt(CompilerState *cs)
             ir_expr(cs);
             skip_newlines(cs);
         }
+    } else if (t == TOK_INCREMENT || t == TOK_DECREMENT) {
+        /* 前缀 ++x / --x */
+        IrOp op = (t == TOK_INCREMENT) ? IR_ADD : IR_SUB;
+        next_tok(cs);
+        if (cur_tok(cs) != TOK_IDENTIFIER) {
+            nihao_error(cs, "ir: '++'/'--' requires a variable");
+            skip_newlines(cs);
+            return;
+        }
+        const char *name = cs->parser.lex->tok_str;
+        int vi = var_find(name);
+        if (vi < 0) {
+            nihao_error(cs, "ir: undeclared variable '%s'", name);
+            skip_newlines(cs);
+            return;
+        }
+        next_tok(cs);
+        int one = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, one, -1, -1, 1);
+        int vr = ir_new_vreg(F);
+        ir_emit(F, op, vr, vt[vi], one, 0);
+        ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
+        skip_newlines(cs);
     } else if (t == TOK_STAR) {
         /* *p = expr（STORE）或 *p 表达式（LOAD） */
         next_tok(cs);
