@@ -8,8 +8,16 @@ Layout:
   tests/err/<name>.expect     optional error-message substring that must appear
 
 Usage:
-  python tests/run_tests.py [filter]
+  python tests/run_tests.py [filter] [--backend c|native|ir-c|ir-native] [--all]
+
+Examples:
+  python tests/run_tests.py                 # default backend: c
+  python tests/run_tests.py hello           # filter by substring
+  python tests/run_tests.py --backend native
+  python tests/run_tests.py --backend ir-native
+  python tests/run_tests.py --all           # full 4-backend matrix
 """
+import argparse
 import os
 import subprocess
 import sys
@@ -21,6 +29,13 @@ ERR = os.path.join(ROOT, "tests", "err")
 TMP = os.path.join(ROOT, "build", "testrun")
 os.makedirs(TMP, exist_ok=True)
 
+BACKENDS = ["c", "native", "ir-c", "ir-native"]
+
+# IR 中间层（方案 B）目前只支持最小子集语法。
+# pos 中可在 IR 双后端（ir-c/ir-native）下编译运行的用例名白名单：
+# 每扩展一个语法点，就把对应的回归用例加入此集合，并同步移除 skip。
+IR_SUBSET = {"hello", "ir_demo"}
+
 
 def norm(lines):
     return [ln.rstrip("\r\n") for ln in lines]
@@ -31,21 +46,28 @@ def has_main(src):
         return "func main" in f.read() or "main(" in f.read()
 
 
-def run_pos(fname):
+def backend_args(backend):
+    return ["-backend=" + backend] if backend != "c" else []
+
+
+def run_pos(fname, backend):
     stem = fname[:-3]
     src = os.path.join(POS, fname)
-    exe = os.path.join(TMP, stem + (".exe" if os.name == "nt" else ""))
+    exe = os.path.join(TMP, "%s_%s%s" % (stem, backend,
+                                         ".exe" if os.name == "nt" else ""))
     expect_file = os.path.join(POS, stem + ".expect")
+    extra = backend_args(backend)
 
     # Library modules (no main): compile-only check, no link/run.
     if not has_main(src):
         r = subprocess.run([NCC, "build", "-c", src, "-o",
-                            os.path.join(TMP, stem)], capture_output=True, text=True)
+                            os.path.join(TMP, stem)] + extra,
+                           capture_output=True, text=True)
         if r.returncode != 0:
             return "FAIL", "compile error:\n" + r.stderr.strip() + r.stdout.strip()
         return "PASS", ""
 
-    r = subprocess.run([NCC, "build", src, "-o", exe],
+    r = subprocess.run([NCC, "build", src, "-o", exe] + extra,
                        capture_output=True, text=True)
     if r.returncode != 0:
         return "FAIL", "compile error:\n" + r.stderr.strip() + r.stdout.strip()
@@ -86,10 +108,10 @@ def run_err(fname):
     return "PASS", ""
 
 
-def main():
-    filt = sys.argv[1] if len(sys.argv) > 1 else ""
-    passed = failed = 0
+def run_backend(backend, filt):
+    passed = failed = skipped = 0
     failures = []
+    is_ir = backend in ("ir-c", "ir-native")
 
     pos_cases = sorted(f for f in os.listdir(POS) if f.endswith(".nc"))
     err_cases = sorted(f for f in os.listdir(ERR) if f.endswith(".nc"))
@@ -97,7 +119,11 @@ def main():
     for fname in pos_cases:
         if filt and filt not in fname:
             continue
-        status, why = run_pos(fname)
+        if is_ir and fname[:-3] not in IR_SUBSET:
+            skipped += 1
+            print("  [SKIP] pos/%s (IR 子集未覆盖)" % fname)
+            continue
+        status, why = run_pos(fname, backend)
         print("  [%s] pos/%s" % (status, fname))
         if status == "PASS":
             passed += 1
@@ -108,6 +134,11 @@ def main():
     for fname in err_cases:
         if filt and filt not in fname:
             continue
+        if is_ir:
+            # IR 前端暂未实现 M2 静态检查，错误用例对其无意义
+            skipped += 1
+            print("  [SKIP] err/%s (IR 前端暂无静态检查)" % fname)
+            continue
         status, why = run_err(fname)
         print("  [%s] err/%s" % (status, fname))
         if status == "PASS":
@@ -117,12 +148,34 @@ def main():
             failures.append(("err/" + fname, why))
 
     print()
-    print("== %d passed, %d failed ==" % (passed, failed))
+    print("== [%s] %d passed, %d failed, %d skipped =="
+          % (backend, passed, failed, skipped))
     for name, why in failures:
         print("-- %s --" % name)
         print(why)
         print()
     return 1 if failed else 0
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="NihaoC regression test runner (multi-backend)")
+    parser.add_argument("filter", nargs="?", default="",
+                        help="substring filter on test file names")
+    parser.add_argument("--backend", default="c", choices=BACKENDS,
+                        help="compiler backend to test (default: c)")
+    parser.add_argument("--all", action="store_true",
+                        help="run the full %d-backend matrix" % len(BACKENDS))
+    args = parser.parse_args()
+
+    backends = BACKENDS if args.all else [args.backend]
+    rc = 0
+    for be in backends:
+        print(">>> backend: %s" % be)
+        if run_backend(be, args.filter) != 0:
+            rc = 1
+        print()
+    return rc
 
 
 if __name__ == "__main__":

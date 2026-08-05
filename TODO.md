@@ -89,6 +89,72 @@ ncc/
 
 ---
 
+## 专项一：方案 A — libtcc native 后端（-backend=native，native.c）
+
+### 已完成
+- libtcc 封装（tcc_new → compile_string → output_file / run）；目录探测（NIHAO_TCC_DIR > PATH）
+- `-backend=native` 可执行文件模式实测通过；`-run` Linux 路径已实现、Windows 明确报错
+- xmake 直链 libtcc.dll / -ltcc；`xmake test -b native` 支持
+
+### 待办
+- [ ] **PA-1 `-run` Windows 不可用**：libtcc 0.9.27 Windows 版 TCC_OUTPUT_MEMORY 损坏（relocate 251）。三选一：修复/升级 libtcc、Linux 实测补验证、正式文档化 Linux-only
+- [x] **PA-2 native 无自动化回归（已于 2026-08-05 完成，run_tests.py 参数化）**：run_tests.py 支持 --backend c|native|ir-c|ir-native 与 --all 全矩阵，native 13/13 通过
+- [ ] **PA-3 `-g` 未接入**：debug_mode 已收集但 native_state 只传 -Wall
+- [ ] **PA-4 Makefile 无法构建 native**：缺 libtcc.h include 路径（与总 P1-5 构建统一相关）
+- [ ] **PA-5 双测试脚本不一致**：run_tests.py 与 xmake task 各自维护
+- [ ] **PA-6 `-run` argv 硬编码** `{"nihao-run"}`，无法透传程序参数
+- [ ] **PA-7 link 库声明在 native 失效**：未配置 tcc_add_library（仅 Windows memory 模式加了 msvcrt）
+- [ ] **PA-8 错误信息无 nihao 层包装**：可用 tcc_set_error_func 捕获整合
+- [ ] **PA-9 Linux 路径未实测**：-run、libtcc.so、SysV 调用约定无验证环境
+- [ ] **PA-10 native_backend_available 恒 1**：语义不精确（应区分 EXE 与 memory 能力）
+- [ ] **PA-11 tcc 目录探测重复**：native.c 与 xmake.lua 各一套，易漂移
+
+---
+
+## 专项二：方案 B — IR 中间层（ir.h/irparse.c/ir_to_c.c/ir_to_native.c）
+
+### 已完成
+- 28 条三地址码指令集定义；irparse 最小子集前端（func/局部变量/if/while/return/算术比较/puts）
+- ir_to_c（→C）、ir_to_native（→x86-64 AT&T，Windows x64 ABI 简化版）双后端
+- 端到端跑通：用户函数直接 call、栈帧 16 字节对齐、隐式返回兜底、前置原型（c3c91dc）
+- hello.nc 四后端输出一致；13/13 回归通过
+
+### 前端 irparse.c 待办（语法覆盖）
+- [ ] **PB-1 类型系统**：IrFn 无类型表，参数/返回/局部全固定 int/64 位；需为 IR 增加类型表（i8~u64/f32/f64/char[]/指针）
+- [ ] **PB-2 一元与复合运算**：-x / !x / ~x / ++ / -- / += 等（IR_NEG 后端已实现但前端不发射；IR_JNZ 同理）
+- [ ] **PB-3 数组**：声明、下标、切片 [a..b]、动态数组 [...] / [6...]
+- [ ] **PB-4 struct/union/enum**：匿名嵌套、位域 u8:1、.成员访问
+- [ ] **PB-5 存储期属性**：flow/static/const/var 前缀 + visof
+- [ ] **PB-6 内置函数**：malloc / sizeof / typeof / offsetof / structof 等
+- [ ] **PB-7 控制流补齐**：for / do / break / continue / is 模式匹配 / switch
+- [ ] **PB-8 多返回值、函数指针、多变量声明** var {a=0,b=1} i8
+- [ ] **PB-9 编译期**：cooking / align / static_assert
+- [ ] **PB-10 use 跨文件模块**（当前直接跳过）
+- [ ] **PB-11 字符串池去重**（当前每字面量独立 __str_N）
+
+### IR 指令集/数据模型待办
+- [ ] **PB-12 🔴 IR_LOAD/IR_STORE 后端未实现**：指令已定义但 ir_to_c / ir_to_native 均无 case，发射即被静默丢弃
+- [ ] **PB-13 浮点指令**：f32/f64 运算、比较、转换、调用 ABI（xmm）
+- [ ] **PB-14 类型化内存访问**：按类型宽度 load/store（当前假定 8 字节）
+
+### 后端待办
+- [ ] **PB-15 native 寄存器分配**：当前 vreg 全映射 rbp 栈槽
+- [ ] **PB-16 调用约定完整化**：SysV vs Windows x64、浮点参数、结构体传参/返回（sret）
+- [ ] **PB-17 IR_CALL 参数收集 bug**：收集函数内全部历史 PARAM 取最后 n 个，嵌套调用 puts(f(1)) 错位
+- [ ] **PB-18 ir_to_c 类型化输出**：消除 (int)(long) 与 pointer-from-integer 警告
+- [ ] **PB-19 -run 内存执行**：Linux only，需文档化（与 PA-1 关联）
+- [ ] **PB-20 arch/ 多架构**：arm/loongarch/riscv（空目录）
+
+### 测试与集成待办
+- [x] **PB-21 IR 后端回归基线（已于 2026-08-05 完成）**：run_tests.py 加 --backend 全矩阵；IR 双后端用 IR_SUBSET 白名单（当前 hello/ir_demo），其余用例标 SKIP，语法扩展时同步扩充白名单
+- [ ] **PB-22 IR 专用用例扩充**：浮点、数组、复杂控制流、嵌套调用
+- [ ] **PB-23 CLI**：-backend 帮助文档化、debug 子命令支持 IR
+
+### 架构决策
+- [ ] **PB-24 统一管线**：irparse 全量迁移完成前决策最终走向（parser→IR 单管线 vs 双管线并存）
+
+---
+
 ## 三、推荐下一步（建议执行顺序）
 
 1. **扩 IR 前端语法**（P0）：以 tests/pos 现有用例为验收，逐个迁移到 irparse。
