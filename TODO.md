@@ -69,8 +69,8 @@ ncc/
 
 - [ ] **构建系统统一**：Makefile 与 xmake.lua 双轨并存，需明确主用一套（建议 xmake），另一套标记 legacy；`make test` 内的测试用例仍是旧语法，需更新。
 - [ ] **回归测试扩容**：tests/pos（9）+ tests/err（4）覆盖面不足。补充：struct/数组/位域/别名/cooking 编译期执行/visof/多返回值/跨文件模块/flow 自动释放等用例。
-- [ ] **多后端参数化测试**：run_tests.py 增加按 `-backend=c|native|ir-c|ir-native` 全矩阵运行同一用例，防止双管线行为漂移。
-- [ ] **IR 管线回归测试**：为 `ir-c` / `ir-native` 建立与默认后端等价的测试基线。
+- [x] **多后端参数化测试（已于 2026-08-05 完成）**：`xmake test --all` 四后端全矩阵（c/native/ir-c/ir-native），双向白名单 IR_SUBSET/IR_ONLY，PASS/FAIL/SKIP 统计；原 python run_tests.py 已废弃删除
+- [x] **IR 管线回归测试（已于 2026-08-05 完成）**：`xmake test -b ir-c / ir-native` 对 IR_SUBSET 白名单用例建立等价基线（当前 3 用例，随语法扩展扩充）
 
 ### P2 — 架构与扩展
 
@@ -98,10 +98,11 @@ ncc/
 
 ### 待办
 - [ ] **PA-1 `-run` Windows 不可用**：libtcc 0.9.27 Windows 版 TCC_OUTPUT_MEMORY 损坏（relocate 251）。三选一：修复/升级 libtcc、Linux 实测补验证、正式文档化 Linux-only
-- [x] **PA-2 native 无自动化回归（已于 2026-08-05 完成，run_tests.py 参数化）**：run_tests.py 支持 --backend c|native|ir-c|ir-native 与 --all 全矩阵，native 13/13 通过
+- [x] **PA-2 native 无自动化回归（已于 2026-08-05 完成）**：`xmake test -b native` / `--all` 全矩阵覆盖，native 13/13 通过（测试体系已统一为 xmake，python run_tests.py 已移除）
 - [ ] **PA-3 `-g` 未接入**：debug_mode 已收集但 native_state 只传 -Wall
 - [ ] **PA-4 Makefile 无法构建 native**：缺 libtcc.h include 路径（与总 P1-5 构建统一相关）
-- [ ] **PA-5 双测试脚本不一致**：run_tests.py 与 xmake task 各自维护
+- [x] **PA-5 双测试脚本不一致（已于 2026-08-05 解决）**：测试统一为 `xmake test [-b ...] [--all] [-f ...]`，run_tests.py 删除
+- [x] **PA-11 MSYS 路径归一化（已修复）**：native.c 的 tcc_install_dir 对 `/d/...` 风格 NIHAO_TCC_DIR 归一化为 `D:/...`（bash 传参场景）
 - [ ] **PA-6 `-run` argv 硬编码** `{"nihao-run"}`，无法透传程序参数
 - [ ] **PA-7 link 库声明在 native 失效**：未配置 tcc_add_library（仅 Windows memory 模式加了 msvcrt）
 - [ ] **PA-8 错误信息无 nihao 层包装**：可用 tcc_set_error_func 捕获整合

@@ -11,6 +11,22 @@
 #include "ncc.h"
 #include <libtcc.h>
 
+/* MSYS/Git-Bash 风格路径（/d/foo）转 Windows 盘符路径（D:/foo）。
+ * Windows 程序无法解析 /d/ 前缀，若 NIHAO_TCC_DIR 由 bash 传入需归一化。 */
+static void normalize_msys_path(char *out, size_t outsz, const char *in)
+{
+    if (in && in[0] == '/' && in[1] != '\0' && in[2] == '/' && in[1] != '/') {
+        if (outsz > 4) {
+            out[0] = (char)toupper((unsigned char)in[1]);
+            out[1] = ':';
+            out[2] = '/';
+            snprintf(out + 3, outsz - 3, "%s", in + 3);
+            return;
+        }
+    }
+    snprintf(out, outsz, "%s", in ? in : "");
+}
+
 static const char *tcc_install_dir(void)
 {
     static char dir[512];
@@ -19,7 +35,7 @@ static const char *tcc_install_dir(void)
         resolved = 1;
         const char *env = getenv("NIHAO_TCC_DIR");
         if (env && env[0]) {
-            snprintf(dir, sizeof(dir), "%s", env);
+            normalize_msys_path(dir, sizeof(dir), env);
             return dir;
         }
         /* probe PATH for tcc.exe / tcc */
@@ -38,14 +54,14 @@ static const char *tcc_install_dir(void)
                     FILE *f = fopen(probe, "rb");
                     if (f) {
                         fclose(f);
-                        snprintf(dir, sizeof(dir), "%s", buf);
+                        normalize_msys_path(dir, sizeof(dir), buf);
                         return dir;
                     }
                     snprintf(probe, sizeof(probe), "%s/tcc", buf);
                     f = fopen(probe, "rb");
                     if (f) {
                         fclose(f);
-                        snprintf(dir, sizeof(dir), "%s", buf);
+                        normalize_msys_path(dir, sizeof(dir), buf);
                         return dir;
                     }
                 }
