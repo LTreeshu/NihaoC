@@ -48,6 +48,7 @@
     KeywordDef("i8",       2, TOK_I8)             /**< Type `i8`, 8-bit signed integer  */   \
     KeywordDef("i16",      3, TOK_I16)            /**< Type `i16`, 16-bit signed integer  */   \
     KeywordDef("i32",      3, TOK_I32)            /**< Type `i32`, 32-bit signed integer  */   \
+    KeywordDef("i64",      3, TOK_I64)            /**< Type `i64`, 64-bit signed integer  */   \
     KeywordDef("u8",       2, TOK_U8)             /**< Type `u8`, 8-bit unsigned integer  */   \
     KeywordDef("u16",      3, TOK_U16)            /**< Type `u16`, 16-bit unsigned integer  */   \
     KeywordDef("u32",      3, TOK_U32)            /**< Type `u32`, 32-bit unsigned integer  */   \
@@ -121,6 +122,21 @@
     KeywordDef("]",        1, TOK_RBRACKET)           /**< `]` right square bracket  */   \
     KeywordDef("{",        1, TOK_LBRACE)             /**< `{` left brace, used for code blocks and initializer lists  */   \
     KeywordDef("}",        1, TOK_RBRACE)             /**< `}` right brace  */   \
+    /* NihaoC visibility enum values */ \
+    KeywordDef("_undef",   6, TOK__UNDEF)          /**< visibility enum: undefined */  \
+    KeywordDef("_const",   6, TOK__CONST)          /**< visibility enum: const */      \
+    KeywordDef("_flow",    5, TOK__FLOW)           /**< visibility enum: flow */       \
+    KeywordDef("_static",  7, TOK__STATIC)         /**< visibility enum: static */     \
+    KeywordDef("_var",     4, TOK__VAR)            /**< visibility enum: var */        \
+    /* NihaoC function/pattern/link keywords */ \
+    KeywordDef("func",     4, TOK_FUNC)            /**< no-return function definition */ \
+    KeywordDef("is",       2, TOK_IS)              /**< pattern match in while/loop */ \
+    KeywordDef("linkas",   6, TOK_LINKAS)          /**< static library export name */  \
+    KeywordDef("structof", 8, TOK_STRUCTOF)        /**< member owner check */          \
+    KeywordDef("unionof",  7, TOK_UNIONOF)         /**< member owner check */          \
+    KeywordDef("bitoffsetof", 11, TOK_BITOFFSETOF) /**< bitfield offset */             \
+    KeywordDef("as",       2, TOK_AS)              /**< link alias separator */        \
+    KeywordDef("multireturn", 11, TOK_MULTIRETURN) /**< multireturn struct */          \
 
 
 #define KeywordDef(str,len,token) token,
@@ -131,9 +147,6 @@ typedef enum {
 
     /* --- Identifiers --- */
     TOK_IDENTIFIER,     /**< Identifier, e.g., variable names, function names, type names  */
-    TOK__UNDEF,
-    TOK__FLOW,
-    TOK__STATIC,
 
     TOK_NEWLINE,
     TOK_ERROR,
@@ -148,6 +161,7 @@ typedef enum {
     TOK_TERNARY,        /**< Ternary conditional operator `?:` overall representation (used by some parsers)  */
     TOK_ELLIPSIS,
     TOK_DOUBLE_COLON,
+    TOK_SAFE_DOT,       /**< NihaoC safe dereference operator `?.`  */
 
     _KeywordDefTable_
 

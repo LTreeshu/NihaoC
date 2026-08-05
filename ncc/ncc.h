@@ -113,6 +113,12 @@ struct Symbol {
     int is_defined;             /* has body been defined */
     int is_extern;              /* external symbol */
     int is_builtin;             /* built-in function */
+    int ownership_transferred;  /* flow ptr returned: skip auto-free */
+
+    /* Ownership/borrow state (NihaoC ch.12): */
+    /* 0 = valid, 1 = frozen (borrowed), 2 = invalid (ownership moved) */
+    int borrow_state;
+    Symbol *borrow_source;      /* who this var borrows from (for unfreeze) */
     
     /* Location in source */
     char *filename;
@@ -174,6 +180,8 @@ typedef struct {
     } tok_val;
     char *tok_str;              /* string value of current token */
     int tok_len;
+    char ident_buf[256];        /* fixed buffer for identifier tokens
+                                 * (peek-safe: never freed) */
     
     /* Lookahead */
     int peek_tok;
@@ -201,6 +209,7 @@ typedef struct {
     Symbol *cur_module;
     Symbol *cur_func;
     Symbol *cur_struct;
+    Symbol *last_ident;         /* last identifier referenced in an expr */
     int scope_depth;
     
     /* Parsing flags */
@@ -288,6 +297,7 @@ typedef struct {
     char *name;
     char *filename;
     int is_external;
+    int visited;            /* parsed at least once (cycle guard) */
     Symbol *symbols;
     int symbol_count;
 } Module;
@@ -307,7 +317,10 @@ struct CompilerState {
     /* Configuration */
     int verbose;
     int debug_mode;
+    int test_mode;              /* -lexertest: dump token stream only */
     int output_type;            /* 0=exec, 1=object, 2=shared, 3=static */
+    int backend;                /* 0=c (default, external tcc), 1=native (libtcc in-process) */
+    int run_mode;               /* -run: with native backend, compile to memory and execute */
     char *output_file;
     char *input_file;
     int argc;
@@ -363,6 +376,110 @@ void nihao_warning(CompilerState *cs, const char *fmt, ...);
 void *nihao_malloc(CompilerState *cs, size_t size);
 void *nihao_realloc(CompilerState *cs, void *ptr, size_t size);
 char *nihao_strdup(CompilerState *cs, const char *str);
+char *load_source_file(const char *filename, size_t *size_out);
+
+/* lexer.c */
+void lexer_init(CompilerState *cs, const char *filename, const char *source);
+void lexer_next(LexerState *lex);
+void lexer_peek(LexerState *lex);
+const char *token_name(TokenType tok);
+int is_keyword(const char *str, int len);
+int is_type_token(TokenType tok);
+int is_visibility_token(TokenType tok);
+
+/* cgen.c - C backend */
+void cgen_init(void);
+void cgen_raw(const char *fmt, ...);
+void cgen_line(const char *fmt, ...);
+void cgen_blank(void);
+void cgen_indent(void);
+void cgen_dedent(void);
+const char *cgen_result(void);
+const char *c_type_name(CType *t);
+const char *c_type_suffix(CType *t);
+void cgen_header(void);
+
+/* native.c - libtcc machine-code backend (-backend=native) */
+int native_backend_available(void);
+int native_compile_string(const char *csrc, const char *outfile, int verbose);
+int native_run_string(const char *csrc, int argc, char **argv, int verbose);
+
+/* parser.c */
+void parser_init(CompilerState *cs);
+TokenType cur_tok(CompilerState *cs);
+void next_tok(CompilerState *cs);
+void expect(CompilerState *cs, TokenType tok);
+void skip_newlines(CompilerState *cs);
+void parse_type(CompilerState *cs, CType *type);
+void parse_module(CompilerState *cs);
+void parse_declaration(CompilerState *cs);
+void parse_function(CompilerState *cs, Symbol *func_sym);
+void parse_statement(CompilerState *cs);
+void parse_expression(CompilerState *cs);
+void parse_function_full(CompilerState *cs, Symbol *func_sym);
+
+/* irparse.c / ir.c / ir_to_c.c / ir_to_native.c - IR middle layer (backend=ir-*) */
+int ir_compile(CompilerState *cs, const char *filename, int backend, int verbose);
+void parse_statement_full(CompilerState *cs);
+
+/* codegen.c */
+void codegen_init(CompilerState *cs);
+void codegen_optimize(CompilerState *cs);
+void gen_function_prologue(Symbol *sym);
+void gen_function_epilogue(Symbol *sym);
+void gen_function_prologue_full(Symbol *func_sym);
+void gen_function_epilogue_full(Symbol *func_sym);
+void gen_if(void);
+void gen_if_statement(CompilerState *cs);
+void gen_while(void);
+void gen_while_loop(CompilerState *cs);
+void gen_for(void);
+void gen_for_loop(CompilerState *cs);
+void gen_do_while_loop(CompilerState *cs);
+void gen_return(void);
+void gen_return_statement(CompilerState *cs);
+
+/* linker.c */
+void linker_init(CompilerState *cs);
+void link_add_library(CompilerState *cs, char *path, char *alias, char *lib_path);
+void linker_generate_object(CompilerState *cs, char *output_file);
+void linker_generate_executable_full(CompilerState *cs, char *output_file);
+
+/* sym.c */
+Symbol *sym_find(CompilerState *cs, const char *tok_str);
+Symbol *sym_push(CompilerState *cs, SymKind kind, const char *tok_str, CType *type);
+Symbol *sym_add_member(CompilerState *cs, Symbol *sym, const char *name, CType *type);
+Symbol *sym_push_local(CompilerState *cs, Symbol *func_sym, const char *name, CType *type);
+Symbol *sym_pop_locals(CompilerState *cs, Symbol *func_sym);
+Symbol *sym_register_builtins(CompilerState *cs);
+
+/* type.c */
+CType *type_new(CompilerState *cs, TypeKind kind);
+CType *type_array(CompilerState *cs, void *elem_type, int size);
+CType *type_check_statement(CompilerState *cs);
+
+/* vis.c */
+void visibility_init(CompilerState *cs);
+void vis_scope_enter(CompilerState *cs);
+void vis_scope_exit(CompilerState *cs);
+void verify_types(CompilerState *cs);
+int vis_is_pointer_type(CType *t);
+int vis_check_transfer(Visibility src, Visibility dst);
+void vis_update_source(Visibility src, Visibility dst, Symbol *src_sym);
+int vis_check_usable(CompilerState *cs, Symbol *s);
+int vis_check_writable(CompilerState *cs, Symbol *s);
+void vis_check_assign(CompilerState *cs, Visibility dst_vis, Symbol *src_sym,
+                      Symbol *dst_sym, const char *dst_name);
+void vis_unfreeze_borrows(Symbol *borrow_head, Symbol *scope_start);
+
+/* module.c */
+Module *module_add(CompilerState *cs, const char *tok_str, char *input_file);
+Module *module_import(CompilerState *cs, const char *name);
+
+/* stdlib.c */
+void stdlib_register_all(CompilerState *cs);
+void stdlib_resolve_link_libraries(CompilerState *cs);
+void stdlib_generate_runtime_stubs(CompilerState *cs);
 
 extern CompilerState *g_cs;
 

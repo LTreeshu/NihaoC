@@ -1,112 +1,268 @@
+-- NihaoC 编译器 - xmake 构建配置
+-- 使用 tcc 工具链构建（与代码生成后端保持一致，跨平台）
+set_project("nihao")
+set_version("0.1.0")
+
 add_rules("mode.debug", "mode.release")
+set_languages("c99")
 
--- set_toolchains("gcc")
--- 检测 tcc 是否可用
-if is_plat("linux") then
-    -- 方法1：直接设置 tcc 工具链
-    set_toolchains("tcc")
-
-    -- 方法2：使用 xmake 包管理（自动下载）
-    -- add_requires("tinycc")
-    -- set_toolchains("@tinycc")
+-- 探测 tcc 安装目录（用于 libtcc.h 头文件与 libtcc.dll 链接）
+local tcc_dir = ""
+do
+    local envdir = os.getenv("NIHAO_TCC_DIR")
+    if envdir and envdir ~= "" and (os.isfile(path.join(envdir, "tcc.exe"))
+        or os.isfile(path.join(envdir, "tcc"))) then
+        tcc_dir = envdir
+    else
+        for p in (os.getenv("PATH") or ""):gmatch("[^;:]+") do
+            if os.isfile(path.join(p, "tcc.exe")) or os.isfile(path.join(p, "tcc")) then
+                tcc_dir = p
+                break
+            end
+        end
+    end
+    if tcc_dir == "" then tcc_dir = "." end
 end
 
--- 自定义工具链配置（高级用法）
 toolchain("tcc")
     set_kind("standalone")
-    set_toolset("cc", "tcc")      -- C 编译器
-    set_toolset("ld", "tcc")      -- 链接器
-    set_toolset("ar", "ar")       -- 静态库归档
-
-    -- 检查 tcc 是否可用
-    on_check(function (toolchain)
-        return import("lib.detect.find_tool")("tcc")
-    end)
-
-    -- 加载时的额外配置
+    set_toolset("cc", "tcc")
+    set_toolset("cxx", "tcc")
+    set_toolset("ld", "tcc")
+    set_toolset("ar", "tcc")
+    set_toolset("sh", "tcc")
     on_load(function (toolchain)
-        -- 添加 tcc 特定的宏定义
-        toolchain:add("cxflags", "-DTCC_COMPILER")
-        -- tcc 不支持某些高级优化，禁用
-        toolchain:add("cxflags", "-fno-common")
+        local bindir
+        local envdir = os.getenv("NIHAO_TCC_DIR")
+        if envdir and envdir ~= "" and (os.isfile(path.join(envdir, "tcc.exe"))
+            or os.isfile(path.join(envdir, "tcc"))) then
+            bindir = envdir
+        else
+            for p in (os.getenv("PATH") or ""):gmatch("[^;:]+") do
+                if os.isfile(path.join(p, "tcc.exe")) or os.isfile(path.join(p, "tcc")) then
+                    bindir = p
+                    break
+                end
+            end
+        end
+        if bindir then
+            toolchain:add("bindir", bindir)
+        end
     end)
 toolchain_end()
 
-target("token")
-    set_kind("static")
-    add_files("lexer.c")
+if is_host("windows") then
+    set_toolchains("tcc")
+end
 
-target("nihao")
+target("ncc")
     set_kind("binary")
-    add_files("ncc.c")
-    add_deps("token")
+    set_targetdir("$(builddir)")
+    add_files("ncc.c", "lexer.c", "parser.c", "codegen.c", "linker.c",
+              "module.c", "stdlib.c", "sym.c", "type.c", "vis.c", "cgen.c",
+              "native.c", "ir.c", "irparse.c", "ir_to_c.c", "ir_to_native.c")
+    add_includedirs(".", path.join(tcc_dir, "libtcc"))
+    if is_host("windows") and os.isfile(path.join(tcc_dir, "libtcc.dll")) then
+        -- tcc 链接器不认 -l 与 GNU 导入库，直接链接 DLL 文件
+        add_ldflags(path.join(tcc_dir, "libtcc.dll"), {force = true})
+    elseif not is_host("windows") then
+        add_links("tcc")
+        add_linkdirs(path.join(tcc_dir, "lib"))
+    end
+    set_warnings("all")
+target_end()
 
---
--- If you want to known more usage about xmake, please see https://xmake.io
---
--- ## FAQ
---
--- You can enter the project directory firstly before building project.
---
---   $ cd projectdir
---
--- 1. How to build project?
---
---   $ xmake
---
--- 2. How to configure project?
---
---   $ xmake f -p [macosx|linux|iphoneos ..] -a [x86_64|i386|arm64 ..] -m [debug|release]
---
--- 3. Where is the build output directory?
---
---   The default output directory is `./build` and you can configure the output directory.
---
---   $ xmake f -o outputdir
---   $ xmake
---
--- 4. How to run and debug target after building project?
---
---   $ xmake run [targetname]
---   $ xmake run -d [targetname]
---
--- 5. How to install target to the system directory or other output directory?
---
---   $ xmake install
---   $ xmake install -o installdir
---
--- 6. Add some frequently-used compilation flags in xmake.lua
---
--- @code
---    -- add debug and release modes
---    add_rules("mode.debug", "mode.release")
---
---    -- add macro definition
---    add_defines("NDEBUG", "_GNU_SOURCE=1")
---
---    -- set warning all as error
---    set_warnings("all", "error")
---
---    -- set language: c99, c++11
---    set_languages("c99", "c++11")
---
---    -- set optimization: none, faster, fastest, smallest
---    set_optimize("fastest")
---
---    -- add include search directories
---    add_includedirs("/usr/include", "/usr/local/include")
---
---    -- add link libraries and search directories
---    add_links("tbox")
---    add_linkdirs("/usr/local/lib", "/usr/lib")
---
---    -- add system link libraries
---    add_syslinks("z", "pthread")
---
---    -- add compilation and link flags
---    add_cxflags("-stdnolib", "-fno-strict-aliasing")
---    add_ldflags("-L/usr/local/lib", "-lpthread", {force = true})
---
--- @endcode
---
+rule("nihao")
+    set_extensions(".nc")
+    on_build(function (target)
+        local ncc = target:dep("ncc"):targetfile()
+        local src = target:sourcefiles()[1]
+        local out = target:targetfile()
+        os.mkdir(path.directory(out))
+        local f = io.open(src, "r")
+        local content = f and f:read("*a") or ""
+        if f then f:close() end
+        if content:find("func main", 1, true) or content:find("main(", 1, true) then
+            os.execv(ncc, {"build", src, "-o", out})
+        else
+            os.execv(ncc, {"build", "-c", src, "-o", out})
+        end
+    end)
+    on_run(function (target)
+        local exe = target:targetfile()
+        local src = target:sourcefiles()[1]
+        local rc = os.execv(exe, {}, {})
+        cprint("run %s -> %d", src, rc)
+    end)
+rule_end()
 
+for _, src in ipairs(os.files("tests/pos/*.nc")) do
+    local name = path.basename(src)
+    target("test_" .. name)
+        set_kind("binary")
+        set_targetdir("$(builddir)/tests")
+        add_files(src)
+        add_rules("nihao")
+        add_deps("ncc")
+    target_end()
+end
+
+task("test")
+    on_run(function ()
+        import("core.project.task")
+        import("core.base.option")
+        task.run("build", {targets = "ncc"})
+        local ncc = path.join(os.projectdir(), "build",
+                              "ncc" .. (is_host("windows") and ".exe" or ""))
+
+        local function try_execv(program, argv, opts)
+            local parts = {}
+            for _, a in ipairs({program, table.unpack(argv or {})}) do
+                table.insert(parts, '"' .. a .. '"')
+            end
+            local line = table.concat(parts, " ")
+            -- 重定向内嵌进命令串（cmd 解释），避免 xmake opt 重定向在 shell 包装下失效
+            if opts then
+                if opts.stdout and opts.stdout ~= os.nul then
+                    line = line .. ' >"' .. opts.stdout .. '"'
+                end
+                if opts.stderr and opts.stderr ~= os.nul then
+                    line = line .. ' 2>"' .. opts.stderr .. '"'
+                end
+            end
+            if is_host("windows") then
+                os.exec('cmd /c "' .. line .. ' || exit 0"')
+            else
+                os.exec(line .. ' || true')
+            end
+        end
+
+        local passed, failed = 0, 0
+        local be = option.get("backend") or "c"
+        if be ~= "c" and be ~= "native" then
+            cprint("${red}unknown backend '%s' (c|native)", be)
+            os.exit(1)
+        end
+        cprint("${cyan}backend: %s", be)
+
+        -- pos: 编译 + 运行 + expect 比对
+        for _, src in ipairs(os.files("tests/pos/*.nc")) do
+            local stem = path.basename(src)
+            local exe = path.join(os.projectdir(), "build", "tests", be,
+                                  stem .. (is_host("windows") and ".exe" or ""))
+            os.mkdir(path.directory(exe))
+
+            local f = io.open(src, "r")
+            local content = f and f:read("*a") or ""
+            if f then f:close() end
+            local has_main = content:find("func main", 1, true) or content:find("main(", 1, true)
+
+            local args = has_main and {"build", "-backend=" .. be, src, "-o", exe}
+                                 or {"build", "-backend=" .. be, "-c", src, "-o", exe}
+            try_execv(ncc, args, {stdout = os.nul, stderr = os.nul})
+            local okc = has_main and os.isfile(exe) or os.isfile(exe .. ".c")
+            if not okc then
+                cprint("${red}[FAIL] pos/%s.nc: compile error", stem)
+                failed = failed + 1
+            elseif not has_main then
+                cprint("${green}[PASS] pos/%s.nc (module)", stem)
+                passed = passed + 1
+            elseif not os.isfile(exe) then
+                cprint("${red}[FAIL] pos/%s.nc: no executable produced", stem)
+                failed = failed + 1
+            else
+                local outfile = exe .. ".out"
+                local of = io.open(outfile, "w")
+                if of then of:close() end
+                try_execv(exe, {}, {stdout = outfile})
+                local out = ""
+                local f2 = io.open(outfile, "r")
+                if f2 then out = f2:read("*a"); f2:close() end
+                local expect = path.join(path.directory(src), stem .. ".expect")
+                local norm = function(s)
+                    local t = {}
+                    for line in (s .. "\n"):gmatch("([^\n]*)\n") do
+                        table.insert(t, (line:gsub("\r$", "")))
+                    end
+                    return t
+                end
+                if os.isfile(expect) then
+                    local f3 = io.open(expect, "r")
+                    local want = f3:read("*a")
+                    f3:close()
+                    local w, g = norm(want), norm(out)
+                    local match = (#w == #g)
+                    if match then
+                        for i = 1, #w do
+                            if w[i] ~= g[i] then match = false; break end
+                        end
+                    end
+                    if match then
+                        cprint("${green}[PASS] pos/%s.nc", stem)
+                        passed = passed + 1
+                    else
+                        cprint("${red}[FAIL] pos/%s.nc: output mismatch\n  want: %s\n  got:  %s",
+                               stem, table.concat(w, "|"), table.concat(g, "|"))
+                        failed = failed + 1
+                    end
+                else
+                    cprint("${green}[PASS] pos/%s.nc", stem)
+                    passed = passed + 1
+                end
+            end
+        end
+
+        -- err: 必须编译失败 + 错误信息含期望片段
+        for _, src in ipairs(os.files("tests/err/*.nc")) do
+            local stem = path.basename(src)
+            local out = path.join(os.projectdir(), "build", "tests", "err", be, stem)
+            os.mkdir(path.directory(out))
+            local errfile = out .. ".err"
+            local ef = io.open(errfile, "w")
+            if ef then ef:close() end
+            try_execv(ncc, {"build", "-backend=" .. be, src, "-o", out},
+                      {stdout = os.nul, stderr = errfile})
+            local okc = os.isfile(out) or os.isfile(out .. ".exe")
+            if okc then
+                cprint("${red}[FAIL] err/%s.nc: expected compile error, but succeeded", stem)
+                failed = failed + 1
+            else
+                local expect = path.join(path.directory(src), stem .. ".expect")
+                local msg = ""
+                if os.isfile(errfile) then
+                    local f = io.open(errfile, "r")
+                    msg = f:read("*a") or ""
+                    f:close()
+                end
+                if os.isfile(expect) then
+                    local f = io.open(expect, "r")
+                    local want = f:read("*a"):gsub("%s+$", "")
+                    f:close()
+                    if msg:find(want, 1, true) then
+                        cprint("${green}[PASS] err/%s.nc", stem)
+                        passed = passed + 1
+                    else
+                        cprint("${red}[FAIL] err/%s.nc: message missing '%s'\n  got: %s",
+                               stem, want, msg:gsub("%s+$", ""))
+                        failed = failed + 1
+                    end
+                else
+                    cprint("${green}[PASS] err/%s.nc", stem)
+                    passed = passed + 1
+                end
+            end
+        end
+
+        cprint("${yellow}\n== %d passed, %d failed ==", passed, failed)
+        if failed > 0 then
+            os.exit(1)
+        end
+    end)
+    set_menu {
+        usage   = "xmake test [-b native]",
+        description = "Run the NihaoC regression suite (pos + err) with the given backend",
+        options = {
+            {'b', 'backend', 'kv', nil, 'backend to test: c (default) or native'}
+        }
+    }
+task_end()

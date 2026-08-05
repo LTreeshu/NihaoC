@@ -19,7 +19,7 @@ A new better C language for my fantasy， a better programing world for void !
 
 语法文档|Document
 
-[中文](./Chinese.md) | [English](./English.md)
+[中文](./docs/Chinese.md) | [English](./docs/English.md)
 
 Source code example demonstration:
 

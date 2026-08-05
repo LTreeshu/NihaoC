@@ -1,0 +1,80 @@
+/* ============================================================
+ * ir.h - 三地址码 IR（方案 B：中间层）
+ *
+ * 设计原则（延续 TCC 单趟哲学）：
+ *   - 无限虚拟寄存器（vreg），由后端负责映射
+ *   - 每函数一个指令数组，label 为函数内编号
+ *   - 调用参数通过连续 IR_PARAM 传递，后端负责对齐调用约定
+ * ============================================================ */
+#ifndef NIHAO_IR_H
+#define NIHAO_IR_H
+
+#include "ncc.h"
+
+typedef enum {
+    IR_NOP = 0,
+    IR_CONST,       /* dst = imm                      */
+    IR_MOV,         /* dst = a                        */
+    IR_ADD, IR_SUB, IR_MUL, IR_DIV, IR_MOD,
+    IR_NEG,         /* dst = -a                       */
+    IR_CMP_EQ, IR_CMP_NE, IR_CMP_LT, IR_CMP_LE,
+    IR_CMP_GT, IR_CMP_GE,
+    IR_JMP,         /* goto label                     */
+    IR_JZ,          /* if dst == 0 goto label         */
+    IR_JNZ,         /* if dst != 0 goto label         */
+    IR_CALL,        /* dst = call fn(args via PARAM)  */
+    IR_PARAM,       /* argument for the next CALL     */
+    IR_RET,         /* return dst (-1 = bare return)  */
+    IR_LABEL,
+    IR_ALLOCA,      /* dst = address of a stack slot of size imm */
+    IR_LOAD,        /* dst = *(a)                     */
+    IR_STORE,       /* *(a) = b                       */
+    IR_LD_ADDR,     /* dst = address of global sym    */
+    IR_END
+} IrOp;
+
+typedef struct {
+    IrOp op;
+    int dst;            /* vreg 目标, -1 = 无 */
+    int a, b;           /* vreg 源, -1 = 无 */
+    int64_t imm;        /* 常量 / ALLOCA 大小 */
+    int label;          /* 跳转目标 label */
+    int fn;             /* CALL 目标函数号 */
+    const char *sym;    /* LD_ADDR / 字符串字面量符号 */
+} IrIns;
+
+typedef struct {
+    char *name;
+    int is_main;
+    int param_count;
+    int vreg_count;     /* 函数内使用的最大 vreg + 1 */
+    int label_count;
+    int ins_count;
+    int ins_cap;
+    IrIns *ins;
+} IrFn;
+
+typedef struct {
+    int fn_count;
+    int fn_cap;
+    IrFn *fns;
+    /* 全局字符串池（字面量 -> 符号名） */
+    int str_count;
+    int str_cap;
+    char **str_data;
+    char **str_syms;
+} IrProg;
+
+IrProg *ir_prog_new(void);
+IrFn *ir_fn_new(IrProg *p, const char *name, int is_main);
+void ir_fn_end(IrFn *f);                 /* 追加 IR_END */
+int ir_emit(IrFn *f, IrOp op, int dst, int a, int b, int64_t imm);
+int ir_new_vreg(IrFn *f);
+int ir_new_label(IrFn *f);
+int ir_add_string(IrProg *p, const char *data);   /* 返回符号名序号 */
+
+/* 后端入口（由 ncc 的 -backend=ir-c / ir-native 调用） */
+int irgen_c_emit(IrProg *p, const char *outfile);        /* IR -> C */
+int irgen_native_emit(IrProg *p, const char *outfile);   /* IR -> x86-64 asm */
+
+#endif

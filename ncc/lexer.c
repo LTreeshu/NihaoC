@@ -2,6 +2,21 @@
 
 #define KeywordDef(str,len,token) {str, #token},
 TokenInfo token_table[]= {
+    /* Fixed entries matching the enum prefix (must stay in sync with token.h) */
+    {"TOK_EOF",           "EOF"},
+    {"TOK_UNKNOWN",       "unknown"},
+    {"TOK_IDENTIFIER",    "identifier"},
+    {"TOK_NEWLINE",       "newline"},
+    {"TOK_ERROR",         "error"},
+    {"TOK_INT_CONST",     "integer"},
+    {"TOK_FLOAT_CONST",   "float"},
+    {"TOK_CHAR_CONST",    "char"},
+    {"TOK_STRING_LITERAL","string"},
+    {"TOK_DOT_CAST",      ".()"},
+    {"TOK_TERNARY",       "?:"},
+    {"TOK_ELLIPSIS",      "..."},
+    {"TOK_DOUBLE_COLON",  "::"},
+    {"TOK_SAFE_DOT",      "?."},
     _KeywordDefTable_
 };
 #undef KeywordDef
@@ -11,6 +26,7 @@ TokenInfo token_table[]= {
 #define KeywordDef(str,len,tok) {str, len, tok},
 KeywordEntry keywords[] = {
     _KeywordDefTable_
+    {NULL, 0, 0}      /* sentinel: is_keyword() scans until str==NULL */
 };
 #undef KeywordDef
 
@@ -41,8 +57,17 @@ int is_keyword(const char *str, int len)
 
 int is_type_token(TokenType tok)
 {
-    return (tok >= TOK_CHAR && tok <= TOK_VOID) || tok == TOK_BOOL
-           || tok == TOK_STRUCT || tok == TOK_UNION || tok == TOK_ENUM;
+    switch (tok) {
+        case TOK_VOID: case TOK_CHAR: case TOK_STRING: case TOK_BOOL:
+        case TOK_U8: case TOK_U16: case TOK_U32: case TOK_U64:
+        case TOK_I8: case TOK_I16: case TOK_I32: case TOK_I64:
+        case TOK_F32: case TOK_F64:
+        case TOK_FX32: case TOK_FX64:
+        case TOK_STRUCT: case TOK_UNION: case TOK_ENUM:
+            return 1;
+        default:
+            return 0;
+    }
 }
 
 int is_visibility_token(TokenType tok)
@@ -91,6 +116,10 @@ static inline int lex_peek_char(LexerState *lex)
 
 static void skip_whitespace(LexerState *lex)
 {
+    /* Clear any stale token from a previous lexer_next() call so that
+     * a leftover TOK_NEWLINE is not mistaken for a new one. */
+    lex->tok = TOK_UNKNOWN;
+
     for (;;) {
         int ch = lex_peek_char(lex);
         
@@ -317,32 +346,37 @@ static void parse_string(LexerState *lex, int quote_char)
 
 static void parse_ident(LexerState *lex, int first_char)
 {
-    char buf[256];
     int i = 0;
     int ch;
     
-    buf[i++] = first_char;
+    lex->ident_buf[i++] = first_char;
     
     for (;;) {
         ch = lex_peek_char(lex);
         if (isalnum(ch) || ch == '_') {
-            buf[i++] = lex_char(lex);
+            if (i < (int)sizeof(lex->ident_buf) - 1) {
+                lex->ident_buf[i++] = lex_char(lex);
+            } else {
+                lex_char(lex);
+            }
         } else {
             break;
         }
     }
     
-    buf[i] = '\0';
+    lex->ident_buf[i] = '\0';
     
     /* Check if keyword */
-    int kw = is_keyword(buf, i);
+    int kw = is_keyword(lex->ident_buf, i);
     if (kw) {
         lex->tok = kw;
     } else {
         lex->tok = TOK_IDENTIFIER;
     }
     
-    lex->tok_str = strdup(buf);
+    /* Independent copy: parser may keep tok_str across next_tok()/peek().
+     * Never freed (short-lived compiler process); keeps ptr valid. */
+    lex->tok_str = strdup(lex->ident_buf);
     lex->tok_len = i;
 }
 
@@ -389,12 +423,6 @@ void lexer_next(LexerState *lex)
     
     lex->last_line_num = lex->line_num;
     
-    /* Free previous string */
-    if (lex->tok_str && lex->tok == TOK_IDENTIFIER) {
-        free(lex->tok_str);
-        lex->tok_str = NULL;
-    }
-    
     ch = lex_char(lex);
     
     if (ch == EOF) {
@@ -433,7 +461,10 @@ void lexer_next(LexerState *lex)
     /* Operators and delimiters */
     switch (ch) {
         case '+':
-            if (lex_peek_char(lex) == '=') {
+            if (lex_peek_char(lex) == '+') {
+                lex_char(lex);
+                lex->tok = TOK_INCREMENT;
+            } else if (lex_peek_char(lex) == '=') {
                 lex_char(lex);
                 lex->tok = TOK_PLUS_ASSIGN;
             } else {
@@ -442,7 +473,10 @@ void lexer_next(LexerState *lex)
             break;
             
         case '-':
-            if (lex_peek_char(lex) == '>') {
+            if (lex_peek_char(lex) == '-') {
+                lex_char(lex);
+                lex->tok = TOK_DECREMENT;
+            } else if (lex_peek_char(lex) == '>') {
                 lex_char(lex);
                 lex->tok = TOK_ARROW;
             } else if (lex_peek_char(lex) == '=') {
@@ -573,6 +607,10 @@ void lexer_next(LexerState *lex)
             if (lex_peek_char(lex) == '=') {
                 lex_char(lex);
                 lex->tok = TOK_SAFE_ASSIGN;
+            } else if (lex_peek_char(lex) == '.') {
+                /* ?.  safe dereference (longest match) */
+                lex_char(lex);
+                lex->tok = TOK_SAFE_DOT;
             } else {
                 lex->tok = TOK_QUESTION;
             }
@@ -588,6 +626,10 @@ void lexer_next(LexerState *lex)
                 } else {
                     lex->tok = TOK_RANGE;
                 }
+            } else if (lex_peek_char(lex) == '(') {
+                /* .(  typed dereference (longest match) */
+                lex_char(lex);
+                lex->tok = TOK_DOT_PAREN;
             } else {
                 lex->tok = TOK_DOT;
             }
