@@ -270,6 +270,11 @@ static int parse_args(CompilerState *cs, int argc, char **argv)
             else if (strcmp(arg, "-run") == 0) {
                 cs->run_mode = 1;
                 cs->backend = 1;
+                /* -run 之后的剩余参数透传给 main(argc, argv)（PA-6） */
+                if (i + 1 < argc) {
+                    cs->run_argc = argc - i - 1;
+                    cs->run_argv = argv + i + 1;
+                }
             }
             /* Backend: c | native | ir-c (IR->C) | ir-native (IR->x86-64 asm) */
             else if (strncmp(arg, "-backend=", 9) == 0) {
@@ -532,25 +537,28 @@ static int compile_file(CompilerState *cs, const char *filename)
         const char *out = cs->output_file ? cs->output_file : "a.out";
         if (cs->backend == 1) {
             if (cs->run_mode) {
-#ifdef _WIN32
-                fprintf(stderr, "Error: -run (in-memory execution) is not supported "
-                                "by the Windows libtcc build; use -backend=native "
-                                "with an output file instead\n");
-                return -1;
-#else
+                if (!native_memory_available()) {
+                    fprintf(stderr, "Error: -run (in-memory execution) is not supported "
+                                    "by the Windows libtcc build; use -backend=native "
+                                    "with an output file instead\n");
+                    return -1;
+                }
                 if (cs->verbose) {
                     printf("native backend: compiling %d bytes of C to memory\n",
                            (int)strlen(cgen_result()));
                 }
-                char *run_argv[] = { "nihao-run", NULL };
-                return native_run_string(cgen_result(), 1, run_argv, cs->verbose);
-#endif
+                int rargc = cs->run_argc > 0 ? cs->run_argc : 1;
+                char *def_argv[] = { "nihao-run", NULL };
+                char **rargv = cs->run_argv ? cs->run_argv : def_argv;
+                return native_run_string(cgen_result(), rargc, rargv,
+                                         cs->verbose, cs->debug_mode);
             }
             if (cs->verbose) {
                 printf("native backend: libtcc compiling %d bytes of C\n",
                        (int)strlen(cgen_result()));
             }
-            if (native_compile_string(cgen_result(), out, cs->verbose) != 0) {
+            if (native_compile_string(cgen_result(), out,
+                                      cs->verbose, cs->debug_mode) != 0) {
                 fprintf(stderr, "native backend failed\n");
                 return -1;
             }

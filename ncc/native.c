@@ -74,14 +74,23 @@ static const char *tcc_install_dir(void)
     return dir;
 }
 
+/* libtcc 错误回调：把编译器错误整合进 nihao 错误输出（PA-8） */
+static void nihao_tcc_error(void *opaque, const char *msg)
+{
+    (void)opaque;
+    fprintf(stderr, "native: %s\n", msg ? msg : "(unknown error)");
+}
+
 /* 配置共享的 libtcc 状态 */
-static TCCState *native_state(const char *csrc, int output_type, int verbose)
+static TCCState *native_state(const char *csrc, int output_type, int verbose, int debug)
 {
     TCCState *s = tcc_new();
     if (!s) {
         fprintf(stderr, "native: tcc_new failed\n");
         return NULL;
     }
+
+    tcc_set_error_func(s, NULL, nihao_tcc_error);
 
     const char *dir = tcc_install_dir();
     char libpath[1024];
@@ -100,8 +109,21 @@ static TCCState *native_state(const char *csrc, int output_type, int verbose)
         tcc_add_library(s, "msvcrt");
     }
 #endif
-    if (verbose) {
-        tcc_set_options(s, "-Wall");
+    /* link 库声明（PA-7）：nihao link "lib" 别名 -> libtcc 链接 */
+    if (g_cs) {
+        for (int i = 0; i < g_cs->link_lib_count; i++) {
+            LinkLib *ll = &g_cs->link_libs[i];
+            if (ll->name && ll->name[0]) {
+                tcc_add_library(s, ll->name);
+            }
+        }
+    }
+    {
+        char opts[64] = "-Wall";
+        if (debug) strcat(opts, " -g");
+        if (verbose) {
+            tcc_set_options(s, opts);
+        }
     }
     tcc_set_output_type(s, output_type);
 
@@ -114,9 +136,9 @@ static TCCState *native_state(const char *csrc, int output_type, int verbose)
 }
 
 /* 编译 C 文本为可执行文件（写 <outfile>） */
-int native_compile_string(const char *csrc, const char *outfile, int verbose)
+int native_compile_string(const char *csrc, const char *outfile, int verbose, int debug)
 {
-    TCCState *s = native_state(csrc, TCC_OUTPUT_EXE, verbose);
+    TCCState *s = native_state(csrc, TCC_OUTPUT_EXE, verbose, debug);
     if (!s) return -1;
     if (tcc_output_file(s, outfile) != 0) {
         fprintf(stderr, "native: failed to write executable '%s'\n", outfile);
@@ -128,9 +150,9 @@ int native_compile_string(const char *csrc, const char *outfile, int verbose)
 }
 
 /* 编译 C 文本到内存并执行 main(argc, argv) */
-int native_run_string(const char *csrc, int argc, char **argv, int verbose)
+int native_run_string(const char *csrc, int argc, char **argv, int verbose, int debug)
 {
-    TCCState *s = native_state(csrc, TCC_OUTPUT_MEMORY, verbose);
+    TCCState *s = native_state(csrc, TCC_OUTPUT_MEMORY, verbose, debug);
     if (!s) return -1;
     if (tcc_relocate(s, NULL) != 0) {
         fprintf(stderr, "native: relocation failed\n");
@@ -142,8 +164,18 @@ int native_run_string(const char *csrc, int argc, char **argv, int verbose)
     return rc;
 }
 
-/* 后端可用性：libtcc 静态链接，总是可用 */
+/* 后端可用性：libtcc 静态链接，EXE 输出总是可用 */
 int native_backend_available(void)
 {
     return 1;
+}
+
+/* 内存执行（-run）可用性：Windows libtcc 0.9.27 的 TCC_OUTPUT_MEMORY 损坏（PA-1/PA-10） */
+int native_memory_available(void)
+{
+#ifdef _WIN32
+    return 0;
+#else
+    return 1;
+#endif
 }

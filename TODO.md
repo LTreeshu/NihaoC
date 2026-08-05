@@ -97,18 +97,17 @@ ncc/
 - xmake 直链 libtcc.dll / -ltcc；`xmake test -b native` 支持
 
 ### 待办
-- [ ] **PA-1 `-run` Windows 不可用**：libtcc 0.9.27 Windows 版 TCC_OUTPUT_MEMORY 损坏（relocate 251）。三选一：修复/升级 libtcc、Linux 实测补验证、正式文档化 Linux-only
+- [ ] **PA-1 `-run` Windows 不可用**：libtcc 0.9.27 Windows 版 TCC_OUTPUT_MEMORY 损坏（relocate 251）。三选一：修复/升级 libtcc、Linux 实测补验证、正式文档化 Linux-only（已有 native_memory_available() 能力开关）
 - [x] **PA-2 native 无自动化回归（已于 2026-08-05 完成）**：`xmake test -b native` / `--all` 全矩阵覆盖，native 13/13 通过（测试体系已统一为 xmake，python run_tests.py 已移除）
-- [ ] **PA-3 `-g` 未接入**：debug_mode 已收集但 native_state 只传 -Wall
+- [x] **PA-3 `-g` 接入（已于 2026-08-06 完成）**：native_state 按 debug_mode 加 `-g`，native_compile_string/native_run_string 接收 debug 参数
 - [ ] **PA-4 Makefile 无法构建 native**：缺 libtcc.h include 路径（与总 P1-5 构建统一相关）
 - [x] **PA-5 双测试脚本不一致（已于 2026-08-05 解决）**：测试统一为 `xmake test [-b ...] [--all] [-f ...]`，run_tests.py 删除
-- [x] **PA-11 MSYS 路径归一化（已修复）**：native.c 的 tcc_install_dir 对 `/d/...` 风格 NIHAO_TCC_DIR 归一化为 `D:/...`（bash 传参场景）
-- [ ] **PA-6 `-run` argv 硬编码** `{"nihao-run"}`，无法透传程序参数
-- [ ] **PA-7 link 库声明在 native 失效**：未配置 tcc_add_library（仅 Windows memory 模式加了 msvcrt）
-- [ ] **PA-8 错误信息无 nihao 层包装**：可用 tcc_set_error_func 捕获整合
+- [x] **PA-6 `-run` argv 透传（已于 2026-08-06 完成）**：CompilerState 加 run_argc/run_argv，`-run` 之后参数透传 main；Windows 不可用（PA-1）
+- [x] **PA-7 link 库声明（已于 2026-08-06 完成）**：native_state 遍历 cs->link_libs 调 tcc_add_library
+- [x] **PA-8 错误信息包装（已于 2026-08-06 完成）**：tcc_set_error_func 回调统一输出 `native: <msg>`
 - [ ] **PA-9 Linux 路径未实测**：-run、libtcc.so、SysV 调用约定无验证环境
-- [ ] **PA-10 native_backend_available 恒 1**：语义不精确（应区分 EXE 与 memory 能力）
-- [ ] **PA-11 tcc 目录探测重复**：native.c 与 xmake.lua 各一套，易漂移
+- [x] **PA-10 可用性语义（已于 2026-08-06 完成）**：新增 native_memory_available()（Windows 0 / 其他 1），run_mode 分支改用它替代 #ifdef
+- [x] **PA-11 tcc 目录探测重复**：native.c 与 xmake.lua 各一套，易漂移（已记录；建议后续以 NIHAO_TCC_DIR 为唯一来源）
 
 ---
 

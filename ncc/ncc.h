@@ -321,6 +321,8 @@ struct CompilerState {
     int output_type;            /* 0=exec, 1=object, 2=shared, 3=static */
     int backend;                /* 0=c (default, external tcc), 1=native (libtcc in-process) */
     int run_mode;               /* -run: with native backend, compile to memory and execute */
+    int run_argc;               /* -run 透传的程序参数 */
+    char **run_argv;
     char *output_file;
     char *input_file;
     int argc;
@@ -401,8 +403,9 @@ void cgen_header(void);
 
 /* native.c - libtcc machine-code backend (-backend=native) */
 int native_backend_available(void);
-int native_compile_string(const char *csrc, const char *outfile, int verbose);
-int native_run_string(const char *csrc, int argc, char **argv, int verbose);
+int native_memory_available(void);
+int native_compile_string(const char *csrc, const char *outfile, int verbose, int debug);
+int native_run_string(const char *csrc, int argc, char **argv, int verbose, int debug);
 
 /* parser.c */
 void parser_init(CompilerState *cs);
