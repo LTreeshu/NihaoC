@@ -725,6 +725,200 @@ static int ir_expr(CompilerState *cs)
 /* ---- 语句 ---- */
 static void ir_stmt(CompilerState *cs);
 
+/* ============================================================
+ * 编译期常量求值（PB-9：static_assert / cooking）
+ * 直接递归下降求值，不生成 IR。支持：int 字面量、一元 -/!、
+ * 四则/取模、比较、&&/||、括号、enum 常量、sizeof(type)、
+ * visof(x)、可见性枚举 _const 等。
+ * ============================================================ */
+static long long ir_const_or(CompilerState *cs);
+static long long ir_const_prim(CompilerState *cs)
+{
+    TokenType t = cur_tok(cs);
+    if (t == TOK_INT_CONST) {
+        long long v = cs->parser.lex->tok_val.i;
+        next_tok(cs);
+        return v;
+    }
+    if (t == TOK_TRUE) { next_tok(cs); return 1; }
+    if (t == TOK_FALSE) { next_tok(cs); return 0; }
+    if (t == TOK_LPAREN) {
+        next_tok(cs);
+        long long v = ir_const_or(cs);
+        expect(cs, TOK_RPAREN);
+        return v;
+    }
+    if (t == TOK_SIZEOF) {
+        next_tok(cs);
+        expect(cs, TOK_LPAREN);
+        long long sz = type_size_of(cs, NULL);
+        expect(cs, TOK_RPAREN);
+        return sz < 0 ? 0 : sz;
+    }
+    if (t == TOK_VISOF) {
+        next_tok(cs);
+        expect(cs, TOK_LPAREN);
+        long long v = VIS_UNDEF;
+        if (cur_tok(cs) == TOK_IDENTIFIER) {
+            int vi = var_find(cs->parser.lex->tok_str);
+            if (vi >= 0) v = vvis[vi];
+            next_tok(cs);
+        }
+        expect(cs, TOK_RPAREN);
+        return v;
+    }
+    if (t == TOK__UNDEF || t == TOK__CONST || t == TOK__FLOW ||
+        t == TOK__STATIC || t == TOK__VAR) {
+        next_tok(cs);
+        return (t == TOK__UNDEF) ? VIS_UNDEF :
+               (t == TOK__CONST) ? VIS_CONST :
+               (t == TOK__FLOW)  ? VIS_FLOW :
+               (t == TOK__STATIC)? VIS_STATIC : VIS_VAR;
+    }
+    if (t == TOK_IDENTIFIER) {
+        const char *name = cs->parser.lex->tok_str;
+        long long eval = 0;
+        if (enum_const_find(name, &eval)) {
+            next_tok(cs);
+            return eval;
+        }
+        nihao_error(cs, "ir: constant expression: unknown identifier '%s'", name);
+        next_tok(cs);
+        return 0;
+    }
+    nihao_error(cs, "ir: constant expression: unexpected token '%s'", token_name(t));
+    next_tok(cs);
+    return 0;
+}
+
+static long long ir_const_unary(CompilerState *cs)
+{
+    TokenType t = cur_tok(cs);
+    if (t == TOK_MINUS) { next_tok(cs); return -ir_const_unary(cs); }
+    if (t == TOK_LOGICAL_NOT) { next_tok(cs); return !ir_const_unary(cs); }
+    if (t == TOK_BITWISE_NOT) { next_tok(cs); return ~ir_const_unary(cs); }
+    return ir_const_prim(cs);
+}
+
+static long long ir_const_mul(CompilerState *cs)
+{
+    long long a = ir_const_unary(cs);
+    for (;;) {
+        TokenType t = cur_tok(cs);
+        if (t == TOK_STAR) { next_tok(cs); a = a * ir_const_unary(cs); }
+        else if (t == TOK_SLASH) { next_tok(cs); long long d = ir_const_unary(cs); a = d ? a / d : 0; }
+        else if (t == TOK_PERCENT) { next_tok(cs); long long d = ir_const_unary(cs); a = d ? a % d : 0; }
+        else return a;
+    }
+}
+
+static long long ir_const_add(CompilerState *cs)
+{
+    long long a = ir_const_mul(cs);
+    for (;;) {
+        TokenType t = cur_tok(cs);
+        if (t == TOK_PLUS) { next_tok(cs); a = a + ir_const_mul(cs); }
+        else if (t == TOK_MINUS) { next_tok(cs); a = a - ir_const_mul(cs); }
+        else return a;
+    }
+}
+
+static long long ir_const_rel(CompilerState *cs)
+{
+    long long a = ir_const_add(cs);
+    for (;;) {
+        TokenType t = cur_tok(cs);
+        if (t == TOK_LT) { next_tok(cs); a = (a < ir_const_add(cs)); }
+        else if (t == TOK_GT) { next_tok(cs); a = (a > ir_const_add(cs)); }
+        else if (t == TOK_LE) { next_tok(cs); a = (a <= ir_const_add(cs)); }
+        else if (t == TOK_GE) { next_tok(cs); a = (a >= ir_const_add(cs)); }
+        else return a;
+    }
+}
+
+static long long ir_const_eq(CompilerState *cs)
+{
+    long long a = ir_const_rel(cs);
+    for (;;) {
+        TokenType t = cur_tok(cs);
+        if (t == TOK_EQ) { next_tok(cs); a = (a == ir_const_rel(cs)); }
+        else if (t == TOK_NE) { next_tok(cs); a = (a != ir_const_rel(cs)); }
+        else return a;
+    }
+}
+
+static long long ir_const_and(CompilerState *cs)
+{
+    long long a = ir_const_eq(cs);
+    while (cur_tok(cs) == TOK_LOGICAL_AND) { next_tok(cs); a = a && ir_const_eq(cs); }
+    return a;
+}
+
+static long long ir_const_or(CompilerState *cs)
+{
+    long long a = ir_const_and(cs);
+    while (cur_tok(cs) == TOK_LOGICAL_OR) { next_tok(cs); a = a || ir_const_and(cs); }
+    return a;
+}
+
+static long long ir_const_expr(CompilerState *cs)
+{
+    return ir_const_or(cs);
+}
+
+/* static_assert(expr, "msg")：编译期断言 */
+static void ir_static_assert(CompilerState *cs)
+{
+    next_tok(cs);               /* static_assert */
+    expect(cs, TOK_LPAREN);
+    long long v = ir_const_expr(cs);
+    expect(cs, TOK_COMMA);
+    const char *msg = "";
+    if (cur_tok(cs) == TOK_STRING_LITERAL) {
+        msg = cs->parser.lex->tok_str;
+        next_tok(cs);
+    }
+    expect(cs, TOK_RPAREN);
+    if (!v) {
+        nihao_error(cs, "ir: static_assert failed: %s", msg);
+    }
+}
+
+/* cooking { ... }：编译期块——执行块内 static_assert，其余 item 跳过 */
+static void ir_cooking(CompilerState *cs)
+{
+    next_tok(cs);               /* cooking */
+    expect(cs, TOK_LBRACE);
+    skip_newlines(cs);
+    while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF) {
+        if (cur_tok(cs) == TOK_IDENTIFIER &&
+            strcmp(cs->parser.lex->tok_str, "static_assert") == 0) {
+            ir_static_assert(cs);
+        } else {
+            next_tok(cs);       /* 其他编译期 item（var-decl/cooking-call）跳过 */
+        }
+        skip_newlines(cs);
+    }
+    expect(cs, TOK_RBRACE);
+    skip_newlines(cs);
+}
+
+/* align N { ... }：对齐块——IR 8 字节槽模型下无实际意义，跳过块体 */
+static void ir_align_block(CompilerState *cs)
+{
+    next_tok(cs);               /* align */
+    if (cur_tok(cs) == TOK_INT_CONST) next_tok(cs);   /* N */
+    expect(cs, TOK_LBRACE);
+    int depth = 1;
+    while (depth > 0 && cur_tok(cs) != TOK_EOF) {
+        if (cur_tok(cs) == TOK_LBRACE) depth++;
+        else if (cur_tok(cs) == TOK_RBRACE) depth--;
+        if (depth > 0) next_tok(cs);
+    }
+    expect(cs, TOK_RBRACE);
+    skip_newlines(cs);
+}
+
 /* 多变量声明：var {a = e0, b = e1, ...} Type [N]
  * 仅在前缀 var/const/static/flow 后出现（无前缀 { 是块语句）。 */
 static void ir_multi_decl(CompilerState *cs, int vis)
@@ -1438,6 +1632,9 @@ static void ir_stmt(CompilerState *cs)
             ir_emit(F, IR_LOAD, vr, addr, -1, 0);
         }
         skip_newlines(cs);
+    } else if (t == TOK_COOKING) {
+        /* 函数内编译期块：执行 static_assert，其余跳过 */
+        ir_cooking(cs);
     } else if (t == TOK_LBRACE && has_prefix) {
         /* 多变量声明：var {a=0, b=1} i8（有前缀的 { 必是多变量，非块语句） */
         ir_multi_decl(cs, decl_vis);
@@ -1656,6 +1853,12 @@ int ir_parse_file(CompilerState *cs, const char *filename)
                 nihao_error(cs, "ir: multireturn must be followed by struct { }");
                 next_tok(cs);
             }
+        } else if (cur_tok(cs) == TOK_COOKING) {
+            /* 编译期块：执行 static_assert，其余跳过 */
+            ir_cooking(cs);
+        } else if (cur_tok(cs) == TOK_ALIGN) {
+            /* 对齐块：IR 槽模型下跳过 */
+            ir_align_block(cs);
         } else {
             nihao_error(cs, "ir: unsupported top-level token '%s'",
                         token_name(cur_tok(cs)));
