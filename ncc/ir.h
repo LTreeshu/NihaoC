@@ -24,6 +24,7 @@ typedef enum {
     IR_JZ,          /* if dst == 0 goto label         */
     IR_JNZ,         /* if dst != 0 goto label         */
     IR_CALL,        /* dst = call fn(args via PARAM)  */
+    IR_CALLI,       /* dst = call *(a)（间接调用，a 存函数地址 vreg） */
     IR_PARAM,       /* argument for the next CALL     */
     IR_RET,         /* return dst (-1 = bare return)  */
     IR_LABEL,

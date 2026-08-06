@@ -393,6 +393,27 @@ static int ir_primary(CompilerState *cs)
          * malloc 是普通标识符（非关键字），参数是类型，在 LPAREN 分支特判 */
         next_tok(cs);
         if (cur_tok(cs) == TOK_LPAREN) {
+            /* 函数指针间接调用：fp(args)（name 是变量且后跟 (） */
+            int fvi = var_find(name);
+            if (fvi >= 0) {
+                next_tok(cs);
+                int nargs = 0;
+                if (cur_tok(cs) != TOK_RPAREN) {
+                    for (;;) {
+                        int a = ir_expr(cs);
+                        ir_emit(F, IR_PARAM, -1, a, -1, 0);
+                        nargs++;
+                        if (cur_tok(cs) != TOK_COMMA) break;
+                        next_tok(cs);
+                    }
+                }
+                expect(cs, TOK_RPAREN);
+                int addr = ir_new_vreg(F);
+                ir_emit(F, IR_MOV, addr, vt[fvi], -1, 0);   /* 读函数指针值 */
+                int vr = ir_new_vreg(F);
+                ir_emit(F, IR_CALLI, vr, addr, -1, nargs);
+                return vr;
+            }
             /* 函数调用：malloc 特判（参数是类型，非表达式） */
             if (strcmp(name, "malloc") == 0) {
                 next_tok(cs);
@@ -427,6 +448,15 @@ static int ir_primary(CompilerState *cs)
         }
         int vi = var_find(name);
         if (vi < 0) {
+            /* 可能是函数名引用（取函数地址，供函数指针赋值） */
+            for (int fi = 0; fi < P->fn_count; fi++) {
+                if (P->fns[fi].name && strcmp(P->fns[fi].name, name) == 0) {
+                    int vr = ir_new_vreg(F);
+                    ir_emit(F, IR_LD_ADDR, vr, -1, -1, 0);
+                    F->ins[F->ins_count - 1].sym = name;
+                    return vr;
+                }
+            }
             nihao_error(cs, "ir: undeclared variable '%s'", name);
             return ir_new_vreg(F);
         }
@@ -1194,11 +1224,23 @@ static void ir_stmt(CompilerState *cs)
             skip_newlines(cs);
             return;
         } else if (is_type_token(nt)) {
-            /* 声明: name i32 [N] = expr | = {e0, e1, ...} */
+            /* 声明: name i32 [N] = expr | = {e0, e1, ...} | name 函数指针类型 = fn */
             next_tok(cs);           /* name */
             next_tok(cs);           /* 类型 */
             int elems = 0;
-            if (cur_tok(cs) == TOK_LBRACKET) {
+            if (cur_tok(cs) == TOK_LPAREN) {
+                /* 函数指针类型 void(params) [ret]：跳过参数列表与可选返回类型 */
+                next_tok(cs);
+                int pd = 1;
+                while (pd > 0 && cur_tok(cs) != TOK_EOF) {
+                    if (cur_tok(cs) == TOK_LPAREN) pd++;
+                    else if (cur_tok(cs) == TOK_RPAREN) pd--;
+                    next_tok(cs);
+                }
+                if (is_type_token(cur_tok(cs)) || cur_tok(cs) == TOK_IDENTIFIER) {
+                    next_tok(cs);   /* 返回类型 */
+                }
+            } else if (cur_tok(cs) == TOK_LBRACKET) {
                 next_tok(cs);
                 if (cur_tok(cs) == TOK_INT_CONST) {
                     elems = (int)cs->parser.lex->tok_val.i;

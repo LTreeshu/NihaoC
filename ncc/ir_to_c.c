@@ -188,6 +188,22 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                     cb_put(&b, ");\n");
                     break;
                 }
+                case IR_CALLI: {
+                    /* 间接调用：dst = call *(a)，旧式无原型函数指针 */
+                    int nargs = (int)in->imm;
+                    int temp[64];
+                    int tc = 0;
+                    for (int k = 0; k < i && tc < 64; k++) {
+                        if (f->ins[k].op == IR_PARAM) temp[tc++] = f->ins[k].a;
+                    }
+                    int start = tc > nargs ? tc - nargs : 0;
+                    cb_put(&b, "    t%d = ((int64_t (*)())t%d)(", in->dst, in->a);
+                    for (int k = start; k < tc; k++) {
+                        cb_put(&b, "%st%d", k > start ? ", " : "", temp[k]);
+                    }
+                    cb_put(&b, ");\n");
+                    break;
+                }
                 default:
                     break;
             }

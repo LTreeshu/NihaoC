@@ -279,6 +279,40 @@ int irgen_native_emit(IrProg *p, const char *outfile)
                     nb_put(&b, "\n");
                     break;
                 }
+                case IR_CALLI: {
+                    /* 间接调用：dst = call *(a)，a 存函数地址（call *%rax） */
+                    int nargs = (int)in->imm;
+                    int temp[64];
+                    int tc = 0;
+                    for (int k = 0; k < i && tc < 64; k++) {
+                        if (f->ins[k].op == IR_PARAM) temp[tc++] = f->ins[k].a;
+                    }
+                    int start = tc > nargs ? tc - nargs : 0;
+                    int got = tc - start;
+                    const char *regs[4] = { "%rcx", "%rdx", "%r8", "%r9" };
+                    for (int k = 0; k < got && k < 4; k++) {
+                        nb_put(&b, "  movq ");
+                        slot(&b, temp[start + k]);
+                        nb_put(&b, ", %s\n", regs[k]);
+                    }
+                    if (got > 4) {
+                        for (int k = got - 1; k >= 4; k--) {
+                            nb_put(&b, "  pushq ");
+                            slot(&b, temp[start + k]);
+                            nb_put(&b, "\n");
+                        }
+                    }
+                    nb_put(&b, "  subq $32, %%rsp\n");   /* shadow space */
+                    nb_put(&b, "  movq ");
+                    slot(&b, in->a);
+                    nb_put(&b, ", %%rax\n");
+                    nb_put(&b, "  call *%%rax\n");
+                    nb_put(&b, "  addq $%d, %%rsp\n", 32 + (got > 4 ? 8 * (got - 4) : 0));
+                    nb_put(&b, "  movq %%rax, ");
+                    slot(&b, in->dst);
+                    nb_put(&b, "\n");
+                    break;
+                }
                 case IR_RET:
                     if (in->a >= 0) {
                         nb_put(&b, "  movq ");
