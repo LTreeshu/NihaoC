@@ -187,6 +187,60 @@ static int ir_elem_addr(CompilerState *cs, int base_vreg, int idx_vreg)
 }
 
 /* ---- 表达式：返回持有结果的 vreg ---- */
+
+/* 基本类型字节大小（语言语义） */
+static long long type_size_token(TokenType t)
+{
+    switch (t) {
+        case TOK_BOOL: case TOK_CHAR: case TOK_U8: case TOK_I8:   return 1;
+        case TOK_U16: case TOK_I16:                                 return 2;
+        case TOK_U32: case TOK_I32: case TOK_F32: case TOK_FX32:    return 4;
+        case TOK_U64: case TOK_I64: case TOK_F64: case TOK_FX64:    return 8;
+        case TOK_STRING:                                            return 8;  /* 指针 */
+        case TOK_VOID:                                              return 0;
+        default:                                                    return -1;
+    }
+}
+
+/* 解析类型并返回字节大小（含聚合/数组）。
+ * type_idx_out 非空时输出聚合类型索引（-1=基本类型）。失败返回 -1。 */
+static long long type_size_of(CompilerState *cs, int *type_idx_out)
+{
+    TokenType t = cur_tok(cs);
+    long long sz = type_size_token(t);
+    int ti = -1;
+    if (sz >= 0) {
+        next_tok(cs);
+    } else if (t == TOK_IDENTIFIER) {
+        ti = agg_type_find(cs->parser.lex->tok_str);
+        if (ti < 0) {
+            nihao_error(cs, "ir: unknown type '%s'", cs->parser.lex->tok_str);
+            next_tok(cs);
+            return -1;
+        }
+        next_tok(cs);
+        IrAggType *a = &agg_types[ti];
+        /* enum 4 字节；struct/union 按 8 字节槽模型 = 成员数*8（union 仍按成员数计） */
+        sz = (a->kind == 2) ? 4 : (long long)a->mcount * 8;
+    } else {
+        nihao_error(cs, "ir: expected a type name");
+        return -1;
+    }
+    /* 数组 type[N] */
+    if (cur_tok(cs) == TOK_LBRACKET) {
+        next_tok(cs);
+        long long n = 1;
+        if (cur_tok(cs) == TOK_INT_CONST) {
+            n = cs->parser.lex->tok_val.i;
+            next_tok(cs);
+        }
+        expect(cs, TOK_RBRACKET);
+        sz = sz * n;
+    }
+    if (type_idx_out) *type_idx_out = ti;
+    return sz;
+}
+
 static int ir_primary(CompilerState *cs)
 {
     TokenType t = cur_tok(cs);
@@ -284,6 +338,45 @@ static int ir_primary(CompilerState *cs)
         ir_emit(F, IR_CONST, vr, -1, -1, vv);
         return vr;
     }
+    if (t == TOK_SIZEOF || t == TOK_TYPEOF || t == TOK_ALIGNOF) {
+        /* sizeof(type/expr) / typeof（映射为 sizeof）/ alignof（IR 槽模型返回 8） */
+        next_tok(cs);
+        expect(cs, TOK_LPAREN);
+        long long sz;
+        if (is_type_token(cur_tok(cs)) || cur_tok(cs) == TOK_IDENTIFIER) {
+            sz = type_size_of(cs, NULL);
+        } else {
+            ir_expr(cs);            /* sizeof(expr)：表达式值为 8 字节 */
+            sz = 8;
+        }
+        expect(cs, TOK_RPAREN);
+        if (t == TOK_ALIGNOF) sz = 8;   /* IR 8 字节槽对齐 */
+        int vr = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, vr, -1, -1, sz);
+        return vr;
+    }
+    if (t == TOK_OFFSETOF) {
+        /* offsetof(Type, member) -> 成员字节偏移（IR 槽模型 = 成员序*8） */
+        next_tok(cs);
+        expect(cs, TOK_LPAREN);
+        int ti = -1;
+        type_size_of(cs, &ti);
+        expect(cs, TOK_COMMA);
+        long long off = -1;
+        if (cur_tok(cs) == TOK_IDENTIFIER) {
+            const char *mname = cs->parser.lex->tok_str;
+            next_tok(cs);
+            int fi = (ti >= 0) ? agg_member_find(ti, mname) : -1;
+            if (fi >= 0)
+                off = (agg_types[ti].kind == 1) ? 0 : (long long)fi * 8;  /* union 0 */
+            else
+                nihao_error(cs, "ir: offsetof: no member '%s'", mname);
+        }
+        expect(cs, TOK_RPAREN);
+        int vr = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, vr, -1, -1, off < 0 ? 0 : off);
+        return vr;
+    }
     if (t == TOK_IDENTIFIER) {
         const char *name = cs->parser.lex->tok_str;
         /* enum 常量优先（编译期值） */
@@ -296,9 +389,24 @@ static int ir_primary(CompilerState *cs)
                 return vr;
             }
         }
+        /* malloc(Type) / malloc(Type[N])：动态分配 → 调用外部 malloc(字节数)
+         * malloc 是普通标识符（非关键字），参数是类型，在 LPAREN 分支特判 */
         next_tok(cs);
         if (cur_tok(cs) == TOK_LPAREN) {
-            /* 函数调用 */
+            /* 函数调用：malloc 特判（参数是类型，非表达式） */
+            if (strcmp(name, "malloc") == 0) {
+                next_tok(cs);
+                long long sz = type_size_of(cs, NULL);
+                expect(cs, TOK_RPAREN);
+                int szv = ir_new_vreg(F);
+                ir_emit(F, IR_CONST, szv, -1, -1, sz < 0 ? 8 : sz);
+                ir_emit(F, IR_PARAM, -1, szv, -1, 0);
+                int vr = ir_new_vreg(F);
+                IrIns *in = &F->ins[ir_emit(F, IR_CALL, vr, -1, -1, 1)];
+                in->sym = "malloc";
+                in->fn = -1;
+                return vr;
+            }
             next_tok(cs);
             int nargs = 0;
             if (cur_tok(cs) != TOK_RPAREN) {
