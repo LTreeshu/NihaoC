@@ -150,13 +150,10 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                     /* C 中局部变量已声明；ALLOCA 槽即 t%d */
                     break;
                 case IR_ADDR:
-                    if (in->imm == 0) {
-                        cb_put(&b, "    t%d = (int64_t)(intptr_t)&t%d;\n",
-                               in->dst, in->a);
-                    } else {
-                        cb_put(&b, "    t%d = (int64_t)(intptr_t)&t%d + %lld*8;\n",
-                               in->dst, in->a, (long long)in->imm);
-                    }
+                    /* ALLOCA 为每个槽分配独立 vreg（t{a}, t{a+1}, ...），
+                     * imm=k 直接引用槽 vreg 的地址，不依赖 C 栈连续布局 */
+                    cb_put(&b, "    t%d = (int64_t)(intptr_t)&t%d;\n",
+                           in->dst, in->a + (int)in->imm);
                     break;
                 case IR_LOAD:
                     cb_put(&b, "    t%d = *(int64_t*)(intptr_t)t%d;\n",
