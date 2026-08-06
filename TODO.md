@@ -128,7 +128,8 @@ ncc/
 - [ ] **PB-4 struct/union/enum**：匿名嵌套、位域 u8:1、.成员访问
 - [ ] **PB-5 存储期属性**：flow/static/const/var 前缀 + visof
 - [ ] **PB-6 内置函数**：malloc / sizeof / typeof / offsetof / structof 等
-- [x] **PB-7 控制流补齐（部分完成 2026-08-06）**：for（init;cond;step，step 记录重放）、break/continue（循环栈）；剩余：do 循环、is 模式匹配、switch
+- [x] **PB-7 控制流补齐（全部完成 2026-08-06）**：for（init;cond;step，step 记录重放）、break/continue（循环栈）、do（while 别名，前测循环）、is 模式匹配（匹配循环条件值，支持 `-1` / `0..50` 闭区间；配套新增**表达式级赋值** `x += 1` / `x++` 使 `while x += 1 { is -1 {...} }` 可用）、switch（C 风格 `switch(e){ case e: ... default: ... }`，延迟绑定 JZ 布局，break 跳出 switch / continue 非法）。用例 ir_switch.nc（IR_ONLY）双后端通过。剩余：is 的标识符模式（_flow/_static，需 visof）、`is pat => stmt` 单语句形式（lexer 无 `=>` token）
+- [ ] **P1 全量 parser（parser.c）缺口：switch/case 未实现**——token.h 已定义 TOK_SWITCH/TOK_CASE 但 parser.c 无对应解析（报 unexpected token）；IR 前端已支持。其余 do/is 全量已支持
 - [ ] **PB-8 多返回值、函数指针、多变量声明** var {a=0,b=1} i8
 - [ ] **PB-9 编译期**：cooking / align / static_assert
 - [ ] **PB-10 use 跨文件模块**（当前直接跳过）

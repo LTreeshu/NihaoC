@@ -26,6 +26,9 @@ static int loop_end_label[IR_MAX_LOOP];    /* break 目标 */
 static int loop_cont_label[IR_MAX_LOOP];   /* continue 目标 */
 static int loop_depth;
 
+/* ---- is 模式匹配：当前循环条件表达式的值 vreg（while/do 设置，体内 is 匹配） ---- */
+static int is_val_vreg = -1;
+
 /* ---- 局部变量表 ---- */
 static void var_reset(void)
 {
@@ -194,6 +197,42 @@ static int ir_primary(CompilerState *cs)
             ir_emit(F, IR_LOAD, vr, addr, -1, 0);
             return vr;
         }
+        /* 赋值表达式（表达式级）：x = e / x op= e / x++ / x--，返回新值。
+         * NihaoC 支持 `while x += 1 { is -1 {...} }`——条件值供 is 匹配。 */
+        {
+            TokenType nt = cur_tok(cs);
+            IrOp op = -1;
+            int incr = 0;
+            if (nt == TOK_ASSIGN) op = -1;
+            else if (nt == TOK_PLUS_ASSIGN) op = IR_ADD;
+            else if (nt == TOK_MINUS_ASSIGN) op = IR_SUB;
+            else if (nt == TOK_STAR_ASSIGN) op = IR_MUL;
+            else if (nt == TOK_SLASH_ASSIGN) op = IR_DIV;
+            else if (nt == TOK_PERCENT_ASSIGN) op = IR_MOD;
+            else if (nt == TOK_INCREMENT) { op = IR_ADD; incr = 1; }
+            else if (nt == TOK_DECREMENT) { op = IR_SUB; incr = 1; }
+            if (nt == TOK_ASSIGN || nt == TOK_PLUS_ASSIGN || nt == TOK_MINUS_ASSIGN ||
+                nt == TOK_STAR_ASSIGN || nt == TOK_SLASH_ASSIGN || nt == TOK_PERCENT_ASSIGN ||
+                nt == TOK_INCREMENT || nt == TOK_DECREMENT) {
+                next_tok(cs);
+                int rhs;
+                if (incr) {
+                    int one = ir_new_vreg(F);
+                    ir_emit(F, IR_CONST, one, -1, -1, 1);
+                    rhs = one;
+                } else {
+                    rhs = ir_expr(cs);
+                }
+                int nv;
+                if (op < 0) nv = rhs;
+                else {
+                    nv = ir_new_vreg(F);
+                    ir_emit(F, op, nv, vt[vi], rhs, 0);
+                }
+                ir_emit(F, IR_MOV, vt[vi], nv, -1, 0);
+                return nv;
+            }
+        }
         int vr = ir_new_vreg(F);
         ir_emit(F, IR_MOV, vr, vt[vi], -1, 0);
         return vr;
@@ -324,7 +363,81 @@ static void ir_stmt(CompilerState *cs)
         }
         ir_emit(F, IR_LABEL, -1, -1, -1, 0);
         F->ins[F->ins_count - 1].label = l_end;
-    } else if (t == TOK_WHILE) {
+    } else if (t == TOK_SWITCH) {
+        /* C 风格：switch (expr) { case e: stmts... [default: stmts] }
+         * 单遍布局（延迟绑定）：
+         *   v = expr
+         *   L_c1: c1 = (v==e1); JZ c1, L_c2; stmts1; JMP L_end
+         *   L_c2: c2 = (v==e2); JZ c2, L_def/L_end; stmts2; JMP L_end
+         *   ...
+         *   L_end:
+         * break 跳出 switch（break=loop_end 压栈）；continue 非法（cont=-1 哨兵） */
+        next_tok(cs);
+        expect(cs, TOK_LPAREN);
+        int v = ir_expr(cs);
+        expect(cs, TOK_RPAREN);
+        expect(cs, TOK_LBRACE);
+        int l_end = ir_new_label(F);
+        int l_cur = ir_new_label(F);
+        int pending_jz = -1;            /* 未绑定跳转目标的 JZ 指令索引 */
+        loop_end_label[loop_depth] = l_end;
+        loop_cont_label[loop_depth] = -1;   /* switch 内 continue 非法 */
+        loop_depth++;
+        for (;;) {
+            skip_newlines(cs);
+            TokenType st = cur_tok(cs);
+            if (st == TOK_RBRACE) break;
+            if (pending_jz >= 0) {      /* 绑定上一个不匹配跳转到当前检查入口 */
+                F->ins[pending_jz].label = l_cur;
+                pending_jz = -1;
+            }
+            if (st == TOK_CASE) {
+                next_tok(cs);
+                ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+                F->ins[F->ins_count - 1].label = l_cur;
+                int e = ir_expr(cs);
+                expect(cs, TOK_COLON);
+                int c = ir_new_vreg(F);
+                ir_emit(F, IR_CMP_EQ, c, v, e, 0);
+                ir_emit(F, IR_JZ, -1, c, -1, 0);
+                pending_jz = F->ins_count - 1;
+                skip_newlines(cs);
+                while (cur_tok(cs) != TOK_CASE && cur_tok(cs) != TOK_DEFAULT &&
+                       cur_tok(cs) != TOK_RBRACE) {
+                    ir_stmt(cs);
+                    skip_newlines(cs);
+                }
+                ir_emit(F, IR_JMP, -1, -1, -1, 0);
+                F->ins[F->ins_count - 1].label = l_end;
+                l_cur = ir_new_label(F);
+            } else if (st == TOK_DEFAULT) {
+                next_tok(cs);
+                expect(cs, TOK_COLON);
+                ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+                F->ins[F->ins_count - 1].label = l_cur;
+                skip_newlines(cs);
+                while (cur_tok(cs) != TOK_RBRACE) {
+                    ir_stmt(cs);
+                    skip_newlines(cs);
+                }
+                break;
+            } else {
+                nihao_error(cs, "ir: expected 'case' or 'default' in switch");
+                next_tok(cs);
+                skip_newlines(cs);
+                continue;
+            }
+        }
+        if (pending_jz >= 0)            /* 无 default 时最后一个 case 不匹配 → 结束 */
+            F->ins[pending_jz].label = l_end;
+        expect(cs, TOK_RBRACE);
+        ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+        F->ins[F->ins_count - 1].label = l_end;
+        loop_depth--;
+    } else if (t == TOK_WHILE || t == TOK_DO) {
+        /* NihaoC: while/do 均为前测循环（do 是 while 的别名关键字）。
+         * 条件值存 is_val_vreg，体内 `is pat { }` 匹配该值。 */
+        int is_do = (t == TOK_DO);
         next_tok(cs);
         int l_loop = ir_new_label(F);
         int l_end = ir_new_label(F);
@@ -336,12 +449,16 @@ static void ir_stmt(CompilerState *cs)
         int c = ir_expr(cs);
         ir_emit(F, IR_JZ, -1, c, -1, 0);
         F->ins[F->ins_count - 1].label = l_end;
+        int save_is = is_val_vreg;
+        is_val_vreg = c;                /* 体内 is 匹配条件值 */
         ir_block(cs);
+        is_val_vreg = save_is;
         ir_emit(F, IR_JMP, -1, -1, -1, 0);
         F->ins[F->ins_count - 1].label = l_loop;
         ir_emit(F, IR_LABEL, -1, -1, -1, 0);
         F->ins[F->ins_count - 1].label = l_end;
         loop_depth--;
+        (void)is_do;
     } else if (t == TOK_FOR) {
         /* for init; cond; step { body }
          * IR 布局：cond 检查 → body → L_cont(step) → JMP cond
@@ -431,11 +548,88 @@ static void ir_stmt(CompilerState *cs)
     } else if (t == TOK_CONTINUE) {
         next_tok(cs);
         if (loop_depth > 0) {
-            ir_emit(F, IR_JMP, -1, -1, -1, 0);
-            F->ins[F->ins_count - 1].label = loop_cont_label[loop_depth - 1];
+            int tgt = loop_cont_label[loop_depth - 1];
+            if (tgt < 0) {
+                nihao_error(cs, "ir: 'continue' not allowed inside switch");
+            } else {
+                ir_emit(F, IR_JMP, -1, -1, -1, 0);
+                F->ins[F->ins_count - 1].label = tgt;
+            }
         } else {
             nihao_error(cs, "ir: 'continue' outside loop");
         }
+        skip_newlines(cs);
+    } else if (t == TOK_IS) {
+        /* is 模式匹配：is pat { ... }，匹配 while/do 循环条件值 is_val_vreg
+         * pat: <int> | -<int> | <int>..<int>（闭区间） */
+        next_tok(cs);
+        if (is_val_vreg < 0) {
+            nihao_error(cs, "ir: 'is' pattern match only valid inside while/do loop body");
+            skip_newlines(cs);
+            return;
+        }
+        int l_done = ir_new_label(F);
+        TokenType pt = cur_tok(cs);
+        if (pt == TOK_MINUS) {
+            next_tok(cs);
+            if (cur_tok(cs) == TOK_INT_CONST) {
+                long long v = -(long long)cs->parser.lex->tok_val.i;
+                next_tok(cs);
+                int k = ir_new_vreg(F);
+                ir_emit(F, IR_CONST, k, -1, -1, v);
+                int eq = ir_new_vreg(F);
+                ir_emit(F, IR_CMP_EQ, eq, is_val_vreg, k, 0);
+                ir_emit(F, IR_JZ, -1, eq, -1, 0);
+                F->ins[F->ins_count - 1].label = l_done;
+            }
+        } else if (pt == TOK_INT_CONST) {
+            long long lo = (long long)cs->parser.lex->tok_val.i;
+            next_tok(cs);
+            if (cur_tok(cs) == TOK_RANGE) {
+                next_tok(cs);
+                if (cur_tok(cs) == TOK_INT_CONST) {
+                    long long hi = (long long)cs->parser.lex->tok_val.i;
+                    next_tok(cs);
+                    int klo = ir_new_vreg(F);
+                    ir_emit(F, IR_CONST, klo, -1, -1, lo);
+                    int ge = ir_new_vreg(F);
+                    ir_emit(F, IR_CMP_GE, ge, is_val_vreg, klo, 0);
+                    ir_emit(F, IR_JZ, -1, ge, -1, 0);
+                    F->ins[F->ins_count - 1].label = l_done;
+                    int khi = ir_new_vreg(F);
+                    ir_emit(F, IR_CONST, khi, -1, -1, hi);
+                    int le = ir_new_vreg(F);
+                    ir_emit(F, IR_CMP_LE, le, is_val_vreg, khi, 0);
+                    ir_emit(F, IR_JZ, -1, le, -1, 0);
+                    F->ins[F->ins_count - 1].label = l_done;
+                }
+            } else {
+                int k = ir_new_vreg(F);
+                ir_emit(F, IR_CONST, k, -1, -1, lo);
+                int eq = ir_new_vreg(F);
+                ir_emit(F, IR_CMP_EQ, eq, is_val_vreg, k, 0);
+                ir_emit(F, IR_JZ, -1, eq, -1, 0);
+                F->ins[F->ins_count - 1].label = l_done;
+            }
+        } else if (pt == TOK_IDENTIFIER) {
+            /* _flow/_static/_const/_var/_undef 需 visof 支持（IR 子集暂无） */
+            nihao_error(cs, "ir: 'is' identifier pattern not supported yet (visof not implemented)");
+            next_tok(cs);
+            skip_newlines(cs);
+            return;
+        } else {
+            nihao_error(cs, "ir: bad 'is' pattern");
+            next_tok(cs);
+            skip_newlines(cs);
+            return;
+        }
+        if (cur_tok(cs) == TOK_LBRACE) {
+            ir_block(cs);
+        } else {
+            nihao_error(cs, "ir: 'is' pattern must be followed by a block");
+        }
+        ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+        F->ins[F->ins_count - 1].label = l_done;
         skip_newlines(cs);
     } else if (t == TOK_RETURN) {
         next_tok(cs);
