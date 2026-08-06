@@ -19,11 +19,19 @@ static int *vt;             /* 局部变量: name 序号 -> vreg（ALLOCA 槽）
 static const char **vn;
 static int *ve;             /* 数组元素数（0=标量）；数组元素槽 vreg = vt[i]+k */
 static int *vty;            /* 变量聚合类型索引（-1=标量/基本数组）；>=0 查 agg_types */
+static int *vvis;           /* 变量可见性/存储期：0=var 1=const 2=flow 3=static 4=undef */
 static int vn_count, vn_cap;
+
+/* 可见性常量（与 cgen 的 enum nihao_vis 对齐）：NH_UNDEF=0,NH_CONST,NH_FLOW,NH_STATIC,NH_VAR */
+#define VIS_VAR   0
+#define VIS_CONST 1
+#define VIS_FLOW  2
+#define VIS_STATIC 3
+#define VIS_UNDEF 4
 
 /* 前向声明（ir_agg_decl 在 var_declare/ir_expr 定义之前调用，
  * 隐式声明会导致 x64 指针参数截断，必须显式声明） */
-static int var_declare(const char *name, int elems, int type_idx);
+static int var_declare(const char *name, int elems, int type_idx, int vis);
 static int ir_expr(CompilerState *cs);
 
 /* ---- struct/union/enum 类型表 ---- */
@@ -75,11 +83,11 @@ static int agg_member_find(int ti, const char *mname)
 
 /* 聚合类型声明：name Type [= {...}|= expr]
  * struct: elems=成员数（顺序槽）；union: 共享槽 0；enum: 单槽 */
-static void ir_agg_decl(CompilerState *cs, const char *name, int ti)
+static void ir_agg_decl(CompilerState *cs, const char *name, int ti, int vis)
 {
     IrAggType *a = &agg_types[ti];
     int elems = (a->kind == 2) ? 1 : a->mcount;
-    int vi = var_declare(name, elems, ti);
+    int vi = var_declare(name, elems, ti, vis);
     if (cur_tok(cs) == TOK_ASSIGN) {
         next_tok(cs);
         if (cur_tok(cs) == TOK_LBRACE) {
@@ -124,6 +132,7 @@ static void var_reset(void)
         vn = nihao_malloc(g_cs, vn_cap * sizeof(char *));
         ve = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vty = nihao_malloc(g_cs, vn_cap * sizeof(int));
+        vvis = nihao_malloc(g_cs, vn_cap * sizeof(int));
     }
 }
 
@@ -136,8 +145,8 @@ static int var_find(const char *name)
 
 /* elems: 数组元素数 / struct 成员数（0=标量）。分配 elems 个连续 8 字节 ALLOCA 槽，
  * vt[i] 指向第 0 槽 vreg，元素/成员 k 槽 vreg = vt[i] + k。
- * type_idx: 聚合类型索引（-1=标量/基本类型）。 */
-static int var_declare(const char *name, int elems, int type_idx)
+ * type_idx: 聚合类型索引（-1=标量/基本类型）。vis: 可见性/存储期（VIS_*）。 */
+static int var_declare(const char *name, int elems, int type_idx, int vis)
 {
     int i = var_find(name);
     if (i >= 0) return i;
@@ -147,10 +156,12 @@ static int var_declare(const char *name, int elems, int type_idx)
         vn = nihao_realloc(g_cs, vn, vn_cap * sizeof(char *));
         ve = nihao_realloc(g_cs, ve, vn_cap * sizeof(int));
         vty = nihao_realloc(g_cs, vty, vn_cap * sizeof(int));
+        vvis = nihao_realloc(g_cs, vvis, vn_cap * sizeof(int));
     }
     vn[vn_count] = name;
     ve[vn_count] = elems > 0 ? elems : 0;
     vty[vn_count] = type_idx;
+    vvis[vn_count] = vis;
     int base = -1;
     for (int k = 0; k < (elems > 0 ? elems : 1); k++) {
         int vr = ir_new_vreg(F);
@@ -238,12 +249,39 @@ static int ir_primary(CompilerState *cs)
         next_tok(cs);
         return vr;
     }
+    if (t == TOK__UNDEF || t == TOK__CONST || t == TOK__FLOW ||
+        t == TOK__STATIC || t == TOK__VAR) {
+        /* 可见性枚举常量：_undef/_const/_flow/_static/_var → NH_* 值 */
+        long long vv = (t == TOK__UNDEF) ? VIS_UNDEF :
+                       (t == TOK__CONST) ? VIS_CONST :
+                       (t == TOK__FLOW)  ? VIS_FLOW :
+                       (t == TOK__STATIC)? VIS_STATIC : VIS_VAR;
+        int vr = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, vr, -1, -1, vv);
+        next_tok(cs);
+        return vr;
+    }
     if (t == TOK_STRING_LITERAL) {
         int si = ir_add_string(P, cs->parser.lex->tok_str);
         int vr = ir_new_vreg(F);
         ir_emit(F, IR_LD_ADDR, vr, -1, -1, 0);
         F->ins[F->ins_count - 1].sym = P->str_syms[si];
         next_tok(cs);
+        return vr;
+    }
+    if (t == TOK_VISOF) {
+        /* visof(x)：编译期可见性查询 → NH_* 常量（visof 是关键字 TOK_VISOF） */
+        next_tok(cs);
+        expect(cs, TOK_LPAREN);
+        int vv = VIS_UNDEF;
+        if (cur_tok(cs) == TOK_IDENTIFIER) {
+            int vi = var_find(cs->parser.lex->tok_str);
+            if (vi >= 0) vv = vvis[vi];
+            next_tok(cs);
+        }
+        expect(cs, TOK_RPAREN);
+        int vr = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, vr, -1, -1, vv);
         return vr;
     }
     if (t == TOK_IDENTIFIER) {
@@ -465,6 +503,12 @@ static void ir_block(CompilerState *cs)
 static void ir_stmt(CompilerState *cs)
 {
     TokenType t = cur_tok(cs);
+    /* 声明前缀：const/static/flow/var 记录可见性后继续解析声明 */
+    int decl_vis = VIS_VAR;
+    if (t == TOK_CONST)   { decl_vis = VIS_CONST;  next_tok(cs); t = cur_tok(cs); }
+    else if (t == TOK_FLOW)   { decl_vis = VIS_FLOW;   next_tok(cs); t = cur_tok(cs); }
+    else if (t == TOK_STATIC) { decl_vis = VIS_STATIC; next_tok(cs); t = cur_tok(cs); }
+    else if (t == TOK_VAR)    { decl_vis = VIS_VAR;    next_tok(cs); t = cur_tok(cs); }
     if (t == TOK_IF) {
         next_tok(cs);
         int c = ir_expr(cs);
@@ -591,7 +635,7 @@ static void ir_stmt(CompilerState *cs)
             next_tok(cs);
             expect(cs, TOK_ASSIGN);
             int vi = var_find(vname);
-            if (vi < 0) vi = var_declare(vname, 0, -1);
+            if (vi < 0) vi = var_declare(vname, 0, -1, VIS_VAR);
             int v = ir_expr(cs);
             ir_emit(F, IR_MOV, vt[vi], v, -1, 0);
         }
@@ -732,11 +776,50 @@ static void ir_stmt(CompilerState *cs)
                 F->ins[F->ins_count - 1].label = l_done;
             }
         } else if (pt == TOK_IDENTIFIER) {
-            /* _flow/_static/_const/_var/_undef 需 visof 支持（IR 子集暂无） */
-            nihao_error(cs, "ir: 'is' identifier pattern not supported yet (visof not implemented)");
+            /* 普通标识符模式：比较 is_val == 标识符值（如枚举/变量） */
+            const char *pat = cs->parser.lex->tok_str;
+            int pvi = var_find(pat);
+            long long cval = 0;
+            int has_c = 0;
+            if (pvi >= 0) {
+                int pv = ir_new_vreg(F);
+                ir_emit(F, IR_MOV, pv, vt[pvi], -1, 0);
+                int eq = ir_new_vreg(F);
+                ir_emit(F, IR_CMP_EQ, eq, is_val_vreg, pv, 0);
+                ir_emit(F, IR_JZ, -1, eq, -1, 0);
+                F->ins[F->ins_count - 1].label = l_done;
+                next_tok(cs);
+            } else if (enum_const_find(pat, &cval)) {
+                has_c = 1;
+                next_tok(cs);
+            } else {
+                nihao_error(cs, "ir: unknown identifier '%s' in 'is' pattern", pat);
+                next_tok(cs);
+                skip_newlines(cs);
+                return;
+            }
+            if (has_c) {
+                int k = ir_new_vreg(F);
+                ir_emit(F, IR_CONST, k, -1, -1, cval);
+                int eq = ir_new_vreg(F);
+                ir_emit(F, IR_CMP_EQ, eq, is_val_vreg, k, 0);
+                ir_emit(F, IR_JZ, -1, eq, -1, 0);
+                F->ins[F->ins_count - 1].label = l_done;
+            }
+        } else if (pt == TOK__UNDEF || pt == TOK__CONST || pt == TOK__FLOW ||
+                   pt == TOK__STATIC || pt == TOK__VAR) {
+            /* 可见性模式：is _static { }（比较 is_val == NH_STATIC） */
+            long long vv = (pt == TOK__UNDEF) ? VIS_UNDEF :
+                           (pt == TOK__CONST) ? VIS_CONST :
+                           (pt == TOK__FLOW)  ? VIS_FLOW :
+                           (pt == TOK__STATIC)? VIS_STATIC : VIS_VAR;
             next_tok(cs);
-            skip_newlines(cs);
-            return;
+            int k = ir_new_vreg(F);
+            ir_emit(F, IR_CONST, k, -1, -1, vv);
+            int eq = ir_new_vreg(F);
+            ir_emit(F, IR_CMP_EQ, eq, is_val_vreg, k, 0);
+            ir_emit(F, IR_JZ, -1, eq, -1, 0);
+            F->ins[F->ins_count - 1].label = l_done;
         } else {
             nihao_error(cs, "ir: bad 'is' pattern");
             next_tok(cs);
@@ -772,7 +855,7 @@ static void ir_stmt(CompilerState *cs)
             next_tok(cs);           /* name */
             next_tok(cs);           /* = */
             int vi = var_find(name);
-            if (vi < 0) vi = var_declare(name, 0, -1);
+            if (vi < 0) vi = var_declare(name, 0, -1, VIS_VAR);
             int vr = ir_expr(cs);
             ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             skip_newlines(cs);
@@ -875,7 +958,7 @@ static void ir_stmt(CompilerState *cs)
             int ti = agg_type_find(tname);
             if (ti >= 0) {
                 next_tok(cs);       /* 类型名 */
-                ir_agg_decl(cs, name, ti);
+                ir_agg_decl(cs, name, ti, decl_vis);
                 skip_newlines(cs);
                 return;
             }
@@ -896,7 +979,7 @@ static void ir_stmt(CompilerState *cs)
                 expect(cs, TOK_RBRACKET);
             }
             expect(cs, TOK_ASSIGN); /* 消费 =（expect 已推进） */
-            int vi = var_declare(name, elems, -1);
+            int vi = var_declare(name, elems, -1, decl_vis);
             if (cur_tok(cs) == TOK_LBRACE) {
                 /* 数组初始化列表 {e0, e1, ...}：逐个 STORE 到元素槽 */
                 next_tok(cs);
@@ -1021,7 +1104,7 @@ static void ir_func(CompilerState *cs)
             const char *pname = cs->parser.lex->tok_str;
             next_tok(cs);
             next_tok(cs);           /* 跳过类型 */
-            var_declare(pname, 0, -1);
+            var_declare(pname, 0, -1, VIS_VAR);
             nparam++;
             if (cur_tok(cs) != TOK_COMMA) break;
             next_tok(cs);

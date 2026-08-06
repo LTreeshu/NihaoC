@@ -126,8 +126,9 @@ ncc/
 - [x] **PB-3 数组（部分完成 2026-08-06）**：声明 `name i32[N]`（N 个连续 8 字节 ALLOCA 槽）、下标 `arr[i]` 读写（地址 = &arr[0] + idx*8，复用 ADDR/LOAD/STORE）、初始化列表 `= {1,2,3}` 逐个 STORE。用例 ir_array.nc（IR_ONLY）双后端通过。剩余：切片 `[a..b]`、动态数组 `[...]`/`[6...]`、按类型宽度元素（当前统一 8 字节）。
 - [ ] **P1 全量 parser（parser.c）缺口：数组初始化列表 `= {1,2,3}` 未支持**——报 unexpected token '{'；IR 前端已支持
 - [x] **PB-4 struct/union/enum（2026-08-06 完成）**：命名类型定义 `Name struct/union/enum { }`、enum 常量（`Color enum{RED,GREEN,BLUE}`，可显式赋值）、成员读写 `s.field`（含复合赋值）、union 共享槽 0、struct/union 初始化列表、聚合类型变量（成员按序分配独立槽，ADDR imm 直接引用槽 vreg）。用例 ir_struct.nc（IR_ONLY）双后端通过。剩余：匿名/内联嵌套类型、位域宽度（8 字节槽模型忽略）、成员默认值仅支持简单常量。
-- [ ] **PB-5 存储期属性**：flow/static/const/var 前缀 + visof
-- [ ] **PB-6 内置函数**：malloc / sizeof / typeof / offsetof / structof 等
+- [x] **PB-5 存储期属性 + visof（2026-08-06 完成）**：变量声明前缀 `const/static/flow/var`（记录可见性到变量表 vvis）；`visof(x)` 编译期查询（visof 是关键字 TOK_VISOF，返回 NH_* 常量 0-4）；可见性枚举常量 `_undef/_const/_flow/_static/_var` 作表达式常量；`is _flow` 等可见性模式（比较 is_val == NH_*）+ 标识符/枚举模式。用例 ir_vis.nc（IR_ONLY）双后端通过。
+- [ ] **P1 全量 parser（parser.c）缺口：visof 关键字未处理**——TOK_VISOF 无对应解析（parser.c 0 处），visof 是关键字 token 不会走 identifier 字符串比较分支 → 全量 c/native 后端不支持 visof
+- [ ] **PB-6 内置函数**：malloc / sizeof / typeof / offsetof / structof 等（sizeof/malloc 等是关键字 token）
 - [x] **PB-7 控制流补齐（全部完成 2026-08-06）**：for（init;cond;step，step 记录重放）、break/continue（循环栈）、do（while 别名，前测循环）、is 模式匹配（匹配循环条件值，支持 `-1` / `0..50` 闭区间；配套新增**表达式级赋值** `x += 1` / `x++` 使 `while x += 1 { is -1 {...} }` 可用）、switch（C 风格 `switch(e){ case e: ... default: ... }`，延迟绑定 JZ 布局，break 跳出 switch / continue 非法）。用例 ir_switch.nc（IR_ONLY）双后端通过。剩余：is 的标识符模式（_flow/_static，需 visof）、`is pat => stmt` 单语句形式（lexer 无 `=>` token）
 - [ ] **P1 全量 parser（parser.c）缺口：switch/case 未实现**——token.h 已定义 TOK_SWITCH/TOK_CASE 但 parser.c 无对应解析（报 unexpected token）；IR 前端已支持。其余 do/is 全量已支持
 - [ ] **PB-8 多返回值、函数指针、多变量声明** var {a=0,b=1} i8
