@@ -41,8 +41,8 @@ func main() {
         puts("typeof bad")
     }
 
-    /* malloc：动态分配 + 指针读写 */
-    flow p i64 = malloc(i32)
+    /* malloc：动态分配 + 指针读写（NihaoC 指针用 void 类型声明） */
+    flow p void = malloc(i32)
     *p = 42
     if *p == 42 {
         puts("malloc ok")

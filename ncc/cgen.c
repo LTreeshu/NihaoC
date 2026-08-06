@@ -209,6 +209,7 @@ void cgen_header(void)
     cgen_line("#include <string.h>");
     cgen_line("#include <stdint.h>");
     cgen_line("#include <stdbool.h>");
+    cgen_line("#include <stddef.h>");   /* offsetof 宏 */
     cgen_line("/* NihaoC visibility enum */");
     cgen_line("enum nihao_vis { NH_UNDEF=0, NH_CONST, NH_FLOW, NH_STATIC, NH_VAR };");
     cgen_blank();

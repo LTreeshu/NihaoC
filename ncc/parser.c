@@ -976,6 +976,14 @@ static void parse_is_stmt(CompilerState *cs)
         else if (strcmp(pat, "_undef") == 0)  cgen_raw(" == NH_UNDEF");
         else cgen_raw(" == %s", pat);
         next_tok(cs);
+    } else if (t == TOK__UNDEF || t == TOK__CONST || t == TOK__FLOW ||
+               t == TOK__STATIC || t == TOK__VAR) {
+        /* 可见性枚举 token：_flow 等是关键字，不走 identifier 分支（TODO P1 修复） */
+        cgen_raw(" == %s", t == TOK__UNDEF ? "NH_UNDEF" :
+                           t == TOK__CONST ? "NH_CONST" :
+                           t == TOK__FLOW  ? "NH_FLOW"  :
+                           t == TOK__STATIC? "NH_STATIC" : "NH_VAR");
+        next_tok(cs);
     } else {
         nihao_error(cs, "invalid 'is' pattern");
         next_tok(cs);
@@ -1259,13 +1267,101 @@ static void parse_if_stmt(CompilerState *cs)
  *         -> << >> -> + - -> * / % -> unary -> postfix -> primary
  * ============================================================ */
 
-static void parse_postfix(CompilerState *cs);
+static void parse_postfix(CompilerState *cs, int line);
+
+/* 关键字内置函数：sizeof/typeof/alignof/offsetof/visof。
+ * 这些是关键字 token（TOK_SIZEOF 等），identifier 分支的字符串比较
+ * 永远走不到 → 在 parse_primary 的 switch 中直接分派到这里（修复 TODO P1）。 */
+static void parse_builtin_kw(CompilerState *cs, TokenType kw)
+{
+    next_tok(cs);               /* 关键字 */
+    if (cur_tok(cs) != TOK_LPAREN) {
+        nihao_error(cs, "expected '(' after builtin");
+        return;
+    }
+    next_tok(cs);               /* ( */
+
+    if (kw == TOK_SIZEOF || kw == TOK_TYPEOF) {
+        CType tmp;
+        if (is_type_begin(cur_tok(cs)) || is_user_type_name(cs)) {
+            parse_type(cs, &tmp);
+            cgen_raw("sizeof(%s)", c_type_name(&tmp));
+        } else {
+            cgen_raw("sizeof(");
+            parse_expression(cs);
+            cgen_raw(")");
+        }
+        if (cur_tok(cs) != TOK_RPAREN) nihao_error(cs, "expected ')' in sizeof/typeof");
+        else next_tok(cs);
+        return;
+    }
+    if (kw == TOK_ALIGNOF) {
+        CType tmp;
+        parse_type(cs, &tmp);
+        cgen_raw("_Alignof(%s)", c_type_name(&tmp));
+        if (cur_tok(cs) != TOK_RPAREN) nihao_error(cs, "expected ')' in alignof");
+        else next_tok(cs);
+        return;
+    }
+    if (kw == TOK_OFFSETOF) {
+        CType tmp;
+        parse_type(cs, &tmp);
+        if (cur_tok(cs) != TOK_COMMA) {
+            nihao_error(cs, "offsetof expects (type, member)");
+        } else {
+            next_tok(cs);
+            char *member = cs->parser.lex->tok_str;
+            next_tok(cs);
+            cgen_raw("offsetof(%s, %s)", c_type_name(&tmp), member);
+        }
+        if (cur_tok(cs) != TOK_RPAREN) nihao_error(cs, "expected ')' in offsetof");
+        else next_tok(cs);
+        return;
+    }
+    if (kw == TOK_VISOF) {
+        if (cur_tok(cs) == TOK_IDENTIFIER) {
+            Symbol *s = sym_find(cs, cs->parser.lex->tok_str);
+            next_tok(cs);
+            if (s) {
+                switch (s->vis) {
+                    case VIS_CONST:  cgen_raw("NH_CONST"); break;
+                    case VIS_FLOW:   cgen_raw("NH_FLOW"); break;
+                    case VIS_STATIC: cgen_raw("NH_STATIC"); break;
+                    case VIS_UNDEF:  cgen_raw("NH_UNDEF"); break;
+                    default:         cgen_raw("NH_VAR"); break;
+                }
+            } else {
+                cgen_raw("NH_UNDEF");
+            }
+        } else {
+            nihao_error(cs, "visof expects an identifier");
+        }
+        if (cur_tok(cs) != TOK_RPAREN) nihao_error(cs, "expected ')' in visof");
+        else next_tok(cs);
+        return;
+    }
+    nihao_error(cs, "unknown builtin keyword");
+}
 
 static void parse_primary(CompilerState *cs)
 {
     TokenType tok = cur_tok(cs);
 
     switch (tok) {
+        case TOK_SIZEOF: case TOK_TYPEOF: case TOK_ALIGNOF:
+        case TOK_OFFSETOF: case TOK_VISOF:
+            /* 关键字内置函数（TODO P1 修复） */
+            parse_builtin_kw(cs, tok);
+            break;
+        case TOK__UNDEF: case TOK__CONST: case TOK__FLOW:
+        case TOK__STATIC: case TOK__VAR:
+            /* 可见性枚举常量 _undef/_const/_flow/_static/_var → NH_* */
+            cgen_raw(tok == TOK__UNDEF ? "NH_UNDEF" :
+                     tok == TOK__CONST ? "NH_CONST" :
+                     tok == TOK__FLOW  ? "NH_FLOW"  :
+                     tok == TOK__STATIC? "NH_STATIC" : "NH_VAR");
+            next_tok(cs);
+            break;
         case TOK_INT_CONST:
             cgen_raw("%lld", (long long)cs->parser.lex->tok_val.i);
             next_tok(cs);
@@ -1551,8 +1647,9 @@ static void parse_deref_chain(CompilerState *cs)
 }
 
 /* Postfix: call / .(T) deref / ?.(T) safe deref / [i] / [a..b] / .member / ++ -- */
-static void parse_postfix(CompilerState *cs)
+static void parse_postfix(CompilerState *cs, int line)
 {
+    (void)line;
     /* Lookahead: dereference chain "x.(T)" / "x?.(T)" / "x.()" */
     if (cur_tok(cs) == TOK_IDENTIFIER) {
         LexerState *lex = cs->parser.lex;
@@ -1629,47 +1726,47 @@ static void parse_postfix(CompilerState *cs)
     }
 }
 
-static void parse_unary(CompilerState *cs)
+static void parse_unary(CompilerState *cs, int line)
 {
     TokenType tok = cur_tok(cs);
     switch (tok) {
         case TOK_MINUS:
             next_tok(cs);
             cgen_raw("-");
-            parse_unary(cs);
+            parse_unary(cs, line);
             break;
         case TOK_LOGICAL_NOT:
             next_tok(cs);
             cgen_raw("!");
-            parse_unary(cs);
+            parse_unary(cs, line);
             break;
         case TOK_BITWISE_NOT:
             next_tok(cs);
             cgen_raw("~");
-            parse_unary(cs);
+            parse_unary(cs, line);
             break;
         case TOK_BITWISE_AND:
             next_tok(cs);
             cgen_raw("&");
-            parse_unary(cs);
+            parse_unary(cs, line);
             break;
         case TOK_STAR:
             next_tok(cs);
             cgen_raw("*");
-            parse_unary(cs);
+            parse_unary(cs, line);
             break;
         case TOK_INCREMENT:
             next_tok(cs);
             cgen_raw("++");
-            parse_unary(cs);
+            parse_unary(cs, line);
             break;
         case TOK_DECREMENT:
             next_tok(cs);
             cgen_raw("--");
-            parse_unary(cs);
+            parse_unary(cs, line);
             break;
         default:
-            parse_postfix(cs);
+            parse_postfix(cs, line);
             break;
     }
 }
@@ -1686,111 +1783,122 @@ static void parse_unary(CompilerState *cs)
         } \
     }
 
-static void parse_multiplicative(CompilerState *cs)
+static void parse_multiplicative(CompilerState *cs, int line)
 {
-    parse_unary(cs);
+    parse_unary(cs, line);
     for (;;) {
         TokenType t = cur_tok(cs);
-        if (t == TOK_STAR) { next_tok(cs); cgen_raw(" * "); parse_unary(cs); }
-        else if (t == TOK_SLASH) { next_tok(cs); cgen_raw(" / "); parse_unary(cs); }
-        else if (t == TOK_PERCENT) { next_tok(cs); cgen_raw(" %% "); parse_unary(cs); }
+        if (cs->parser.lex->line_num != line) break;
+        if (t == TOK_STAR) { next_tok(cs); cgen_raw(" * "); parse_unary(cs, line); }
+        else if (t == TOK_SLASH) { next_tok(cs); cgen_raw(" / "); parse_unary(cs, line); }
+        else if (t == TOK_PERCENT) { next_tok(cs); cgen_raw(" %% "); parse_unary(cs, line); }
         else break;
     }
 }
 
-static void parse_additive(CompilerState *cs)
+static void parse_additive(CompilerState *cs, int line)
 {
-    parse_multiplicative(cs);
+    parse_multiplicative(cs, line);
     for (;;) {
         TokenType t = cur_tok(cs);
-        if (t == TOK_PLUS) { next_tok(cs); cgen_raw(" + "); parse_multiplicative(cs); }
-        else if (t == TOK_MINUS) { next_tok(cs); cgen_raw(" - "); parse_multiplicative(cs); }
+        if (cs->parser.lex->line_num != line) break;
+        if (t == TOK_PLUS) { next_tok(cs); cgen_raw(" + "); parse_multiplicative(cs, line); }
+        else if (t == TOK_MINUS) { next_tok(cs); cgen_raw(" - "); parse_multiplicative(cs, line); }
         else break;
     }
 }
 
-static void parse_shift(CompilerState *cs)
+static void parse_shift(CompilerState *cs, int line)
 {
-    parse_additive(cs);
+    parse_additive(cs, line);
     for (;;) {
         TokenType t = cur_tok(cs);
-        if (t == TOK_LEFT_SHIFT) { next_tok(cs); cgen_raw(" << "); parse_additive(cs); }
-        else if (t == TOK_RIGHT_SHIFT) { next_tok(cs); cgen_raw(" >> "); parse_additive(cs); }
+        if (cs->parser.lex->line_num != line) break;
+        if (t == TOK_LEFT_SHIFT) { next_tok(cs); cgen_raw(" << "); parse_additive(cs, line); }
+        else if (t == TOK_RIGHT_SHIFT) { next_tok(cs); cgen_raw(" >> "); parse_additive(cs, line); }
         else break;
     }
 }
 
-static void parse_relational(CompilerState *cs)
+static void parse_relational(CompilerState *cs, int line)
 {
-    parse_shift(cs);
+    parse_shift(cs, line);
     for (;;) {
         TokenType t = cur_tok(cs);
-        if (t == TOK_LT) { next_tok(cs); cgen_raw(" < "); parse_shift(cs); }
-        else if (t == TOK_GT) { next_tok(cs); cgen_raw(" > "); parse_shift(cs); }
-        else if (t == TOK_LE) { next_tok(cs); cgen_raw(" <= "); parse_shift(cs); }
-        else if (t == TOK_GE) { next_tok(cs); cgen_raw(" >= "); parse_shift(cs); }
+        if (cs->parser.lex->line_num != line) break;
+        if (t == TOK_LT) { next_tok(cs); cgen_raw(" < "); parse_shift(cs, line); }
+        else if (t == TOK_GT) { next_tok(cs); cgen_raw(" > "); parse_shift(cs, line); }
+        else if (t == TOK_LE) { next_tok(cs); cgen_raw(" <= "); parse_shift(cs, line); }
+        else if (t == TOK_GE) { next_tok(cs); cgen_raw(" >= "); parse_shift(cs, line); }
         else break;
     }
 }
 
-static void parse_equality(CompilerState *cs)
+static void parse_equality(CompilerState *cs, int line)
 {
-    parse_relational(cs);
+    parse_relational(cs, line);
     for (;;) {
         TokenType t = cur_tok(cs);
-        if (t == TOK_EQ) { next_tok(cs); cgen_raw(" == "); parse_relational(cs); }
-        else if (t == TOK_NE) { next_tok(cs); cgen_raw(" != "); parse_relational(cs); }
+        if (cs->parser.lex->line_num != line) break;
+        if (t == TOK_EQ) { next_tok(cs); cgen_raw(" == "); parse_relational(cs, line); }
+        else if (t == TOK_NE) { next_tok(cs); cgen_raw(" != "); parse_relational(cs, line); }
         else break;
     }
 }
 
-static void parse_bitand(CompilerState *cs)
+static void parse_bitand(CompilerState *cs, int line)
 {
-    parse_equality(cs);
-    while (cur_tok(cs) == TOK_BITWISE_AND) { next_tok(cs); cgen_raw(" & "); parse_equality(cs); }
+    parse_equality(cs, line);
+    while (cur_tok(cs) == TOK_BITWISE_AND &&
+           cs->parser.lex->line_num == line) { next_tok(cs); cgen_raw(" & "); parse_equality(cs, line); }
 }
 
-static void parse_bitxor(CompilerState *cs)
+static void parse_bitxor(CompilerState *cs, int line)
 {
-    parse_bitand(cs);
-    while (cur_tok(cs) == TOK_BITWISE_XOR) { next_tok(cs); cgen_raw(" ^ "); parse_bitand(cs); }
+    parse_bitand(cs, line);
+    while (cur_tok(cs) == TOK_BITWISE_XOR &&
+           cs->parser.lex->line_num == line) { next_tok(cs); cgen_raw(" ^ "); parse_bitand(cs, line); }
 }
 
-static void parse_bitor(CompilerState *cs)
+static void parse_bitor(CompilerState *cs, int line)
 {
-    parse_bitxor(cs);
-    while (cur_tok(cs) == TOK_BITWISE_OR) { next_tok(cs); cgen_raw(" | "); parse_bitxor(cs); }
+    parse_bitxor(cs, line);
+    while (cur_tok(cs) == TOK_BITWISE_OR &&
+           cs->parser.lex->line_num == line) { next_tok(cs); cgen_raw(" | "); parse_bitxor(cs, line); }
 }
 
-static void parse_logical_and(CompilerState *cs)
+static void parse_logical_and(CompilerState *cs, int line)
 {
-    parse_bitor(cs);
-    while (cur_tok(cs) == TOK_LOGICAL_AND) { next_tok(cs); cgen_raw(" && "); parse_bitor(cs); }
+    parse_bitor(cs, line);
+    while (cur_tok(cs) == TOK_LOGICAL_AND &&
+           cs->parser.lex->line_num == line) { next_tok(cs); cgen_raw(" && "); parse_bitor(cs, line); }
 }
 
-static void parse_logical_or(CompilerState *cs)
+static void parse_logical_or(CompilerState *cs, int line)
 {
-    parse_logical_and(cs);
-    while (cur_tok(cs) == TOK_LOGICAL_OR) { next_tok(cs); cgen_raw(" || "); parse_logical_and(cs); }
+    parse_logical_and(cs, line);
+    while (cur_tok(cs) == TOK_LOGICAL_OR &&
+           cs->parser.lex->line_num == line) { next_tok(cs); cgen_raw(" || "); parse_logical_and(cs, line); }
 }
 
-static void parse_ternary(CompilerState *cs)
+static void parse_ternary(CompilerState *cs, int line)
 {
-    parse_logical_or(cs);
+    parse_logical_or(cs, line);
     if (cur_tok(cs) == TOK_QUESTION) {
         next_tok(cs);
         cgen_raw(" ? ");
-        parse_expression(cs);
+        parse_ternary(cs, line);
         expect(cs, TOK_COLON);
         cgen_raw(" : ");
-        parse_ternary(cs);
+        parse_ternary(cs, line);
     }
 }
 
-static void parse_assign(CompilerState *cs)
+static void parse_assign(CompilerState *cs, int line)
 {
-    parse_ternary(cs);
+    parse_ternary(cs, line);
     TokenType t = cur_tok(cs);
+    if (cs->parser.lex->line_num != line) return;
     switch (t) {
         case TOK_ASSIGN:
         case TOK_SAFE_ASSIGN: {
@@ -1815,7 +1923,7 @@ static void parse_assign(CompilerState *cs)
                     }
                 }
             }
-            parse_assign(cs);
+            parse_assign(cs, line);
             break;
         }
         case TOK_PLUS_ASSIGN:
@@ -1834,7 +1942,7 @@ static void parse_assign(CompilerState *cs)
             }
             next_tok(cs);
             cgen_raw(" %s ", token_name(t));
-            parse_assign(cs);
+            parse_assign(cs, line);
             break;
         }
         default:
@@ -1844,7 +1952,8 @@ static void parse_assign(CompilerState *cs)
 
 void parse_expression(CompilerState *cs)
 {
-    parse_assign(cs);
+    /* 换行即语句边界：binop 链各层按行号停止（函数体内 lexer 不产生 NEWLINE） */
+    parse_assign(cs, cs->parser.lex->line_num);
 }
 
 
