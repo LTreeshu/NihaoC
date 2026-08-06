@@ -587,14 +587,133 @@ static int ir_cmp(CompilerState *cs, int line)
     }
 }
 
+/* a && b：短路（a==0 跳过 b 求值）；结果 = b != 0 */
+static int ir_logical_and(CompilerState *cs, int line)
+{
+    int a = ir_cmp(cs, line);
+    for (;;) {
+        TokenType t = cur_tok(cs);
+        if (cs->parser.lex->last_line_num != line) return a;
+        if (t != TOK_LOGICAL_AND) return a;
+        next_tok(cs);
+        int b = ir_cmp(cs, line);
+        int res = ir_new_vreg(F);
+        int l_false = ir_new_label(F);
+        int l_done = ir_new_label(F);
+        ir_emit(F, IR_JZ, -1, a, -1, 0);
+        F->ins[F->ins_count - 1].label = l_false;
+        int zero = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, zero, -1, -1, 0);
+        int nb = ir_new_vreg(F);
+        ir_emit(F, IR_CMP_NE, nb, b, zero, 0);
+        ir_emit(F, IR_MOV, res, nb, -1, 0);
+        ir_emit(F, IR_JMP, -1, -1, -1, 0);
+        F->ins[F->ins_count - 1].label = l_done;
+        ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+        F->ins[F->ins_count - 1].label = l_false;
+        ir_emit(F, IR_CONST, res, -1, -1, 0);
+        ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+        F->ins[F->ins_count - 1].label = l_done;
+        a = res;
+    }
+}
+
+/* a || b：短路（a!=0 跳过 b 求值）；结果 = b != 0 */
+static int ir_logical_or(CompilerState *cs, int line)
+{
+    int a = ir_logical_and(cs, line);
+    for (;;) {
+        TokenType t = cur_tok(cs);
+        if (cs->parser.lex->last_line_num != line) return a;
+        if (t != TOK_LOGICAL_OR) return a;
+        next_tok(cs);
+        int b = ir_logical_and(cs, line);
+        int res = ir_new_vreg(F);
+        int l_true = ir_new_label(F);
+        int l_done = ir_new_label(F);
+        ir_emit(F, IR_JNZ, -1, a, -1, 0);
+        F->ins[F->ins_count - 1].label = l_true;
+        int zero = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, zero, -1, -1, 0);
+        int nb = ir_new_vreg(F);
+        ir_emit(F, IR_CMP_NE, nb, b, zero, 0);
+        ir_emit(F, IR_MOV, res, nb, -1, 0);
+        ir_emit(F, IR_JMP, -1, -1, -1, 0);
+        F->ins[F->ins_count - 1].label = l_done;
+        ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+        F->ins[F->ins_count - 1].label = l_true;
+        ir_emit(F, IR_CONST, res, -1, -1, 1);
+        ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+        F->ins[F->ins_count - 1].label = l_done;
+        a = res;
+    }
+}
+
 static int ir_expr(CompilerState *cs)
 {
     /* 表达式首 token 的行号 = 语句起始行，用于块内换行边界判定 */
-    return ir_cmp(cs, cs->parser.lex->last_line_num);
+    return ir_logical_or(cs, cs->parser.lex->last_line_num);
 }
 
 /* ---- 语句 ---- */
 static void ir_stmt(CompilerState *cs);
+
+/* 多变量声明：var {a = e0, b = e1, ...} Type [N]
+ * 仅在前缀 var/const/static/flow 后出现（无前缀 { 是块语句）。 */
+static void ir_multi_decl(CompilerState *cs, int vis)
+{
+    next_tok(cs);   /* { */
+    const char *mnames[32];
+    int minits[32];
+    int mc = 0;
+    skip_newlines(cs);
+    while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF && mc < 32) {
+        if (cur_tok(cs) != TOK_IDENTIFIER) {
+            nihao_error(cs, "ir: expected variable name in multi-declaration");
+            next_tok(cs);
+            continue;
+        }
+        mnames[mc] = cs->parser.lex->tok_str;
+        next_tok(cs);
+        expect(cs, TOK_ASSIGN);
+        minits[mc] = ir_expr(cs);
+        mc++;
+        if (cur_tok(cs) != TOK_COMMA) break;
+        next_tok(cs);
+        skip_newlines(cs);
+    }
+    expect(cs, TOK_RBRACE);
+    /* 类型：基本类型或聚合类型，可带 [N] 数组 */
+    int elems = 0, ti = -1;
+    if (is_type_token(cur_tok(cs))) {
+        next_tok(cs);
+    } else if (cur_tok(cs) == TOK_IDENTIFIER) {
+        ti = agg_type_find(cs->parser.lex->tok_str);
+        if (ti >= 0) {
+            next_tok(cs);
+            elems = (agg_types[ti].kind == 2) ? 1 : agg_types[ti].mcount;
+        } else {
+            nihao_error(cs, "ir: unknown type '%s' in multi-declaration",
+                        cs->parser.lex->tok_str);
+            next_tok(cs);
+        }
+    } else {
+        nihao_error(cs, "ir: expected type after multi-variable declaration");
+    }
+    if (cur_tok(cs) == TOK_LBRACKET) {
+        next_tok(cs);
+        if (cur_tok(cs) == TOK_INT_CONST) {
+            elems = (int)cs->parser.lex->tok_val.i;
+            next_tok(cs);
+        }
+        expect(cs, TOK_RBRACKET);
+    }
+    for (int k = 0; k < mc; k++) {
+        int vi = var_declare(mnames[k], elems, ti, vis);
+        ir_emit(F, IR_MOV, vt[vi], minits[k], -1, 0);
+    }
+    skip_newlines(cs);
+}
 
 static void ir_block(CompilerState *cs)
 {
@@ -613,10 +732,11 @@ static void ir_stmt(CompilerState *cs)
     TokenType t = cur_tok(cs);
     /* 声明前缀：const/static/flow/var 记录可见性后继续解析声明 */
     int decl_vis = VIS_VAR;
-    if (t == TOK_CONST)   { decl_vis = VIS_CONST;  next_tok(cs); t = cur_tok(cs); }
-    else if (t == TOK_FLOW)   { decl_vis = VIS_FLOW;   next_tok(cs); t = cur_tok(cs); }
-    else if (t == TOK_STATIC) { decl_vis = VIS_STATIC; next_tok(cs); t = cur_tok(cs); }
-    else if (t == TOK_VAR)    { decl_vis = VIS_VAR;    next_tok(cs); t = cur_tok(cs); }
+    int has_prefix = 0;
+    if (t == TOK_CONST)   { decl_vis = VIS_CONST;  has_prefix = 1; next_tok(cs); t = cur_tok(cs); }
+    else if (t == TOK_FLOW)   { decl_vis = VIS_FLOW;   has_prefix = 1; next_tok(cs); t = cur_tok(cs); }
+    else if (t == TOK_STATIC) { decl_vis = VIS_STATIC; has_prefix = 1; next_tok(cs); t = cur_tok(cs); }
+    else if (t == TOK_VAR)    { decl_vis = VIS_VAR;    has_prefix = 1; next_tok(cs); t = cur_tok(cs); }
     if (t == TOK_IF) {
         next_tok(cs);
         int c = ir_expr(cs);
@@ -1183,6 +1303,9 @@ static void ir_stmt(CompilerState *cs)
             ir_emit(F, IR_LOAD, vr, addr, -1, 0);
         }
         skip_newlines(cs);
+    } else if (t == TOK_LBRACE && has_prefix) {
+        /* 多变量声明：var {a=0, b=1} i8（有前缀的 { 必是多变量，非块语句） */
+        ir_multi_decl(cs, decl_vis);
     } else if (t == TOK_LBRACE) {
         ir_block(cs);
     } else {
