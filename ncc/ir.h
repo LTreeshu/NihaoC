@@ -49,6 +49,7 @@ typedef struct {
 typedef struct {
     char *name;
     int is_main;
+    int is_mr;          /* multireturn 函数：返回聚合值（隐藏 out-param 缓冲） */
     int param_count;
     int vreg_count;     /* 函数内使用的最大 vreg + 1 */
     int label_count;
