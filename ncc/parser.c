@@ -1023,8 +1023,9 @@ void parse_statement(CompilerState *cs)
             parse_expression(cs);
             cgen_raw(")");
             cgen_line(";");
-            parse_statement(cs);           /* body */
+            /* 条件检查必须在 body 前（修复 do-while 语义 bug） */
             cgen_line("if (!__is_val) break;");
+            parse_statement(cs);           /* body */
             cgen_dedent();
             cgen_line("}");
             cgen_dedent();

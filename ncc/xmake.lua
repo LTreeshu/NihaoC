@@ -170,6 +170,9 @@ task("test")
         end
 
         local total_failed = 0
+        -- 后端一致性防线：无 .expect 的用例，收集各后端输出，
+        -- 全部后端运行完后比对一致性（避免"期望缺失直接 PASS"的测试盲区）
+        local consistency = {}
         for _, b in ipairs(list) do
             local passed, failed, skipped = 0, 0, 0
             local is_ir = (b == "ir-c" or b == "ir-native")
@@ -247,8 +250,9 @@ task("test")
                         failed = failed + 1
                     end
                 else
-                    cprint("${green}[PASS] pos/%s.nc", stem)
-                    passed = passed + 1
+                    -- 无 .expect：不直接 PASS——收集输出交给后端一致性检查
+                    consistency[stem] = consistency[stem] or {}
+                    consistency[stem][b] = out
                 end
                 ::continue_pos::
             end
@@ -308,6 +312,45 @@ task("test")
             cprint("${yellow}\n== [%s] %d passed, %d failed, %d skipped ==",
                    b, passed, failed, skipped)
             total_failed = total_failed + failed
+        end
+
+        -- 后端一致性检查：无 .expect 的用例必须在多个后端输出一致
+        local ccount = 0
+        for _k, _v in pairs(consistency or {}) do ccount = ccount + 1 end
+        if ccount > 0 then
+            cprint("${cyan}\n>>> cross-backend consistency")
+            for stem, outs in pairs(consistency) do
+                local nb = 0
+                local ref = nil
+                local ref_be = nil
+                local bad = nil
+                for _, be2 in ipairs(backends) do
+                    local o = outs[be2]
+                    if o ~= nil then
+                        if nb == 0 then
+                            ref = o; ref_be = be2
+                        elseif o ~= ref then
+                            bad = bad or {}
+                            bad[#bad + 1] = be2
+                        end
+                        nb = nb + 1
+                    end
+                end
+                if nb >= 2 and bad then
+                    cprint("${red}[FAIL] pos/%s.nc: inconsistent across backends", stem)
+                    for _, be2 in ipairs(bad) do
+                        cprint("  %s (%s): %s", be2, ref_be,
+                               table.concat(norm(outs[be2]), "|"):gsub("%s+$", ""))
+                    end
+                    cprint("  ref (%s): %s", ref_be,
+                           table.concat(norm(ref), "|"):gsub("%s+$", ""))
+                    total_failed = total_failed + 1
+                elseif nb >= 2 then
+                    cprint("${green}[PASS] pos/%s.nc (consistent, %d backends)", stem, nb)
+                else
+                    cprint("${dim}[NOTE] pos/%s.nc (single backend, no consistency check)", stem)
+                end
+            end
         end
         if total_failed > 0 then
             os.exit(1)
