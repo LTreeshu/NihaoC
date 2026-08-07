@@ -176,7 +176,24 @@ static void ir_agg_decl(CompilerState *cs, const char *name, int ti, int vis)
             expect(cs, TOK_RBRACE);
         } else {
             int v = ir_expr(cs);
-            ir_emit(F, IR_MOV, vt[vi], v, -1, 0);
+            /* sret 调用（struct 返回函数）：缓冲地址是"值"（last_mr_buf），
+             * 缓冲值 + k*8 → LOAD → 聚合槽 k（与 multireturn 声明同逻辑） */
+            if (elems > 1 && last_mr_buf >= 0) {
+                int base = ir_new_vreg(F);
+                ir_emit(F, IR_MOV, base, last_mr_buf, -1, 0);
+                for (int k = 0; k < elems; k++) {
+                    int off = ir_new_vreg(F);
+                    ir_emit(F, IR_CONST, off, -1, -1, (long long)k * 8);
+                    int addr = ir_new_vreg(F);
+                    ir_emit(F, IR_ADD, addr, base, off, 0);
+                    int lv = ir_new_vreg(F);
+                    ir_emit(F, IR_LOAD, lv, addr, -1, 0);
+                    ir_emit(F, IR_MOV, vt[vi] + k, lv, -1, 0);
+                }
+                last_mr_buf = -1;
+            } else {
+                ir_emit(F, IR_MOV, vt[vi], v, -1, 0);
+            }
         }
     }
 }
@@ -211,6 +228,17 @@ static int var_find(const char *name)
     for (int i = 0; i < vn_count; i++)
         if (strcmp(vn[i], name) == 0) return i;
     return -1;
+}
+
+/* 按名字查用户函数（PB-16：调用点查参数聚合签名）；无返回 NULL */
+static IrFn *ir_find_fn(const char *name)
+{
+    for (int fi = 0; fi < P->fn_count; fi++) {
+        if (P->fns[fi].name && strcmp(P->fns[fi].name, name) == 0) {
+            return &P->fns[fi];
+        }
+    }
+    return NULL;
 }
 
 /* elems: 数组元素数 / struct 成员数（0=标量）。分配 elems 个连续 8 字节 ALLOCA 槽，
@@ -581,12 +609,58 @@ static int ir_primary(CompilerState *cs)
                 return vr;
             }
             next_tok(cs);
-            int nargs = 0;
-            int args[64];
+            int argn = 0;
+            int arglist[64];
+            /* PB-16 struct 参数：按展开后参数索引查目标函数聚合签名 */
+            IrFn *tfn = ir_find_fn(name);
+            int argi = (tfn && tfn->is_mr) ? 1 : 0;   /* mr 时 0 是 _mr_ret 缓冲 */
             if (cur_tok(cs) != TOK_RPAREN) {
                 for (;;) {
-                    int a = ir_expr(cs);
-                    args[nargs++] = a;
+                    int pti = (tfn && argi >= 0 && argi < 32) ? tfn->param_agg_ti[argi] : -1;
+                    if (pti >= 0 && cur_tok(cs) == TOK_IDENTIFIER) {
+                        /* 聚合实参：struct 变量（成员槽值）或 mr 调用（缓冲 LOAD） */
+                        const char *an = cs->parser.lex->tok_str;
+                        int avi = var_find(an);
+                        LexerState *lx = cs->parser.lex;
+                        lx->peek_valid = 0;
+                        lexer_peek(lx);
+                        TokenType nxt = lx->peek_tok;
+                        lx->peek_valid = 0;
+                        if (avi >= 0 && vty[avi] >= 0 && nxt != TOK_LPAREN) {
+                            next_tok(cs);
+                            int mc = agg_types[vty[avi]].mcount;
+                            for (int k = 0; k < mc && argn < 64; k++) {
+                                arglist[argn++] = vt[avi] + k;
+                            }
+                        } else {
+                            /* mr 调用（struct 返回）等：ir_expr 解析 → 从缓冲 LOAD 成员 */
+                            int a = ir_expr(cs);
+                            (void)a;
+                            if (last_mr_buf >= 0) {
+                                int mc = agg_types[pti].mcount;
+                                int base = ir_new_vreg(F);
+                                ir_emit(F, IR_MOV, base, last_mr_buf, -1, 0);
+                                for (int k = 0; k < mc && argn < 64; k++) {
+                                    int off = ir_new_vreg(F);
+                                    ir_emit(F, IR_CONST, off, -1, -1, (long long)k * 8);
+                                    int addr = ir_new_vreg(F);
+                                    ir_emit(F, IR_ADD, addr, base, off, 0);
+                                    int lv = ir_new_vreg(F);
+                                    ir_emit(F, IR_LOAD, lv, addr, -1, 0);
+                                    arglist[argn++] = lv;
+                                }
+                                last_mr_buf = -1;
+                            } else {
+                                nihao_error(cs, "ir: struct argument must be a struct variable or struct-returning call");
+                                if (argn < 64) arglist[argn++] = ir_new_vreg(F);
+                            }
+                        }
+                        argi += agg_types[pti].mcount;
+                    } else {
+                        int a = ir_expr(cs);
+                        if (argn < 64) arglist[argn++] = a;
+                        argi++;
+                    }
                     if (cur_tok(cs) != TOK_COMMA) break;
                     next_tok(cs);
                 }
@@ -595,15 +669,18 @@ static int ir_primary(CompilerState *cs)
             /* multireturn 调用：目标函数是 mr → malloc 缓冲 → PARAM 缓冲+参数 →
              * CALL → 返回缓冲地址（调用方拷贝到聚合槽） */
             int is_mr_call = 0;
+            int mr_agg_ti = -1;
             for (int fi = 0; fi < P->fn_count; fi++) {
                 if (P->fns[fi].is_mr && P->fns[fi].name &&
                     strcmp(P->fns[fi].name, name) == 0) {
                     is_mr_call = 1;
+                    mr_agg_ti = P->fns[fi].ret_agg_ti;
                     break;
                 }
             }
             if (is_mr_call) {
-                int ti = agg_type_find("__mr");
+                /* 缓冲大小 = 返回聚合类型成员数（struct 返回用 ret_agg_ti） */
+                int ti = (mr_agg_ti >= 0) ? mr_agg_ti : agg_type_find("__mr");
                 long long sz = (ti >= 0) ? (long long)agg_types[ti].mcount * 8 : 8;
                 int szv = ir_new_vreg(F);
                 ir_emit(F, IR_CONST, szv, -1, -1, sz);
@@ -614,22 +691,22 @@ static int ir_primary(CompilerState *cs)
                 mi->fn = -1;
                 /* 缓冲指针必须是第一个 PARAM（对应被调 _mr_ret） */
                 ir_emit(F, IR_PARAM, -1, buf, -1, 0);
-                for (int k = 0; k < nargs; k++) {
-                    ir_emit(F, IR_PARAM, -1, args[k], -1, 0);
+                for (int k = 0; k < argn; k++) {
+                    ir_emit(F, IR_PARAM, -1, arglist[k], -1, 0);
                 }
                 int vr = ir_new_vreg(F);
-                IrIns *ci = &F->ins[ir_emit(F, IR_CALL, vr, -1, -1, nargs + 1)];
+                IrIns *ci = &F->ins[ir_emit(F, IR_CALL, vr, -1, -1, argn + 1)];
                 ci->sym = name;
                 ci->fn = -1;
                 last_mr_buf = buf;      /* 调用方据此拷贝 */
                 return vr;
             }
             /* 非 mr 普通调用：按序发射 PARAM + CALL */
-            for (int k = 0; k < nargs; k++) {
-                ir_emit(F, IR_PARAM, -1, args[k], -1, 0);
+            for (int k = 0; k < argn; k++) {
+                ir_emit(F, IR_PARAM, -1, arglist[k], -1, 0);
             }
             int vr = ir_new_vreg(F);
-            IrIns *in = &F->ins[ir_emit(F, IR_CALL, vr, -1, -1, nargs)];
+            IrIns *in = &F->ins[ir_emit(F, IR_CALL, vr, -1, -1, argn)];
             in->sym = name;         /* 外部符号（puts 等） */
             in->fn = -1;
             /* PB-浮点 ABI：目标函数浮点返回 → 标记 dst vreg（后端按此存储 xmm0/fa0） */
@@ -1560,6 +1637,31 @@ static void ir_stmt(CompilerState *cs)
                 expect(cs, TOK_RBRACE);
             }
             ir_emit(F, IR_RET, -1, -1, -1, 0);   /* bare return */
+        } else if (cur_tok(cs) == TOK_IDENTIFIER && F->is_mr) {
+            /* return p（聚合变量）：逐字段 STORE 到 *_mr_ret 缓冲（PB-16） */
+            const char *rname = cs->parser.lex->tok_str;
+            int rvi = var_find(rname);
+            if (rvi >= 0 && vty[rvi] >= 0) {
+                int retvi = var_find("_mr_ret");
+                if (retvi >= 0) {
+                    next_tok(cs);
+                    int mcount = agg_types[vty[rvi]].mcount;
+                    for (int k = 0; k < mcount; k++) {
+                        int off = ir_new_vreg(F);
+                        ir_emit(F, IR_CONST, off, -1, -1, (long long)k * 8);
+                        int addr = ir_new_vreg(F);
+                        ir_emit(F, IR_ADD, addr, vt[retvi], off, 0);
+                        ir_emit(F, IR_STORE, -1, addr, vt[rvi] + k, 0);
+                    }
+                    ir_emit(F, IR_RET, -1, -1, -1, 0);
+                } else {
+                    int vr = ir_expr(cs);
+                    ir_emit(F, IR_RET, -1, vr, -1, 0);
+                }
+            } else {
+                int vr = ir_expr(cs);
+                ir_emit(F, IR_RET, -1, vr, -1, 0);
+            }
         } else {
             int vr = ir_expr(cs);
             ir_emit(F, IR_RET, -1, vr, -1, 0);
@@ -1911,6 +2013,8 @@ static void ir_func(CompilerState *cs)
     int nparam = 0;
     const char *pnames[32];
     int ptypes[32] = {0};   /* 参数类型编码：0=i64 1=double 2=i8 3=i16 4=i32 5=u8 6=u16 7=u32 */
+    int ptype_ti[32];       /* 参数聚合类型索引（PB-16 struct 参数；-1=标量） */
+    for (int _i = 0; _i < 32; _i++) ptype_ti[_i] = -1;
     if (cur_tok(cs) != TOK_RPAREN) {
         for (;;) {
             /* param: name i32（先收集，注册延后——mr 隐藏参数须在头部） */
@@ -1924,6 +2028,13 @@ static void ir_func(CompilerState *cs)
                 (pt == TOK_I16) ? 3 : (pt == TOK_I32) ? 4 :
                 (pt == TOK_U8)  ? 5 : (pt == TOK_U16) ? 6 :
                 (pt == TOK_U32) ? 7 : 0;
+            if (pt == TOK_IDENTIFIER) {
+                int ti = agg_type_find(cs->parser.lex->tok_str);
+                if (ti >= 0) {
+                    ptype_ti[nparam - 1] = ti;   /* struct 参数（按值展开） */
+                    ptypes[nparam - 1] = 0;
+                }
+            }
             next_tok(cs);           /* 跳过类型 */
             if (cur_tok(cs) != TOK_COMMA) break;
             next_tok(cs);
@@ -1935,25 +2046,54 @@ static void ir_func(CompilerState *cs)
         F->is_mr = 1;           /* multireturn 函数：返回聚合值 */
         next_tok(cs);
     } else if (cur_tok(cs) != TOK_LBRACE) {
+        /* struct 返回 = sret：具名聚合类型 → 复用 multireturn 隐藏 out-param
+         * 机制（返回聚合值经 _mr_ret 缓冲指针，调用方 malloc+拷贝） */
+        if (cur_tok(cs) == TOK_IDENTIFIER) {
+            int rti = agg_type_find(cs->parser.lex->tok_str);
+            if (rti >= 0) {
+                F->is_mr = 1;
+                F->ret_agg_ti = rti;
+            }
+        }
         F->ret_is_double =
             (cur_tok(cs) == TOK_F32 || cur_tok(cs) == TOK_F64) ? 1 : 0;
         next_tok(cs);           /* 其他返回类型 */
     }
-    /* 注册变量：mr 时 _mr_ret 必须是第 0 槽（调用约定：缓冲指针为第一参数） */
+    /* 注册变量：mr 时 _mr_ret 必须是第 0 槽（调用约定：缓冲指针为第一参数）。
+     * PB-16 struct 参数按值展开：聚合参数占 mcount 个虚拟参数槽（成员槽 vreg
+     * 连续，prologue 按展开索引入槽） */
+    int vpi = 0;
     if (F->is_mr) {
         var_declare("_mr_ret", 0, -1, VIS_VAR);
+        F->param_agg_ti[0] = -1;
+        vpi = 1;
     }
     for (int pi = 0; pi < nparam; pi++) {
-        int vi = var_declare(pnames[pi], 0, -1, VIS_VAR);
-        F->param_types[pi + (F->is_mr ? 1 : 0)] = ptypes[pi];
-        if (ptypes[pi] == 1) {
-            vtype[vi] = 1;          /* 浮点参数 → double 槽 */
-            ir_set_double(vt[vi]);
+        int ti = ptype_ti[pi];
+        if (ti >= 0) {
+            int mcount = agg_types[ti].mcount;
+            int vi = var_declare(pnames[pi], mcount, ti, VIS_VAR);
+            for (int k = 0; k < mcount; k++) {
+                F->param_types[vpi + k] = 0;   /* 成员统一 8 字节槽 */
+            }
+            F->param_agg_ti[vpi] = ti;         /* 记录聚合起始（其余展开槽 -1） */
+            for (int k = 1; k < mcount; k++) F->param_agg_ti[vpi + k] = -1;
+            (void)vi;
+            vpi += mcount;
         } else {
-            vtype[vi] = ptypes[pi]; /* 窄整数参数记录类型（值已符号扩展，入槽无需截断） */
+            int vi = var_declare(pnames[pi], 0, -1, VIS_VAR);
+            F->param_types[vpi] = ptypes[pi];
+            F->param_agg_ti[vpi] = -1;
+            if (ptypes[pi] == 1) {
+                vtype[vi] = 1;          /* 浮点参数 → double 槽 */
+                ir_set_double(vt[vi]);
+            } else {
+                vtype[vi] = ptypes[pi]; /* 窄整数参数记录类型（值已符号扩展，入槽无需截断） */
+            }
+            vpi++;
         }
     }
-    F->param_count = nparam + (F->is_mr ? 1 : 0);
+    F->param_count = vpi;
     ir_block(cs);
     ir_fn_end(F);
 }

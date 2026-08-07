@@ -64,7 +64,9 @@ typedef struct {
     IrIns *ins;
     int *vreg_type;     /* vreg -> 0=int 1=double（随 vreg_count 动态增长） */
     int ret_is_double;  /* 返回值为 f64/f32（PB-浮点 ABI） */
+    int ret_agg_ti;     /* 返回聚合类型索引（struct 返回 = sret；-1=非聚合） */
     int param_types[32];/* 参数类型 0=int 1=double（param_count <= 32，与 pnames 对齐） */
+    int param_agg_ti[32];/* 参数聚合类型（struct 参数按值展开；-1=标量；按展开后索引） */
 } IrFn;
 
 typedef struct {

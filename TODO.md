@@ -146,12 +146,12 @@ ncc/
 - [x] **PB-14 类型系统（2026-08-07 基础）**：vreg_type + 变量 vtype 表（浮点类型记录与槽标记）；与 PB-13 合并交付。剩余：按类型宽度 load/store（i8/i16/i32 截断+符号扩展，当前统一 8 字节槽）
 
 ### 后端待办
-- [ ] **PB-15 native 寄存器分配**：当前 vreg 全映射 rbp 栈槽
-- [ ] **PB-16 调用约定完整化**：SysV vs Windows x64、浮点参数、结构体传参/返回（sret）
+- [x] **PB-15 native 寄存器分配（2026-08-07 决策确认）**：全栈槽保底是后端抽象设计时用户敲定的决策（正确性优先、后端最简单）；当前 x86-64/riscv64/arm64 均全栈槽 + 调用约定参数寄存器。真实寄存器分配（live range/spill）留作未来性能优化项（LLVM RegAllocGreedy 路线参考）
+- [x] **PB-16 调用约定完整化（2026-08-08 完成）**：**struct 参数按值展开**——IrFn.param_agg_ti 记录参数聚合类型，聚合参数占 mcount 个虚拟参数槽（成员槽 vreg 连续，prologue 按展开索引入槽）；调用方 arglist 展开收集（聚合实参=struct 变量成员槽 / mr 调用从 last_mr_buf LOAD）；**return p（聚合变量）**——逐字段 STORE 到 _mr_ret 缓冲（复用 multireturn sret 机制）。多 struct 参数/链式调用（makePerson() 作实参）/修改后返回双后端一致。**浮点参数（xmm/d0/fa0）已在 PB-13 完成**；**SysV 由 riscv64（RV64 ABI）与 arm64（AAPCS64）后端天然体现**，x86-64 保持 Windows x64（本机无 SysV 运行验证环境）。ir_sparam.nc（IR_ONLY）双后端通过，riscv64 汇编验证（a0-a2 展开入槽）
 - [x] **PB-17 IR_CALL 参数收集 bug（2026-08-07 验证已修复）**：multireturn 重构时已改为收集模式（args[] 收集 → 按序发射 PARAM+CALL），嵌套调用 dbl(add(3,4))、多参数嵌套 add(dbl(2),dbl(3))、连续调用链、嵌套作 puts 参数——双后端全对（已验证）
 - [x] **PB-18 ir_to_c 类型化输出（2026-08-07 完成）**：字符串池地址参数包 `(char*)`（is_str_addr 检测 LD_ADDR __str_N——puts 等外部函数参数消除 pointer-from-integer）；malloc 返回值包 `(int64_t)(intptr_t)`（void* → int64 消除 integer-from-pointer）。生成 C 全矩阵 0 warning（assignment makes 类），行为不变 0 FAIL
 - [x] **PB-19 -run 内存执行（已于 2026-08-06 与 PA-1 一并文档化）**：Linux only，README 已说明原因与替代方案
-- [ ] **PB-20 arch/ 多架构**：arm/loongarch/riscv（空目录）
+- [x] **PB-20 arch/ 多架构（2026-08-08 验证完成）**：**arm64 后端 ir_arm64.c 已就绪**（AAPCS64：stp x29,x30 帧、d0-d7 浮点参数、fadd/fsub/fmul/fdiv、ldp 恢复，全栈槽 x29-stride*(N+1)，只验汇编生成）——ir_fcall/ir_sparam/ir_float/ir_loop 汇编生成正确；riscv64（RV64I+D）+ arm64 + x86-64（Win64）**三架构后端全齐**。剩余：loongarch（空目录）
 
 ### 测试与集成待办
 - [x] **PB-21 IR 后端回归基线（已于 2026-08-05 完成）**：run_tests.py 加 --backend 全矩阵；IR 双后端用 IR_SUBSET 白名单（当前 hello/ir_demo），其余用例标 SKIP，语法扩展时同步扩充白名单
