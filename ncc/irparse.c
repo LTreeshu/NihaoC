@@ -72,6 +72,24 @@ static int ir_trunc_value(int vr, int vtype_code)   /* 窄类型截断（非窄�
     return nv;
 }
 
+/* 赋值目标类型协调（PB-1 DTOI）：vr 协调到目标类型 vtype_code
+ *  - 1 (float 目标) + int 源 → ITOD
+ *  - int 目标 + double 源 → DTOI（截断向零）
+ *  - 窄整数目标 → TRUNC */
+static int ir_coerce(int vr, int vtype_code)
+{
+    if (vtype_code == 1) {
+        if (!ir_is_double(vr)) return ir_to_double(vr);
+        return vr;
+    }
+    if (ir_is_double(vr)) {
+        int nv = ir_new_vreg(F);
+        ir_emit(F, IR_DTOI, nv, vr, -1, 0);
+        vr = nv;
+    }
+    return ir_trunc_value(vr, vtype_code);
+}
+
 /* 可见性常量（与 cgen 的 enum nihao_vis 对齐）：NH_UNDEF=0,NH_CONST,NH_FLOW,NH_STATIC,NH_VAR */
 #define VIS_VAR   0
 #define VIS_CONST 1
@@ -310,21 +328,40 @@ static int ir_primary(CompilerState *cs)
 {
     TokenType t = cur_tok(cs);
     if (t == TOK_MINUS) {
-        /* 一元负号 -x -> IR_NEG */
+        /* 一元负号：int → IR_NEG；double → 0.0 - a（FSUB，整数取反会毁位模式） */
         next_tok(cs);
         int a = ir_primary(cs);
         int vr = ir_new_vreg(F);
-        ir_emit(F, IR_NEG, vr, a, -1, 0);
+        if (ir_is_double(a)) {
+            int zero = ir_new_vreg(F);
+            union { double d; int64_t i; } u;
+            u.d = 0.0;
+            ir_emit(F, IR_CONST, zero, -1, -1, u.i);
+            ir_set_double(zero);
+            ir_emit(F, IR_FSUB, vr, zero, a, 0);
+            ir_set_double(vr);
+        } else {
+            ir_emit(F, IR_NEG, vr, a, -1, 0);
+        }
         return vr;
     }
     if (t == TOK_LOGICAL_NOT) {
-        /* 逻辑非 !x -> (x == 0) */
+        /* 逻辑非 !x -> (x == 0)；double 用 FCMP(EQ, 0.0) */
         next_tok(cs);
         int a = ir_primary(cs);
-        int z = ir_new_vreg(F);
-        ir_emit(F, IR_CONST, z, -1, -1, 0);
         int vr = ir_new_vreg(F);
-        ir_emit(F, IR_CMP_EQ, vr, a, z, 0);
+        if (ir_is_double(a)) {
+            int z = ir_new_vreg(F);
+            union { double d; int64_t i; } u;
+            u.d = 0.0;
+            ir_emit(F, IR_CONST, z, -1, -1, u.i);
+            ir_set_double(z);
+            ir_emit(F, IR_FCMP, vr, a, z, 0);
+        } else {
+            int z = ir_new_vreg(F);
+            ir_emit(F, IR_CONST, z, -1, -1, 0);
+            ir_emit(F, IR_CMP_EQ, vr, a, z, 0);
+        }
         return vr;
     }
     if (t == TOK_BITWISE_NOT) {
@@ -694,7 +731,7 @@ static int ir_primary(CompilerState *cs)
                     nv = ir_new_vreg(F);
                     ir_emit(F, op, nv, vt[vi], rhs, 0);
                 }
-                nv = ir_trunc_value(nv, vtype[vi]);   /* PB-1：窄整数截断 */
+                nv = ir_coerce(nv, vtype[vi]);   /* PB-1：目标类型协调（DTOI/ITOD/TRUNC） */
                 ir_emit(F, IR_MOV, vt[vi], nv, -1, 0);
                 return nv;
             }
@@ -1729,7 +1766,7 @@ static void ir_stmt(CompilerState *cs)
                 if (cur_tok(cs) != TOK_RBRACE) {
                     for (;;) {
                         int v = ir_expr(cs);
-                        v = ir_trunc_value(v, vetyp[vi]);   /* PB-1：元素窄整数截断 */
+                        v = ir_coerce(v, vetyp[vi]);   /* PB-1：元素类型协调 */
                         int addr = ir_new_vreg(F);
                         ir_emit(F, IR_ADDR, addr, vt[vi], -1, k);
                         ir_emit(F, IR_STORE, -1, addr, v, 0);
@@ -1741,7 +1778,7 @@ static void ir_stmt(CompilerState *cs)
                 expect(cs, TOK_RBRACE);
             } else {
                 int vr = ir_expr(cs);
-                vr = ir_trunc_value(vr, vtype[vi]);   /* PB-1：窄整数截断 */
+                vr = ir_coerce(vr, vtype[vi]);   /* PB-1：目标类型协调（DTOI/ITOD/TRUNC） */
                 ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             }
             skip_newlines(cs);
@@ -1759,7 +1796,7 @@ static void ir_stmt(CompilerState *cs)
             expect(cs, TOK_RBRACKET);
             expect(cs, TOK_ASSIGN);
             int v = ir_expr(cs);
-            v = ir_trunc_value(v, vetyp[vi]);   /* PB-1：元素窄整数截断 */
+            v = ir_coerce(v, vetyp[vi]);   /* PB-1：元素类型协调 */
             int addr = ir_elem_addr(cs, vt[vi], idx);
             ir_emit(F, IR_STORE, -1, addr, v, 0);
             skip_newlines(cs);

@@ -67,6 +67,31 @@ static void x64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             x64_slot(b, in->dst, tb);
             nb_put(b, "\n");
             break;
+        case IR_DTOI:
+            /* double → int64 截断（向零，与 C (int64_t) 一致）。
+             * x87 fistpq 用 FPU 舍入模式（默认最近：3.7→4），需临时切 RC=向零（0x0C00）；
+             * 用 rsp 动态让出 16 字节临时区（slot 是 rbp 相对，不受影响） */
+            nb_put(b, "  subq $16, %%rsp
+");
+            nb_put(b, "  fstcw 8(%%rsp)
+  movw 8(%%rsp), %%ax
+  orw $0x0C00, %%ax
+");
+            nb_put(b, "  movw %%ax, 0(%%rsp)
+  fldcw 0(%%rsp)
+  fldl ");
+            x64_slot(b, in->a, tb);
+            nb_put(b, "
+  fistpq 0(%%rsp)
+  fldcw 8(%%rsp)
+");
+            nb_put(b, "  movq 0(%%rsp), %%rax
+  movq %%rax, ");
+            x64_slot(b, in->dst, tb);
+            nb_put(b, "
+  addq $16, %%rsp
+");
+            break;
         case IR_TRUNC:
             /* 窄整数截断 + 符号/零扩展：左移对齐高位 + 算术/逻辑右移回（imm 编码） */
             {
