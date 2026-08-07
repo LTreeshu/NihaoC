@@ -178,10 +178,23 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
     vvis[vn_count] = vis;
     vtype[vn_count] = 0;
     int base = -1;
-    for (int k = 0; k < (elems > 0 ? elems : 1); k++) {
-        int vr = ir_new_vreg(F);
-        ir_emit(F, IR_ALLOCA, vr, -1, -1, 8);
-        if (k == 0) base = vr;
+    if (elems > 0 && type_idx < 0) {
+        /* 基本类型数组：分配 elems 个连续 vreg（native 槽字节连续），
+         * 但只发基槽 ALLOCA（imm=8*elems → ir-c 生成 C 数组 t{base}[elems]，
+         * 元素槽 vreg 不单独声明，ADDR(imm=k) 生成 &t{base}[k]） */
+        for (int k = 0; k < elems; k++) {
+            int vr = ir_new_vreg(F);
+            if (k == 0) {
+                base = vr;
+                ir_emit(F, IR_ALLOCA, vr, -1, -1, 8LL * elems);
+            }
+        }
+    } else {
+        for (int k = 0; k < (elems > 0 ? elems : 1); k++) {
+            int vr = ir_new_vreg(F);
+            ir_emit(F, IR_ALLOCA, vr, -1, -1, 8);
+            if (k == 0) base = vr;
+        }
     }
     vt[vn_count] = base;
     return vn_count++;
@@ -192,12 +205,8 @@ static int ir_elem_addr(CompilerState *cs, int base_vreg, int idx_vreg)
 {
     int base = ir_new_vreg(F);
     ir_emit(F, IR_ADDR, base, base_vreg, -1, 0);
-    int eight = ir_new_vreg(F);
-    ir_emit(F, IR_CONST, eight, -1, -1, 8);
-    int off = ir_new_vreg(F);
-    ir_emit(F, IR_MUL, off, idx_vreg, eight, 0);
     int addr = ir_new_vreg(F);
-    ir_emit(F, IR_ADD, addr, base, off, 0);
+    ir_emit(F, IR_ELEM_ADDR, addr, base, idx_vreg, 0);
     return addr;
 }
 
@@ -522,9 +531,25 @@ static int ir_primary(CompilerState *cs)
             return ir_new_vreg(F);
         }
         if (cur_tok(cs) == TOK_LBRACKET) {
-            /* 数组下标 arr[idx] -> LOAD(&arr[0] + idx*8) */
+            /* 数组下标 arr[idx] -> LOAD(&arr[0] + idx*8)；切片 arr[lo..hi] -> 地址 */
             next_tok(cs);
+            if (cur_tok(cs) == TOK_RANGE) {
+                /* arr[..hi]：省略起始的切片 → &arr[0] */
+                next_tok(cs);
+                ir_expr(cs);            /* hi 忽略 */
+                expect(cs, TOK_RBRACKET);
+                int vr = ir_new_vreg(F);
+                ir_emit(F, IR_ADDR, vr, vt[vi], -1, 0);
+                return vr;
+            }
             int idx = ir_expr(cs);
+            if (cur_tok(cs) == TOK_RANGE) {
+                /* 切片 arr[lo..hi] → 返回 &arr[lo]（长度信息忽略，留 TODO） */
+                next_tok(cs);
+                ir_expr(cs);            /* hi 忽略 */
+                expect(cs, TOK_RBRACKET);
+                return ir_elem_addr(cs, vt[vi], idx);
+            }
             expect(cs, TOK_RBRACKET);
             int addr = ir_elem_addr(cs, vt[vi], idx);
             int vr = ir_new_vreg(F);
@@ -1577,9 +1602,17 @@ static void ir_stmt(CompilerState *cs)
                 }
             } else if (cur_tok(cs) == TOK_LBRACKET) {
                 next_tok(cs);
-                if (cur_tok(cs) == TOK_INT_CONST) {
+                if (cur_tok(cs) == TOK_RANGE || cur_tok(cs) == TOK_ELLIPSIS) {
+                    /* 纯动态数组 [...] / [..]：固定默认容量（增长语义留 TODO） */
+                    elems = 8;
+                    next_tok(cs);
+                } else if (cur_tok(cs) == TOK_INT_CONST) {
                     elems = (int)cs->parser.lex->tok_val.i;
                     next_tok(cs);
+                    if (cur_tok(cs) == TOK_RANGE || cur_tok(cs) == TOK_ELLIPSIS) {
+                        /* N... 动态数组：初始容量 N 个槽（增长忽略） */
+                        next_tok(cs);
+                    }
                 }
                 expect(cs, TOK_RBRACKET);
             }

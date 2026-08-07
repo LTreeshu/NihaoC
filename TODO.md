@@ -123,7 +123,7 @@ ncc/
 - [ ] **PB-1 类型系统**：IrFn 无类型表，参数/返回/局部全固定 int/64 位；需为 IR 增加类型表（i8~u64/f32/f64/char[]/指针）
 - [x] **PB-2 一元与复合运算（全部完成 2026-08-06）**：一元 `-x`（IR_NEG）、`!x`（==0 比较）、`~x`（新增 IR_NOT 指令，双后端实现）、复合赋值 `+= -= *= /= %=`、后缀 `x++`/`x--`、前缀 `++x`/`--x` 全部实现。用例：ir_expr.nc（IR_SUBSET，四后端）+ ir_prefix.nc（IR_ONLY，前缀专用）。
 - [ ] **P1 全量 parser（parser.c）缺口：前缀 `++x`/`--x` 未支持**——当前被误解析为 `0++` 导致 lvalue 错误；IR 前端已支持，需在 parser.c 表达式解析中补前缀自增/自减。
-- [x] **PB-3 数组（部分完成 2026-08-06）**：声明 `name i32[N]`（N 个连续 8 字节 ALLOCA 槽）、下标 `arr[i]` 读写（地址 = &arr[0] + idx*8，复用 ADDR/LOAD/STORE）、初始化列表 `= {1,2,3}` 逐个 STORE。用例 ir_array.nc（IR_ONLY）双后端通过。剩余：切片 `[a..b]`、动态数组 `[...]`/`[6...]`、按类型宽度元素（当前统一 8 字节）。
+- [x] **PB-3 数组（全部完成 2026-08-07）**：声明 `name i32[N]`、下标 `arr[i]` 读写、初始化列表；**动态数组** `[6...]`/`[...]`（固定容量槽，增长语义留 TODO）；**切片** `arr[lo..hi]`/`arr[..hi]` → 返回 `&arr[lo]` 指针。**重要修复**：新增 `IR_ELEM_ADDR`（元素地址按后端布局方向：ir-c 向上 +idx*8 / ir-native 向下 -idx*8，slot 向下生长）；ir-c 数组基改 C 数组声明 `t{base}[N]`（元素槽 vreg 连续分配但只发基 ALLOCA，ADDR imm=k 生成 `&t{base}[k]`）——**修复 ir_array native 的 sum bad（原字节偏移 &t0+8 方向错、C 变量不连续被测试盲区掩盖）**。用例 ir_array.nc + ir_slice.nc（IR_ONLY）双后端通过。剩余：动态增长、按类型宽度元素。
 - [ ] **P1 全量 parser（parser.c）缺口：数组初始化列表 `= {1,2,3}` 未支持**——报 unexpected token '{'；IR 前端已支持
 - [x] **PB-4 struct/union/enum（2026-08-06 完成）**：命名类型定义 `Name struct/union/enum { }`、enum 常量（`Color enum{RED,GREEN,BLUE}`，可显式赋值）、成员读写 `s.field`（含复合赋值）、union 共享槽 0、struct/union 初始化列表、聚合类型变量（成员按序分配独立槽，ADDR imm 直接引用槽 vreg）。用例 ir_struct.nc（IR_ONLY）双后端通过。剩余：匿名/内联嵌套类型、位域宽度（8 字节槽模型忽略）、成员默认值仅支持简单常量。
 - [x] **PB-5 存储期属性 + visof（2026-08-06 完成）**：变量声明前缀 `const/static/flow/var`（记录可见性到变量表 vvis）；`visof(x)` 编译期查询（visof 是关键字 TOK_VISOF，返回 NH_* 常量 0-4）；可见性枚举常量 `_undef/_const/_flow/_static/_var` 作表达式常量；`is _flow` 等可见性模式（比较 is_val == NH_*）+ 标识符/枚举模式。用例 ir_vis.nc（IR_ONLY）双后端通过。
@@ -133,15 +133,15 @@ ncc/
 - [ ] **P1 全量 parser（parser.c）缺口：switch/case 未实现**——token.h 已定义 TOK_SWITCH/TOK_CASE 但 parser.c 无对应解析（报 unexpected token）；IR 前端已支持。其余 do/is 全量已支持
 - [x] **PB-8 多返回值、函数指针、多变量声明（全部完成 2026-08-07）**：多变量声明 `var {a=0,b=1} i8`——ir_stmt 前缀后 `{` 走 ir_multi_decl（收集 name=init 对 → 类型/聚合/数组 → 逐个 var_declare+MOV），无前缀 `{` 仍是块语句（无冲突）；用例 ir_multi.nc。**顺带补齐 &&/|| 短路逻辑层**（ir_logical_and/or，JZ/JNZ 跳转跳过右侧求值）。**函数指针最小集**——新指令 `IR_CALLI`（dst=call *(a)）：ir_to_c 生成 `((int64_t (*)())tN)(args)`，ir_to_native 生成 `movq slot(a),%rax; call *%rax`；声明 `fp void(i32,i32) i32 = add2`（声明分支跳过函数指针类型参数列表+返回类型）；函数名引用 → IR_LD_ADDR sym（取函数地址）；变量后跟 `(` → 间接调用。用例 ir_fptr.nc。**多返回值 multireturn**——顶层 `multireturn struct {...}` 注册匿名聚合（__mr）；`func f() multireturn`（IrFn.is_mr，隐藏 out-param `_mr_ret` 注入 var 表头部第 0 槽）；`return {e0,e1,...}` 聚合返回（STORE 到 *_mr_ret+k*8 + bare RET）；调用 `v multireturn = f()`（malloc 连续缓冲 → PARAM 缓冲+参数 → CALL → 缓冲值偏移 LOAD → 拷贝到聚合槽，last_mr_buf 标记）；成员访问复用 struct 机制。用例 ir_mr.nc。三用例均 IR_ONLY 双后端通过
 - [x] **PB-9 编译期最小集（2026-08-07 完成）**：`static_assert(expr,"msg")` 编译期断言——新增 `ir_const_expr` 常量折叠求值链（int 字面量/一元 -!~/四则取模/比较/&&/||/括号/enum 常量/sizeof(type)/visof(x)/可见性枚举），失败时报 `static_assert failed: msg`；`cooking { ... }` 编译期块（顶层+函数内）——执行块内 static_assert，其余 item（var-decl/cooking-call）跳过；`align N { ... }` 对齐块——IR 8 字节槽模型下跳过块体。用例 ir_cook.nc（IR_ONLY）双后端通过。剩余：cooking 编译期变量表/编译期函数调用（全量也未实现）
-- [ ] **PB-10 use 跨文件模块**（当前直接跳过）
-- [ ] **PB-11 字符串池去重**（当前每字面量独立 __str_N）
+- [x] **PB-10 use 模块（2026-08-07 最小支持）**：`use name[.name]` 解析跳过（IR 单文件模型，模块内容需内联；入口 use 循环修复 `.` 残留 token）
+- [x] **PB-11 字符串池去重（2026-08-07）**：ir_add_string 查重，相同字符串复用同一 __str_N
 
 ### IR 指令集/数据模型待办
 - [x] **PB-12 IR_ADDR/IR_LOAD/IR_STORE 实现（已于 2026-08-05 完成）**：ir.h 新增 IR_ADDR（局部变量取地址）；ir_to_c / ir_to_native 实现 ADDR（leaq/&tN）、LOAD、STORE；irparse 支持一元 `*`（解引用）、`&`（取地址，局部变量）、`*p = expr` 语句；ir_to_c 的 vreg 统一 int64_t（8 字节槽，防 STORE 越界）。
   配套修复：**块内换行语句边界**——lexer 仅顶层发 NEWLINE，函数体内 `*p = 43` 的 `*` 会被上一表达式当乘法吞掉；用"运算符与表达式首 token 同行"判定语句边界（ir_mul/ir_add/ir_cmp 传行号）。
   用例：tests/pos/ir_ptr.nc（IR_ONLY），四后端全矩阵 32 PASS / 0 FAIL。
-- [ ] **PB-13 浮点指令**：f32/f64 运算、比较、转换、调用 ABI（xmm）
-- [ ] **PB-14 类型化内存访问**：按类型宽度 load/store（当前假定 8 字节）
+- [x] **PB-13 浮点（2026-08-07 f64 最小集）**：vreg_type 类型表（0=int 1=double，IrFn 动态增长）；变量 vtype 表 + 槽 vreg 同步标记；浮点字面量（CONST 存 double 位模式）；FADD/FSUB/FMUL/FDIV/FCMP 指令；**ir-to-native 用 x87 浮点栈实现**（fldl/faddp/fsubp/fmulp/fdivp/fcomip+setcc）——tcc 汇编器不支持 SSE movsd；**fsubp/fdivp 有方向（st0=st0 op st1）需先压 b 再压 a**（实验确认）；CONST 改 `movq $imm64,%rax`（原 movq $imm 超 32 位失败）。用例 ir_float.nc（IR_ONLY）双后端通过。剩余：f32、浮点函数参数/返回 ABI（xmm0-3）、类型转换
+- [x] **PB-14 类型系统（2026-08-07 基础）**：vreg_type + 变量 vtype 表（浮点类型记录与槽标记）；与 PB-13 合并交付。剩余：按类型宽度 load/store（i8/i16/i32 截断+符号扩展，当前统一 8 字节槽）
 
 ### 后端待办
 - [ ] **PB-15 native 寄存器分配**：当前 vreg 全映射 rbp 栈槽

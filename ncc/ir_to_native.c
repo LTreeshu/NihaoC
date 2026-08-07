@@ -244,6 +244,17 @@ int irgen_native_emit(IrProg *p, const char *outfile)
                     slot(&b, in->dst);
                     nb_put(&b, "\n");
                     break;
+                case IR_ELEM_ADDR:
+                    /* 元素地址 = 基址 - idx*8（native 槽向下生长：slot(a+k)
+                     * = slot(a) - 8k，与 C 数组方向相反） */
+                    nb_put(&b, "  movq ");
+                    slot(&b, in->a);
+                    nb_put(&b, ", %%rax\n  movq ");
+                    slot(&b, in->b);
+                    nb_put(&b, ", %%rcx\n  shlq $3, %%rcx\n  subq %%rcx, %%rax\n  movq %%rax, ");
+                    slot(&b, in->dst);
+                    nb_put(&b, "\n");
+                    break;
                 case IR_LOAD:
                     /* dst = *(a) */
                     nb_put(&b, "  movq ");

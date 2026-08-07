@@ -93,11 +93,24 @@ int irgen_c_emit(IrProg *p, const char *outfile)
             cb_put(&b, "%sint64_t arg%d", i ? ", " : "", i);
         }
         cb_put(&b, ") {\n");
-        /* 局部变量声明：默认 int64_t 槽，浮点 vreg 声明为 double（PB-13） */
+        /* 局部变量声明：遍历全部 vreg——数组基（ALLOCA imm>8）声明为
+         * C 数组 t{i}[imm/8]；其余（标量槽/临时）声明单变量。
+         * 数组元素 vreg 无 ALLOCA 也声明（未被引用，无害）。 */
         if (f->vreg_count > 0) {
             for (int i = 0; i < f->vreg_count; i++) {
-                cb_put(&b, "    %s t%d;\n",
-                       (f->vreg_type && f->vreg_type[i] == 1) ? "double" : "int64_t", i);
+                long long asz = -1;
+                for (int ai = 0; ai < f->ins_count; ai++) {
+                    if (f->ins[ai].op == IR_ALLOCA && f->ins[ai].dst == i) {
+                        asz = (long long)f->ins[ai].imm;
+                        break;
+                    }
+                }
+                if (asz > 8) {
+                    cb_put(&b, "    int64_t t%d[%lld];\n", i, asz / 8);
+                } else {
+                    cb_put(&b, "    %s t%d;\n",
+                           (f->vreg_type && f->vreg_type[i] == 1) ? "double" : "int64_t", i);
+                }
             }
         }
         /* 参数绑定到 vreg 0..nparam-1（parser 先 declare 的参数在 vreg 0..） */
@@ -173,10 +186,30 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                     /* C 中局部变量已声明；ALLOCA 槽即 t%d */
                     break;
                 case IR_ADDR:
-                    /* ALLOCA 为每个槽分配独立 vreg（t{a}, t{a+1}, ...），
-                     * imm=k 直接引用槽 vreg 的地址，不依赖 C 栈连续布局 */
-                    cb_put(&b, "    t%d = (int64_t)(intptr_t)&t%d;\n",
-                           in->dst, in->a + (int)in->imm);
+                    /* 平铺槽（imm=8）：&t{a+imm} 直接引用槽 vreg；
+                     * 基本数组基（imm>8）：&t{a}[imm]（C 数组元素，字节连续） */
+                    {
+                        long long asz = 8;
+                        for (int ai = 0; ai < f->ins_count; ai++) {
+                            if (f->ins[ai].op == IR_ALLOCA &&
+                                f->ins[ai].dst == in->a) {
+                                asz = (long long)f->ins[ai].imm;
+                                break;
+                            }
+                        }
+                        if (asz > 8) {
+                            cb_put(&b, "    t%d = (int64_t)(intptr_t)&t%d[%lld];\n",
+                                   in->dst, in->a, (long long)in->imm);
+                        } else {
+                            cb_put(&b, "    t%d = (int64_t)(intptr_t)&t%d;\n",
+                                   in->dst, in->a + (int)in->imm);
+                        }
+                    }
+                    break;
+                case IR_ELEM_ADDR:
+                    /* 元素地址 = 基址 + idx*8（C 数组向上，字节连续） */
+                    cb_put(&b, "    t%d = t%d + t%d * 8;\n",
+                           in->dst, in->a, in->b);
                     break;
                 case IR_LOAD:
                     cb_put(&b, "    t%d = *(int64_t*)(intptr_t)t%d;\n",

@@ -32,6 +32,7 @@ typedef enum {
     IR_LABEL,
     IR_ALLOCA,      /* dst = address of a stack slot of size imm */
     IR_ADDR,        /* dst = address of local variable vreg a */
+    IR_ELEM_ADDR,   /* dst = &base[idx]（元素地址，后端按自身布局方向） */
     IR_LOAD,        /* dst = *(a)                     */
     IR_STORE,       /* *(a) = b                       */
     IR_LD_ADDR,     /* dst = address of global sym    */
