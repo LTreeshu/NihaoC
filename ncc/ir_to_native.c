@@ -110,7 +110,9 @@ int irgen_native_emit(IrProg *p, const char *outfile)
             IrIns *in = &f->ins[i];
             switch (in->op) {
                 case IR_CONST:
-                    nb_put(&b, "  movq $%lld, ", (long long)in->imm);
+                    /* imm 可能 >32 位（double 位模式）→ imm64 先到寄存器 */
+                    nb_put(&b, "  movq $%lld, %%rax\n  movq %%rax, ",
+                           (long long)in->imm);
                     slot(&b, in->dst);
                     nb_put(&b, "\n");
                     break;
@@ -127,6 +129,43 @@ int irgen_native_emit(IrProg *p, const char *outfile)
                     nb_put(&b, ", %%rax\n  %sq ", in->op == IR_ADD ? "add" : "sub");
                     slot(&b, in->b);
                     nb_put(&b, ", %%rax\n  movq %%rax, ");
+                    slot(&b, in->dst);
+                    nb_put(&b, "\n");
+                    break;
+                case IR_FADD: case IR_FSUB: case IR_FMUL: case IR_FDIV:
+                    /* x87 浮点栈（tcc 汇编器不支持 SSE movsd）。
+                     * fsubp/fdivp 语义 st0 = st0 op st1（有方向），
+                     * 需 st0=a → 先压 b 再压 a；faddp/fmulp 交换律无顺序。 */
+                    if (in->op == IR_FSUB || in->op == IR_FDIV) {
+                        nb_put(&b, "  fldl ");
+                        slot(&b, in->b);
+                        nb_put(&b, "\n  fldl ");
+                        slot(&b, in->a);
+                    } else {
+                        nb_put(&b, "  fldl ");
+                        slot(&b, in->a);
+                        nb_put(&b, "\n  fldl ");
+                        slot(&b, in->b);
+                    }
+                    nb_put(&b, "\n  %sp %%st, %%st(1)\n  fstpl ",
+                           in->op == IR_FADD ? "fadd" :
+                           in->op == IR_FSUB ? "fsub" :
+                           in->op == IR_FMUL ? "fmul" : "fdiv");
+                    slot(&b, in->dst);
+                    nb_put(&b, "\n");
+                    break;
+                case IR_FCMP:
+                    /* 栈序：fldl b; fldl a → st0=a, st1=b；
+                     * fcomip %st(1)：比较 st0(a) 与 st1(b)，CF=1 iff a<b，弹出 st0 */
+                    nb_put(&b, "  fldl ");
+                    slot(&b, in->b);
+                    nb_put(&b, "\n  fldl ");
+                    slot(&b, in->a);
+                    nb_put(&b, "\n  fcomip %%st(1), %%st\n  fstp %%st\n  ");
+                    nb_put(&b, in->imm == 0 ? "sete" : in->imm == 1 ? "setne" :
+                              in->imm == 2 ? "setb" : in->imm == 3 ? "setbe" :
+                              in->imm == 4 ? "seta" : "setae");
+                    nb_put(&b, " %%al\n  movzbq %%al, %%rax\n  movq %%rax, ");
                     slot(&b, in->dst);
                     nb_put(&b, "\n");
                     break;

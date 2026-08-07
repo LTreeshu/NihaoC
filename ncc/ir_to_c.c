@@ -93,13 +93,12 @@ int irgen_c_emit(IrProg *p, const char *outfile)
             cb_put(&b, "%sint64_t arg%d", i ? ", " : "", i);
         }
         cb_put(&b, ") {\n");
-        /* 局部变量声明：统一 64 位（IR_ADDR/IR_LOAD/IR_STORE 以 8 字节槽工作） */
+        /* 局部变量声明：默认 int64_t 槽，浮点 vreg 声明为 double（PB-13） */
         if (f->vreg_count > 0) {
-            cb_put(&b, "    int64_t ");
             for (int i = 0; i < f->vreg_count; i++) {
-                cb_put(&b, "t%d%s", i, i + 1 < f->vreg_count ? ", " : "");
+                cb_put(&b, "    %s t%d;\n",
+                       (f->vreg_type && f->vreg_type[i] == 1) ? "double" : "int64_t", i);
             }
-            cb_put(&b, ";\n");
         }
         /* 参数绑定到 vreg 0..nparam-1（parser 先 declare 的参数在 vreg 0..） */
         for (int i = 0; i < f->param_count; i++) {
@@ -110,7 +109,15 @@ int irgen_c_emit(IrProg *p, const char *outfile)
             IrIns *in = &f->ins[i];
             switch (in->op) {
                 case IR_CONST:
-                    cb_put(&b, "    t%d = %lld;\n", in->dst, (long long)in->imm);
+                    if (f->vreg_type && in->dst >= 0 && in->dst < f->vreg_count &&
+                        f->vreg_type[in->dst] == 1) {
+                        /* 浮点常量：imm 是 double 位模式 */
+                        union { int64_t i; double d; } u;
+                        u.i = in->imm;
+                        cb_put(&b, "    t%d = %.17g;\n", in->dst, u.d);
+                    } else {
+                        cb_put(&b, "    t%d = %lld;\n", in->dst, (long long)in->imm);
+                    }
                     break;
                 case IR_MOV:
                     cb_put(&b, "    t%d = t%d;\n", in->dst, in->a);
@@ -119,6 +126,22 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                 case IR_DIV: case IR_MOD:
                     cb_put(&b, "    t%d = t%d %s t%d;\n",
                            in->dst, in->a, bin_op(in->op), in->b);
+                    break;
+                case IR_FADD: case IR_FSUB: case IR_FMUL: case IR_FDIV:
+                    cb_put(&b, "    t%d = t%d %s t%d;\n",
+                           in->dst, in->a,
+                           in->op == IR_FADD ? "+" :
+                           in->op == IR_FSUB ? "-" :
+                           in->op == IR_FMUL ? "*" : "/",
+                           in->b);
+                    break;
+                case IR_FCMP:
+                    cb_put(&b, "    t%d = (t%d %s t%d);\n",
+                           in->dst, in->a,
+                           in->imm == 0 ? "==" : in->imm == 1 ? "!=" :
+                           in->imm == 2 ? "<"  : in->imm == 3 ? "<=" :
+                           in->imm == 4 ? ">"  : ">=",
+                           in->b);
                     break;
                 case IR_NEG:
                     cb_put(&b, "    t%d = -t%d;\n", in->dst, in->a);

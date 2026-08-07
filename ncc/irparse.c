@@ -20,8 +20,19 @@ static const char **vn;
 static int *ve;             /* 数组元素数（0=标量）；数组元素槽 vreg = vt[i]+k */
 static int *vty;            /* 变量聚合类型索引（-1=标量/基本数组）；>=0 查 agg_types */
 static int *vvis;           /* 变量可见性/存储期：0=var 1=const 2=flow 3=static 4=undef */
+static int *vtype;          /* 变量数值类型：0=int(默认) 1=double(f64/f32 槽化) */
 static int vn_count, vn_cap;
 static int last_mr_buf = -1; /* 最近一次 multireturn 调用返回的缓冲地址 vreg（供声明拷贝） */
+
+/* vreg 浮点类型辅助（PB-13：vreg_type 表在 IrFn，随 vreg_count 增长） */
+static void ir_set_double(int vr)
+{
+    if (vr >= 0 && F && vr < F->vreg_count) F->vreg_type[vr] = 1;
+}
+static int ir_is_double(int vr)
+{
+    return vr >= 0 && F && vr < F->vreg_count && F->vreg_type[vr] == 1;
+}
 
 /* 可见性常量（与 cgen 的 enum nihao_vis 对齐）：NH_UNDEF=0,NH_CONST,NH_FLOW,NH_STATIC,NH_VAR */
 #define VIS_VAR   0
@@ -134,6 +145,7 @@ static void var_reset(void)
         ve = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vty = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vvis = nihao_malloc(g_cs, vn_cap * sizeof(int));
+        vtype = nihao_malloc(g_cs, vn_cap * sizeof(int));
     }
 }
 
@@ -158,11 +170,13 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
         ve = nihao_realloc(g_cs, ve, vn_cap * sizeof(int));
         vty = nihao_realloc(g_cs, vty, vn_cap * sizeof(int));
         vvis = nihao_realloc(g_cs, vvis, vn_cap * sizeof(int));
+        vtype = nihao_realloc(g_cs, vtype, vn_cap * sizeof(int));
     }
     vn[vn_count] = name;
     ve[vn_count] = elems > 0 ? elems : 0;
     vty[vn_count] = type_idx;
     vvis[vn_count] = vis;
+    vtype[vn_count] = 0;
     int base = -1;
     for (int k = 0; k < (elems > 0 ? elems : 1); k++) {
         int vr = ir_new_vreg(F);
@@ -301,6 +315,16 @@ static int ir_primary(CompilerState *cs)
     if (t == TOK_INT_CONST) {
         int vr = ir_new_vreg(F);
         ir_emit(F, IR_CONST, vr, -1, -1, cs->parser.lex->tok_val.i);
+        next_tok(cs);
+        return vr;
+    }
+    if (t == TOK_FLOAT_CONST) {
+        /* 浮点字面量：CONST imm 存 double 位模式，vreg 标记为 double */
+        int vr = ir_new_vreg(F);
+        union { double d; int64_t i; } u;
+        u.d = cs->parser.lex->tok_val.f;
+        ir_emit(F, IR_CONST, vr, -1, -1, u.i);
+        ir_set_double(vr);
         next_tok(cs);
         return vr;
     }
@@ -568,6 +592,7 @@ static int ir_primary(CompilerState *cs)
         }
         int vr = ir_new_vreg(F);
         ir_emit(F, IR_MOV, vr, vt[vi], -1, 0);
+        if (vtype[vi] == 1) ir_set_double(vr);   /* 浮点变量读值标记 */
         return vr;
     }
     if (t == TOK_LPAREN) {
@@ -605,7 +630,15 @@ static int ir_mul(CompilerState *cs, int line)
         next_tok(cs);
         int b = ir_primary(cs);
         int vr = ir_new_vreg(F);
-        ir_emit(F, op, vr, a, b, 0);
+        /* PB-13：任一侧为 double → 浮点运算（% 无浮点版） */
+        if ((ir_is_double(a) || ir_is_double(b)) && op != IR_MOD) {
+            IrOp fop = (op == IR_MUL) ? IR_FMUL :
+                       (op == IR_DIV) ? IR_FDIV : IR_FMUL;
+            ir_emit(F, fop, vr, a, b, 0);
+            ir_set_double(vr);
+        } else {
+            ir_emit(F, op, vr, a, b, 0);
+        }
         a = vr;
     }
     return a;
@@ -624,7 +657,13 @@ static int ir_add(CompilerState *cs, int line)
         next_tok(cs);
         int b = ir_mul(cs, line);
         int vr = ir_new_vreg(F);
-        ir_emit(F, op, vr, a, b, 0);
+        /* PB-13：任一侧为 double → 浮点运算 */
+        if (ir_is_double(a) || ir_is_double(b)) {
+            ir_emit(F, (op == IR_ADD) ? IR_FADD : IR_FSUB, vr, a, b, 0);
+            ir_set_double(vr);
+        } else {
+            ir_emit(F, op, vr, a, b, 0);
+        }
         a = vr;
     }
     return a;
@@ -649,7 +688,15 @@ static int ir_cmp(CompilerState *cs, int line)
         next_tok(cs);
         int b = ir_add(cs, line);
         int vr = ir_new_vreg(F);
-        ir_emit(F, op, vr, a, b, 0);
+        /* PB-13：任一侧为 double → 浮点比较（imm 编码 0=EQ 1=NE 2=LT 3=LE 4=GT 5=GE） */
+        if (ir_is_double(a) || ir_is_double(b)) {
+            int fcmp = (op == IR_CMP_EQ) ? 0 : (op == IR_CMP_NE) ? 1 :
+                       (op == IR_CMP_LT) ? 2 : (op == IR_CMP_LE) ? 3 :
+                       (op == IR_CMP_GT) ? 4 : 5;
+            ir_emit(F, IR_FCMP, vr, a, b, fcmp);
+        } else {
+            ir_emit(F, op, vr, a, b, 0);
+        }
         a = vr;
     }
 }
@@ -1512,6 +1559,7 @@ static void ir_stmt(CompilerState *cs)
             skip_newlines(cs);
         } else if (is_type_token(nt)) {
             /* 声明: name i32 [N] = expr | = {e0, e1, ...} | name 函数指针类型 = fn */
+            int decl_float = (nt == TOK_F64 || nt == TOK_F32);
             next_tok(cs);           /* name */
             next_tok(cs);           /* 类型 */
             int elems = 0;
@@ -1537,6 +1585,10 @@ static void ir_stmt(CompilerState *cs)
             }
             expect(cs, TOK_ASSIGN); /* 消费 =（expect 已推进） */
             int vi = var_declare(name, elems, -1, decl_vis);
+            if (decl_float) {
+                vtype[vi] = 1;          /* f64/f32 变量 → double 槽 */
+                ir_set_double(vt[vi]);  /* 槽 vreg 类型同步（ir_to_c 声明 double） */
+            }
             if (cur_tok(cs) == TOK_LBRACE) {
                 /* 数组初始化列表 {e0, e1, ...}：逐个 STORE 到元素槽 */
                 next_tok(cs);
@@ -1816,7 +1868,9 @@ int ir_parse_file(CompilerState *cs, const char *filename)
     }
     while (cur_tok(cs) == TOK_USE) {
         next_tok(cs);
-        next_tok(cs);
+        while (cur_tok(cs) == TOK_IDENTIFIER || cur_tok(cs) == TOK_DOT) {
+            next_tok(cs);
+        }
         skip_newlines(cs);
     }
 
@@ -1856,6 +1910,13 @@ int ir_parse_file(CompilerState *cs, const char *filename)
         } else if (cur_tok(cs) == TOK_COOKING) {
             /* 编译期块：执行 static_assert，其余跳过 */
             ir_cooking(cs);
+        } else if (cur_tok(cs) == TOK_USE) {
+            /* use 模块导入：IR 单文件模型——解析声明并跳过（模块内容需内联） */
+            next_tok(cs);
+            while (cur_tok(cs) == TOK_IDENTIFIER || cur_tok(cs) == TOK_DOT) {
+                next_tok(cs);
+            }
+            if (cur_tok(cs) == TOK_NEWLINE) next_tok(cs);
         } else if (cur_tok(cs) == TOK_ALIGN) {
             /* 对齐块：IR 槽模型下跳过 */
             ir_align_block(cs);

@@ -45,7 +45,11 @@ int ir_emit(IrFn *f, IrOp op, int dst, int a, int b, int64_t imm)
 
 int ir_new_vreg(IrFn *f)
 {
-    return f->vreg_count++;
+    int vr = f->vreg_count++;
+    /* vreg 类型表随 vreg_count 增长（默认 0=int；1=double） */
+    f->vreg_type = nihao_realloc(g_cs, f->vreg_type, f->vreg_count * sizeof(int));
+    f->vreg_type[vr] = 0;
+    return vr;
 }
 
 int ir_new_label(IrFn *f)
@@ -55,6 +59,11 @@ int ir_new_label(IrFn *f)
 
 int ir_add_string(IrProg *p, const char *data)
 {
+    /* PB-11：字符串池去重——相同字面量复用同一符号 */
+    for (int i = 0; i < p->str_count; i++) {
+        if (p->str_data[i] && strcmp(p->str_data[i], data) == 0)
+            return i;
+    }
     if (p->str_count >= p->str_cap) {
         p->str_cap = p->str_cap ? p->str_cap * 2 : 16;
         p->str_data = nihao_realloc(g_cs, p->str_data, p->str_cap * sizeof(char *));

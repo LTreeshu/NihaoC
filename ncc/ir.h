@@ -20,6 +20,8 @@ typedef enum {
     IR_NOT,         /* dst = ~a（按位取反）            */
     IR_CMP_EQ, IR_CMP_NE, IR_CMP_LT, IR_CMP_LE,
     IR_CMP_GT, IR_CMP_GE,
+    IR_FADD, IR_FSUB, IR_FMUL, IR_FDIV,   /* dst = a op b（double，xmm） */
+    IR_FCMP,        /* dst = (a cmp b) double 比较；imm: 0=EQ 1=NE 2=LT 3=LE 4=GT 5=GE */
     IR_JMP,         /* goto label                     */
     IR_JZ,          /* if dst == 0 goto label         */
     IR_JNZ,         /* if dst != 0 goto label         */
@@ -56,6 +58,7 @@ typedef struct {
     int ins_count;
     int ins_cap;
     IrIns *ins;
+    int *vreg_type;     /* vreg -> 0=int 1=double（随 vreg_count 动态增长） */
 } IrFn;
 
 typedef struct {
