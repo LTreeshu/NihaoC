@@ -224,11 +224,18 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                            in->dst, in->a, in->b);
                     break;
                 case IR_LOAD:
-                    cb_put(&b, "    t%d = *(int64_t*)(intptr_t)t%d;\n",
-                           in->dst, in->a);
+                    /* 类型感知存取（PB-1 数组元素宽度/浮点数组）：dst 标记 double → double 指针 */
+                    cb_put(&b, "    t%d = *(%s*)(intptr_t)t%d;\n",
+                           in->dst,
+                           (f->vreg_type && in->dst < f->vreg_count &&
+                            f->vreg_type[in->dst] == 1) ? "double" : "int64_t",
+                           in->a);
                     break;
                 case IR_STORE:
-                    cb_put(&b, "    *(int64_t*)(intptr_t)t%d = t%d;\n",
+                    /* 源 vreg 为 double → double 指针（否则 int64 截断 double 位模式） */
+                    cb_put(&b, "    *(%s*)(intptr_t)t%d = t%d;\n",
+                           (f->vreg_type && in->b < f->vreg_count &&
+                            f->vreg_type[in->b] == 1) ? "double" : "int64_t",
                            in->a, in->b);
                     break;
                 case IR_RET:

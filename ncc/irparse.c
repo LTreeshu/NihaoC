@@ -19,6 +19,7 @@ static IrFn *F;
 static int *vt;             /* 局部变量: name 序号 -> vreg（ALLOCA 槽） */
 static const char **vn;
 static int *ve;             /* 数组元素数（0=标量）；数组元素槽 vreg = vt[i]+k */
+static int *vetyp;          /* 数组元素类型编码（与 vtype 同编码；0=未记录）——元素截断/浮点标记 */
 static int *vty;            /* 变量聚合类型索引（-1=标量/基本数组）；>=0 查 agg_types */
 static int *vvis;           /* 变量可见性/存储期：0=var 1=const 2=flow 3=static 4=undef */
 static int *vtype;          /* 变量数值类型：0=int(默认) 1=double(f64/f32 槽化) */
@@ -180,6 +181,7 @@ static void var_reset(void)
         vt = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vn = nihao_malloc(g_cs, vn_cap * sizeof(char *));
         ve = nihao_malloc(g_cs, vn_cap * sizeof(int));
+        vetyp = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vty = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vvis = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vtype = nihao_malloc(g_cs, vn_cap * sizeof(int));
@@ -205,12 +207,14 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
         vt = nihao_realloc(g_cs, vt, vn_cap * sizeof(int));
         vn = nihao_realloc(g_cs, vn, vn_cap * sizeof(char *));
         ve = nihao_realloc(g_cs, ve, vn_cap * sizeof(int));
+        vetyp = nihao_realloc(g_cs, vetyp, vn_cap * sizeof(int));
         vty = nihao_realloc(g_cs, vty, vn_cap * sizeof(int));
         vvis = nihao_realloc(g_cs, vvis, vn_cap * sizeof(int));
         vtype = nihao_realloc(g_cs, vtype, vn_cap * sizeof(int));
     }
     vn[vn_count] = name;
     ve[vn_count] = elems > 0 ? elems : 0;
+    vetyp[vn_count] = 0;
     vty[vn_count] = type_idx;
     vvis[vn_count] = vis;
     vtype[vn_count] = 0;
@@ -632,6 +636,7 @@ static int ir_primary(CompilerState *cs)
             int addr = ir_elem_addr(cs, vt[vi], idx);
             int vr = ir_new_vreg(F);
             ir_emit(F, IR_LOAD, vr, addr, -1, 0);
+            if (vetyp[vi] == 1) ir_set_double(vr);   /* PB-1：浮点元素标记（运算/比较用） */
             return vr;
         }
         if (cur_tok(cs) == TOK_DOT) {
@@ -1709,7 +1714,9 @@ static void ir_stmt(CompilerState *cs)
             }
             expect(cs, TOK_ASSIGN); /* 消费 =（expect 已推进） */
             int vi = var_declare(name, elems, -1, decl_vis);
-            if (vt_code == 1) {
+            if (elems > 0) {
+                vetyp[vi] = vt_code;    /* 数组元素类型（元素截断/浮点标记用） */
+            } else if (vt_code == 1) {
                 vtype[vi] = 1;          /* f64/f32 变量 → double 槽 */
                 ir_set_double(vt[vi]);  /* 槽 vreg 类型同步（ir_to_c 声明 double） */
             } else {
@@ -1722,6 +1729,7 @@ static void ir_stmt(CompilerState *cs)
                 if (cur_tok(cs) != TOK_RBRACE) {
                     for (;;) {
                         int v = ir_expr(cs);
+                        v = ir_trunc_value(v, vetyp[vi]);   /* PB-1：元素窄整数截断 */
                         int addr = ir_new_vreg(F);
                         ir_emit(F, IR_ADDR, addr, vt[vi], -1, k);
                         ir_emit(F, IR_STORE, -1, addr, v, 0);
@@ -1751,6 +1759,7 @@ static void ir_stmt(CompilerState *cs)
             expect(cs, TOK_RBRACKET);
             expect(cs, TOK_ASSIGN);
             int v = ir_expr(cs);
+            v = ir_trunc_value(v, vetyp[vi]);   /* PB-1：元素窄整数截断 */
             int addr = ir_elem_addr(cs, vt[vi], idx);
             ir_emit(F, IR_STORE, -1, addr, v, 0);
             skip_newlines(cs);
