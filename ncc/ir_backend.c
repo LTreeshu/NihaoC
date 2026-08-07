@@ -47,6 +47,7 @@ void nb_put(NBuf *b, const char *fmt, ...)
 /* 后端注册表（阶段 1：x86-64；阶段 3：+riscv64） */
 static const TargetBackend *g_backends[] = {
     &x86_64_backend,
+    &riscv64_backend,
 };
 
 const TargetBackend *backend_find(const char *name)

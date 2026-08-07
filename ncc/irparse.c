@@ -12,6 +12,7 @@
  *       全量语法迁移到 IR 是本骨架之后的迭代工作。
  * ============================================================ */
 #include "ir.h"
+#include "ir_backend.h"
 
 static IrProg *P;
 static IrFn *F;
@@ -2023,6 +2024,12 @@ int ir_compile(CompilerState *cs, const char *filename, int backend, int verbose
              backend == 2 ? "c" : "s");
     if (backend == 2) {
         if (irgen_c_emit(P, out) != 0) return -1;
+    } else if (backend == 4) {
+        /* riscv64：只生成汇编（本机 tcc 是 x86-64，交叉汇编留外部工具） */
+        if (irgen_backend_emit(P, out, "riscv64") != 0) return -1;
+        if (cs->verbose) printf("riscv64 asm written to %s (cross, not assembled)
+", out);
+        return 0;
     } else {
         if (irgen_native_emit(P, out) != 0) return -1;
     }

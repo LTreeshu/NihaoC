@@ -199,15 +199,15 @@ static void x64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             }
             int start = tc > nargs ? tc - nargs : 0;
             int got = tc - start;
-            const char *regs[4] = { "%rcx", "%rdx", "%r8", "%r9" };
-            for (int k = 0; k < got && k < 4; k++) {
+            /* 参数寄存器表走接口（tb->int_arg_regs，阶段 2 参数化） */
+            for (int k = 0; k < got && k < tb->int_arg_count; k++) {
                 nb_put(b, "  movq ");
                 x64_slot(b, temp[start + k], tb);
-                nb_put(b, ", %s\n", regs[k]);
+                nb_put(b, ", %s\n", tb->int_arg_regs[k]);
             }
-            if (got > 4) {
+            if (got > tb->int_arg_count) {
                 /* 多余参数压栈（从右到左） */
-                for (int k = got - 1; k >= 4; k--) {
+                for (int k = got - 1; k >= tb->int_arg_count; k--) {
                     nb_put(b, "  pushq ");
                     x64_slot(b, temp[start + k], tb);
                     nb_put(b, "\n");
