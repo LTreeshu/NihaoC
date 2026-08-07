@@ -136,7 +136,9 @@ ncc/
 - [x] **PB-10 use 模块（2026-08-07 最小支持）**：`use name[.name]` 解析跳过（IR 单文件模型，模块内容需内联；入口 use 循环修复 `.` 残留 token）
 - [x] **PB-11 字符串池去重（2026-08-07）**：ir_add_string 查重，相同字符串复用同一 __str_N
 
-### IR 指令集/数据模型待办
+#- [x] **PB-15 目标后端抽象（2026-08-07 阶段 1 完成）**：设计敲定（讨论后）——TargetBackend 接口（布局/调用约定数据字段 + fn_prologue/emit_ins/fn_epilogue/expand 四钩子）+ 每平台独立 .c（ir_x86_64.c）+ 统一骨架（ir_backend.c：NBuf/注册表/字符串池/函数循环/帧计算）。借鉴 tcc（每平台 *-gen.c 指令选择）与 LLVM（TargetLowering 抽象调用约定）。决策：全栈槽保底 / 浮点每后端专用 / riscv64 只验汇编生成。**tcc 0.9.27 坑：结构体内联函数指针声明解析 bug（报 '; expected (got *)'）→ 函数指针类型必须 typedef 到结构体外**。阶段 1 行为不变（ir_to_native.c → ir_x86_64.c + 框架），全矩阵 0 FAIL。阶段 2：调用约定/栈帧参数化；阶段 3：riscv64 后端（只验汇编）
+
+## IR 指令集/数据模型待办
 - [x] **PB-12 IR_ADDR/IR_LOAD/IR_STORE 实现（已于 2026-08-05 完成）**：ir.h 新增 IR_ADDR（局部变量取地址）；ir_to_c / ir_to_native 实现 ADDR（leaq/&tN）、LOAD、STORE；irparse 支持一元 `*`（解引用）、`&`（取地址，局部变量）、`*p = expr` 语句；ir_to_c 的 vreg 统一 int64_t（8 字节槽，防 STORE 越界）。
   配套修复：**块内换行语句边界**——lexer 仅顶层发 NEWLINE，函数体内 `*p = 43` 的 `*` 会被上一表达式当乘法吞掉；用"运算符与表达式首 token 同行"判定语句边界（ir_mul/ir_add/ir_cmp 传行号）。
   用例：tests/pos/ir_ptr.nc（IR_ONLY），四后端全矩阵 32 PASS / 0 FAIL。

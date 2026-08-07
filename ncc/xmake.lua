@@ -60,7 +60,8 @@ target("ncc")
     set_targetdir("$(builddir)")
     add_files("ncc.c", "lexer.c", "parser.c", "codegen.c", "linker.c",
               "module.c", "stdlib.c", "sym.c", "type.c", "vis.c", "cgen.c",
-              "native.c", "ir.c", "irparse.c", "ir_to_c.c", "ir_to_native.c")
+              "native.c", "ir.c", "irparse.c", "ir_to_c.c",
+              "ir_backend.c", "ir_x86_64.c")
     add_includedirs(".", path.join(tcc_dir, "libtcc"))
     if is_host("windows") and os.isfile(path.join(tcc_dir, "libtcc.dll")) then
         -- tcc 链接器不认 -l 与 GNU 导入库，直接链接 DLL 文件
