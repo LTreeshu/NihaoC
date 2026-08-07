@@ -321,6 +321,39 @@ static int ir_primary(CompilerState *cs)
         next_tok(cs);
         return ir_new_vreg(F);
     }
+    if (t == TOK_INCREMENT || t == TOK_DECREMENT) {
+        /* 前缀 ++x / --x：x 自增/减 1，表达式值为新值（写回变量槽） */
+        int is_inc = (t == TOK_INCREMENT);
+        next_tok(cs);
+        if (cur_tok(cs) != TOK_IDENTIFIER) {
+            nihao_error(cs, "ir: prefix '++'/'--' requires a variable");
+            return ir_new_vreg(F);
+        }
+        const char *pname = cs->parser.lex->tok_str;
+        int pvi = var_find(pname);
+        next_tok(cs);
+        if (pvi < 0) {
+            nihao_error(cs, "ir: undeclared variable '%s'", pname);
+            return ir_new_vreg(F);
+        }
+        int one = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, one, -1, -1, 1);
+        int nv = ir_new_vreg(F);
+        if (vtype[pvi] == 1) {
+            /* 浮点变量：1 转 double 位模式 + FADD/FSUB */
+            union { double d; int64_t i; } u;
+            u.d = 1.0;
+            one = ir_new_vreg(F);
+            ir_emit(F, IR_CONST, one, -1, -1, u.i);
+            ir_set_double(one);
+            ir_emit(F, is_inc ? IR_FADD : IR_FSUB, nv, vt[pvi], one, 0);
+            ir_set_double(nv);
+        } else {
+            ir_emit(F, is_inc ? IR_ADD : IR_SUB, nv, vt[pvi], one, 0);
+        }
+        ir_emit(F, IR_MOV, vt[pvi], nv, -1, 0);   /* 写回 */
+        return nv;
+    }
     if (t == TOK_INT_CONST) {
         int vr = ir_new_vreg(F);
         ir_emit(F, IR_CONST, vr, -1, -1, cs->parser.lex->tok_val.i);

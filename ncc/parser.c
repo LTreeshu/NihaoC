@@ -873,12 +873,27 @@ void parse_declaration(CompilerState *cs)
                 }
             }
         }
-        /* Type{...} compound literal: Person{name, age} -> (Person){...} */
-        if (cur_tok(cs) == TOK_IDENTIFIER &&
-            (cs->parser.lex->peek_tok == 0 || 1)) {
-            /* handled generically below */
+        /* 数组/聚合初始化列表：= {e0, e1, ...}（原样输出给 C） */
+        if (cur_tok(cs) == TOK_LBRACE) {
+            cgen_raw("{");
+            next_tok(cs);
+            skip_newlines(cs);
+            int k = 0;
+            if (cur_tok(cs) != TOK_RBRACE) {
+                for (;;) {
+                    if (k > 0) cgen_raw(", ");
+                    parse_expression(cs);
+                    k++;
+                    if (cur_tok(cs) != TOK_COMMA) break;
+                    next_tok(cs);
+                    skip_newlines(cs);
+                }
+            }
+            expect(cs, TOK_RBRACE);
+            cgen_raw("}");
+        } else {
+            parse_expression(cs);
         }
-        parse_expression(cs);
     }
     cgen_line(";");
 }
@@ -1140,6 +1155,59 @@ void parse_statement(CompilerState *cs)
         case TOK_IS:
             parse_is_stmt(cs);
             break;
+
+        case TOK_SWITCH: {
+            /* C 风格 switch：switch (expr) { case e: ... [default: ...] }
+             * 生成 C 原生 switch，每个 case 后自动 break（NihaoC 语义：无 fallthrough）。
+             * case 表达式须为编译期常量（int 字面量 / enum 常量）。 */
+            next_tok(cs);
+            expect(cs, TOK_LPAREN);
+            cgen_raw("switch (");
+            parse_expression(cs);
+            cgen_raw(")");
+            expect(cs, TOK_RPAREN);
+            expect(cs, TOK_LBRACE);
+            cgen_line("{");
+            cgen_indent();
+            skip_newlines(cs);
+            while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF) {
+                if (cur_tok(cs) == TOK_CASE) {
+                    next_tok(cs);
+                    cgen_raw("case ");
+                    parse_expression(cs);
+                    expect(cs, TOK_COLON);
+                    cgen_line(":");
+                    cgen_indent();
+                    skip_newlines(cs);
+                    while (cur_tok(cs) != TOK_CASE && cur_tok(cs) != TOK_DEFAULT &&
+                           cur_tok(cs) != TOK_RBRACE) {
+                        parse_statement(cs);
+                        skip_newlines(cs);
+                    }
+                    cgen_line("break;");   /* NihaoC：case 自动跳出 */
+                    cgen_dedent();
+                } else if (cur_tok(cs) == TOK_DEFAULT) {
+                    next_tok(cs);
+                    expect(cs, TOK_COLON);
+                    cgen_line("default:");
+                    cgen_indent();
+                    skip_newlines(cs);
+                    while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF) {
+                        parse_statement(cs);
+                        skip_newlines(cs);
+                    }
+                    cgen_dedent();
+                } else {
+                    nihao_error(cs, "expected 'case' or 'default' in switch");
+                    next_tok(cs);
+                }
+                skip_newlines(cs);
+            }
+            expect(cs, TOK_RBRACE);
+            cgen_line("}");
+            cgen_dedent();
+            break;
+        }
 
         case TOK_LBRACE: {
             /* Block statement */
