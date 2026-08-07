@@ -460,6 +460,13 @@ static int ir_primary(CompilerState *cs)
         next_tok(cs);
         return vr;
     }
+    if (t == TOK_CHAR_CONST) {
+        /* 字符字面量 'A' → ASCII 码（lexer tok_val.i 已是 unsigned char） */
+        int vr = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, vr, -1, -1, cs->parser.lex->tok_val.i);
+        next_tok(cs);
+        return vr;
+    }
     if (t == TOK_STRING_LITERAL) {
         int si = ir_add_string(P, cs->parser.lex->tok_str);
         int vr = ir_new_vreg(F);
@@ -1715,9 +1722,10 @@ static void ir_stmt(CompilerState *cs)
             int decl_float = (nt == TOK_F64 || nt == TOK_F32);
             /* PB-1 窄整数类型编码（0=i64 1=float 2=i8 3=i16 4=i32 5=u8 6=u16 7=u32） */
             int vt_code = decl_float ? 1 :
-                          (nt == TOK_I8)   ? 2 : (nt == TOK_I16) ? 3 :
-                          (nt == TOK_I32)  ? 4 : (nt == TOK_U8)  ? 5 :
-                          (nt == TOK_U16)  ? 6 : (nt == TOK_U32) ? 7 : 0;
+                          (nt == TOK_CHAR || nt == TOK_I8) ? 2 :
+                          (nt == TOK_I16) ? 3 : (nt == TOK_I32) ? 4 :
+                          (nt == TOK_U8)  ? 5 : (nt == TOK_U16) ? 6 :
+                          (nt == TOK_U32) ? 7 : 0;
             next_tok(cs);           /* name */
             next_tok(cs);           /* 类型 */
             int elems = 0;
@@ -1776,6 +1784,22 @@ static void ir_stmt(CompilerState *cs)
                     }
                 }
                 expect(cs, TOK_RBRACE);
+            } else if (cur_tok(cs) == TOK_STRING_LITERAL && elems > 0) {
+                /* 字符串数组初始化 s char[N] = "hello"：逐字节 STORE（含 NUL，
+                 * 截断到容量 elems）；char 元素 vetyp=2（i8），字节值天然规范 */
+                const char *str = cs->parser.lex->tok_str;
+                size_t slen = strlen(str);
+                next_tok(cs);
+                int cap = (int)slen + 1;
+                if (cap > elems) cap = elems;
+                for (int k = 0; k < cap; k++) {
+                    int cv = ir_new_vreg(F);
+                    ir_emit(F, IR_CONST, cv, -1, -1,
+                            (unsigned char)(k < (int)slen ? str[k] : 0));
+                    int addr = ir_new_vreg(F);
+                    ir_emit(F, IR_ADDR, addr, vt[vi], -1, k);
+                    ir_emit(F, IR_STORE, -1, addr, cv, 0);
+                }
             } else {
                 int vr = ir_expr(cs);
                 vr = ir_coerce(vr, vtype[vi]);   /* PB-1：目标类型协调（DTOI/ITOD/TRUNC） */
@@ -1896,9 +1920,10 @@ static void ir_func(CompilerState *cs)
             TokenType pt = cur_tok(cs);
             ptypes[nparam - 1] =
                 (pt == TOK_F32 || pt == TOK_F64) ? 1 :
-                (pt == TOK_I8)   ? 2 : (pt == TOK_I16) ? 3 :
-                (pt == TOK_I32)  ? 4 : (pt == TOK_U8)  ? 5 :
-                (pt == TOK_U16)  ? 6 : (pt == TOK_U32) ? 7 : 0;
+                (pt == TOK_CHAR || pt == TOK_I8) ? 2 :
+                (pt == TOK_I16) ? 3 : (pt == TOK_I32) ? 4 :
+                (pt == TOK_U8)  ? 5 : (pt == TOK_U16) ? 6 :
+                (pt == TOK_U32) ? 7 : 0;
             next_tok(cs);           /* 跳过类型 */
             if (cur_tok(cs) != TOK_COMMA) break;
             next_tok(cs);
