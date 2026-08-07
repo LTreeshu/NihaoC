@@ -67,6 +67,19 @@ static void x64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             x64_slot(b, in->dst, tb);
             nb_put(b, "\n");
             break;
+        case IR_TRUNC:
+            /* 窄整数截断 + 符号/零扩展：左移对齐高位 + 算术/逻辑右移回（imm 编码） */
+            {
+                int sh = (in->imm == 0 || in->imm == 3) ? 56 :
+                         (in->imm == 1 || in->imm == 4) ? 48 : 32;
+                nb_put(b, "  movq ");
+                x64_slot(b, in->a, tb);
+                nb_put(b, ", %%rax\n  shlq $%d, %%rax\n  %sq $%d, %%rax\n  movq %%rax, ",
+                       sh, in->imm >= 3 ? "shr" : "sar", sh);
+                x64_slot(b, in->dst, tb);
+                nb_put(b, "\n");
+            }
+            break;
         case IR_FADD: case IR_FSUB: case IR_FMUL: case IR_FDIV:
             /* x87 浮点栈（tcc 汇编器不支持 SSE movsd）。
              * fsubp/fdivp 语义 st0 = st0 op st1（有方向），

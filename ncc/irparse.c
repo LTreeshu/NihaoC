@@ -45,6 +45,32 @@ static int ir_to_double(int vr)
     return nd;
 }
 
+/* ============================================================
+ * 窄整数类型（PB-1）：变量 vtype 编码
+ *   0=i64(默认) 1=f64/f32 2=i8 3=i16 4=i32 5=u8 6=u16 7=u32
+ * 语义：槽仍 8 字节，赋值时截断 + 符号/零扩展存槽（读回即正确值）
+ * ============================================================ */
+static int ir_type_imm(int t)   /* TRUNC imm：0:i8 1:i16 2:i32 3:u8 4:u16 5:u32；-1=非窄 */
+{
+    switch (t) {
+        case 2: return 0;
+        case 3: return 1;
+        case 4: return 2;
+        case 5: return 3;
+        case 6: return 4;
+        case 7: return 5;
+        default: return -1;
+    }
+}
+static int ir_trunc_value(int vr, int vtype_code)   /* 窄类型截断（非窄原样返回） */
+{
+    int imm = ir_type_imm(vtype_code);
+    if (imm < 0) return vr;
+    int nv = ir_new_vreg(F);
+    ir_emit(F, IR_TRUNC, nv, vr, -1, imm);
+    return nv;
+}
+
 /* 可见性常量（与 cgen 的 enum nihao_vis 对齐）：NH_UNDEF=0,NH_CONST,NH_FLOW,NH_STATIC,NH_VAR */
 #define VIS_VAR   0
 #define VIS_CONST 1
@@ -663,6 +689,7 @@ static int ir_primary(CompilerState *cs)
                     nv = ir_new_vreg(F);
                     ir_emit(F, op, nv, vt[vi], rhs, 0);
                 }
+                nv = ir_trunc_value(nv, vtype[vi]);   /* PB-1：窄整数截断 */
                 ir_emit(F, IR_MOV, vt[vi], nv, -1, 0);
                 return nv;
             }
@@ -1644,6 +1671,11 @@ static void ir_stmt(CompilerState *cs)
         } else if (is_type_token(nt)) {
             /* 声明: name i32 [N] = expr | = {e0, e1, ...} | name 函数指针类型 = fn */
             int decl_float = (nt == TOK_F64 || nt == TOK_F32);
+            /* PB-1 窄整数类型编码（0=i64 1=float 2=i8 3=i16 4=i32 5=u8 6=u16 7=u32） */
+            int vt_code = decl_float ? 1 :
+                          (nt == TOK_I8)   ? 2 : (nt == TOK_I16) ? 3 :
+                          (nt == TOK_I32)  ? 4 : (nt == TOK_U8)  ? 5 :
+                          (nt == TOK_U16)  ? 6 : (nt == TOK_U32) ? 7 : 0;
             next_tok(cs);           /* name */
             next_tok(cs);           /* 类型 */
             int elems = 0;
@@ -1677,9 +1709,11 @@ static void ir_stmt(CompilerState *cs)
             }
             expect(cs, TOK_ASSIGN); /* 消费 =（expect 已推进） */
             int vi = var_declare(name, elems, -1, decl_vis);
-            if (decl_float) {
+            if (vt_code == 1) {
                 vtype[vi] = 1;          /* f64/f32 变量 → double 槽 */
                 ir_set_double(vt[vi]);  /* 槽 vreg 类型同步（ir_to_c 声明 double） */
+            } else {
+                vtype[vi] = vt_code;    /* 窄整数：赋值时截断（IR_TRUNC） */
             }
             if (cur_tok(cs) == TOK_LBRACE) {
                 /* 数组初始化列表 {e0, e1, ...}：逐个 STORE 到元素槽 */
@@ -1699,6 +1733,7 @@ static void ir_stmt(CompilerState *cs)
                 expect(cs, TOK_RBRACE);
             } else {
                 int vr = ir_expr(cs);
+                vr = ir_trunc_value(vr, vtype[vi]);   /* PB-1：窄整数截断 */
                 ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             }
             skip_newlines(cs);
@@ -1805,15 +1840,19 @@ static void ir_func(CompilerState *cs)
     skip_newlines(cs);
     int nparam = 0;
     const char *pnames[32];
-    int ptypes[32] = {0};   /* 参数类型：0=int 1=double（PB-浮点 ABI） */
+    int ptypes[32] = {0};   /* 参数类型编码：0=i64 1=double 2=i8 3=i16 4=i32 5=u8 6=u16 7=u32 */
     if (cur_tok(cs) != TOK_RPAREN) {
         for (;;) {
             /* param: name i32（先收集，注册延后——mr 隐藏参数须在头部） */
             if (cur_tok(cs) != TOK_IDENTIFIER) break;
             pnames[nparam++] = cs->parser.lex->tok_str;
             next_tok(cs);
+            TokenType pt = cur_tok(cs);
             ptypes[nparam - 1] =
-                (cur_tok(cs) == TOK_F32 || cur_tok(cs) == TOK_F64) ? 1 : 0;
+                (pt == TOK_F32 || pt == TOK_F64) ? 1 :
+                (pt == TOK_I8)   ? 2 : (pt == TOK_I16) ? 3 :
+                (pt == TOK_I32)  ? 4 : (pt == TOK_U8)  ? 5 :
+                (pt == TOK_U16)  ? 6 : (pt == TOK_U32) ? 7 : 0;
             next_tok(cs);           /* 跳过类型 */
             if (cur_tok(cs) != TOK_COMMA) break;
             next_tok(cs);
@@ -1836,9 +1875,11 @@ static void ir_func(CompilerState *cs)
     for (int pi = 0; pi < nparam; pi++) {
         int vi = var_declare(pnames[pi], 0, -1, VIS_VAR);
         F->param_types[pi + (F->is_mr ? 1 : 0)] = ptypes[pi];
-        if (ptypes[pi]) {
-            vtype[vi] = 1;
+        if (ptypes[pi] == 1) {
+            vtype[vi] = 1;          /* 浮点参数 → double 槽 */
             ir_set_double(vt[vi]);
+        } else {
+            vtype[vi] = ptypes[pi]; /* 窄整数参数记录类型（值已符号扩展，入槽无需截断） */
         }
     }
     F->param_count = nparam + (F->is_mr ? 1 : 0);

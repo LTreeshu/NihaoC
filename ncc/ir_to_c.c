@@ -80,7 +80,7 @@ int irgen_c_emit(IrProg *p, const char *outfile)
         cb_put(&b, "%s %s(", f->ret_is_double ? "double" : "int64_t", f->name);
         for (int i = 0; i < f->param_count; i++) {
             cb_put(&b, "%s%s arg%d", i ? ", " : "",
-                   f->param_types[i] ? "double" : "int64_t", i);
+                   f->param_types[i] == 1 ? "double" : "int64_t", i);
         }
         cb_put(&b, ");\n");
     }
@@ -92,7 +92,7 @@ int irgen_c_emit(IrProg *p, const char *outfile)
         for (int i = 0; i < f->param_count; i++) {
             /* 参数名: 子集固定 argN（由 parser 顺序声明） */
             cb_put(&b, "%s%s arg%d", i ? ", " : "",
-                   f->param_types[i] ? "double" : "int64_t", i);
+                   f->param_types[i] == 1 ? "double" : "int64_t", i);
         }
         cb_put(&b, ") {\n");
         /* 局部变量声明：遍历全部 vreg——数组基（ALLOCA imm>8）声明为
@@ -152,6 +152,13 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                     break;
                 case IR_ITOD:
                     cb_put(&b, "    t%d = (double)t%d;\n", in->dst, in->a);
+                    break;
+                case IR_TRUNC:
+                    /* 窄整数截断 + 符号/零扩展（imm: 0=i8 1=i16 2=i32 3=u8 4=u16 5=u32） */
+                    cb_put(&b, "    t%d = (%s)t%d;\n", in->dst,
+                           in->imm == 0 ? "int8_t" : in->imm == 1 ? "int16_t" :
+                           in->imm == 2 ? "int32_t" : in->imm == 3 ? "uint8_t" :
+                           in->imm == 4 ? "uint16_t" : "uint32_t", in->a);
                     break;
                 case IR_FCMP:
                     cb_put(&b, "    t%d = (t%d %s t%d);\n",

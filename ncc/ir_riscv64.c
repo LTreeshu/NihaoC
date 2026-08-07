@@ -72,6 +72,19 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             rv_slot(b, in->dst, tb);
             nb_put(b, "\n");
             break;
+        case IR_TRUNC:
+            /* 窄整数截断 + 符号/零扩展：slli 对齐高位 + srai/srli（imm 编码） */
+            {
+                int sh = (in->imm == 0 || in->imm == 3) ? 56 :
+                         (in->imm == 1 || in->imm == 4) ? 48 : 32;
+                nb_put(b, "  ld a0, ");
+                rv_slot(b, in->a, tb);
+                nb_put(b, "\n  slli a0, a0, %d\n  %s a0, a0, %d\n  sd a0, ",
+                       sh, in->imm >= 3 ? "srli" : "srai", sh);
+                rv_slot(b, in->dst, tb);
+                nb_put(b, "\n");
+            }
+            break;
         case IR_FADD: case IR_FSUB: case IR_FMUL: case IR_FDIV:
             /* D 扩展：fld fa0/fa1 → op.d → fsd（riscv 浮点方向明确，无 x87 坑） */
             nb_put(b, "  fld fa0, ");
