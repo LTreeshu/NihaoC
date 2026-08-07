@@ -148,8 +148,8 @@ ncc/
 ### 后端待办
 - [ ] **PB-15 native 寄存器分配**：当前 vreg 全映射 rbp 栈槽
 - [ ] **PB-16 调用约定完整化**：SysV vs Windows x64、浮点参数、结构体传参/返回（sret）
-- [ ] **PB-17 IR_CALL 参数收集 bug**：收集函数内全部历史 PARAM 取最后 n 个，嵌套调用 puts(f(1)) 错位
-- [ ] **PB-18 ir_to_c 类型化输出**：消除 (int)(long) 与 pointer-from-integer 警告
+- [x] **PB-17 IR_CALL 参数收集 bug（2026-08-07 验证已修复）**：multireturn 重构时已改为收集模式（args[] 收集 → 按序发射 PARAM+CALL），嵌套调用 dbl(add(3,4))、多参数嵌套 add(dbl(2),dbl(3))、连续调用链、嵌套作 puts 参数——双后端全对（已验证）
+- [x] **PB-18 ir_to_c 类型化输出（2026-08-07 完成）**：字符串池地址参数包 `(char*)`（is_str_addr 检测 LD_ADDR __str_N——puts 等外部函数参数消除 pointer-from-integer）；malloc 返回值包 `(int64_t)(intptr_t)`（void* → int64 消除 integer-from-pointer）。生成 C 全矩阵 0 warning（assignment makes 类），行为不变 0 FAIL
 - [x] **PB-19 -run 内存执行（已于 2026-08-06 与 PA-1 一并文档化）**：Linux only，README 已说明原因与替代方案
 - [ ] **PB-20 arch/ 多架构**：arm/loongarch/riscv（空目录）
 

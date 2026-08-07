@@ -59,6 +59,19 @@ static const char *bin_op(IrOp op)
     }
 }
 
+/* PB-18：参数 vreg 是否为字符串池地址（LD_ADDR __str_N）——puts 等外部函数
+ * 需要 char*，IR 层统一 int64，生成 C 时包 (char*) 消除 pointer-from-integer 警告 */
+static int is_str_addr(const IrFn *f, int vr)
+{
+    for (int k = 0; k < f->ins_count; k++) {
+        if (f->ins[k].op == IR_LD_ADDR && f->ins[k].dst == vr &&
+            f->ins[k].sym && strncmp(f->ins[k].sym, "__str_", 6) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int irgen_c_emit(IrProg *p, const char *outfile)
 {
     CBuf b;
@@ -260,9 +273,15 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                         if (f->ins[k].op == IR_PARAM) temp[tc++] = f->ins[k].a;
                     }
                     int start = tc > nargs ? tc - nargs : 0;
-                    cb_put(&b, "    t%d = %s(", in->dst, in->sym);
+                    /* malloc 返回 void* → 显式 (int64_t)(intptr_t) 消除警告 */
+                    cb_put(&b, "    t%d = %s%s(", in->dst,
+                           (in->sym && strcmp(in->sym, "malloc") == 0) ?
+                               "(int64_t)(intptr_t)" : "",
+                           in->sym);
                     for (int k = start; k < tc; k++) {
-                        cb_put(&b, "%st%d", k > start ? ", " : "", temp[k]);
+                        cb_put(&b, "%s%s", k > start ? ", " : "",
+                               is_str_addr(f, temp[k]) ? "(char*)" : "");
+                        cb_put(&b, "t%d", temp[k]);
                     }
                     cb_put(&b, ");\n");
                     break;
@@ -278,7 +297,9 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                     int start = tc > nargs ? tc - nargs : 0;
                     cb_put(&b, "    t%d = ((int64_t (*)())t%d)(", in->dst, in->a);
                     for (int k = start; k < tc; k++) {
-                        cb_put(&b, "%st%d", k > start ? ", " : "", temp[k]);
+                        cb_put(&b, "%s%s", k > start ? ", " : "",
+                               is_str_addr(f, temp[k]) ? "(char*)" : "");
+                        cb_put(&b, "t%d", temp[k]);
                     }
                     cb_put(&b, ");\n");
                     break;
