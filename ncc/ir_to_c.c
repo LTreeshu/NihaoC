@@ -77,9 +77,10 @@ int irgen_c_emit(IrProg *p, const char *outfile)
      * （Windows tcc 对隐式声明的未知符号生成 __imp_ 外部引用而链接失败） */
     for (int fi = 0; fi < p->fn_count; fi++) {
         IrFn *f = &p->fns[fi];
-        cb_put(&b, "int64_t %s(", f->name);
+        cb_put(&b, "%s %s(", f->ret_is_double ? "double" : "int64_t", f->name);
         for (int i = 0; i < f->param_count; i++) {
-            cb_put(&b, "%sint64_t arg%d", i ? ", " : "", i);
+            cb_put(&b, "%s%s arg%d", i ? ", " : "",
+                   f->param_types[i] ? "double" : "int64_t", i);
         }
         cb_put(&b, ");\n");
     }
@@ -87,10 +88,11 @@ int irgen_c_emit(IrProg *p, const char *outfile)
 
     for (int fi = 0; fi < p->fn_count; fi++) {
         IrFn *f = &p->fns[fi];
-        cb_put(&b, "int64_t %s(", f->name);
+        cb_put(&b, "%s %s(", f->ret_is_double ? "double" : "int64_t", f->name);
         for (int i = 0; i < f->param_count; i++) {
             /* 参数名: 子集固定 argN（由 parser 顺序声明） */
-            cb_put(&b, "%sint64_t arg%d", i ? ", " : "", i);
+            cb_put(&b, "%s%s arg%d", i ? ", " : "",
+                   f->param_types[i] ? "double" : "int64_t", i);
         }
         cb_put(&b, ") {\n");
         /* 局部变量声明：遍历全部 vreg——数组基（ALLOCA imm>8）声明为
@@ -147,6 +149,9 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                            in->op == IR_FSUB ? "-" :
                            in->op == IR_FMUL ? "*" : "/",
                            in->b);
+                    break;
+                case IR_ITOD:
+                    cb_put(&b, "    t%d = (double)t%d;\n", in->dst, in->a);
                     break;
                 case IR_FCMP:
                     cb_put(&b, "    t%d = (t%d %s t%d);\n",

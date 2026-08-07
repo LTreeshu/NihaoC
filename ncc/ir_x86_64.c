@@ -59,6 +59,14 @@ static void x64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             x64_slot(b, in->dst, tb);
             nb_put(b, "\n");
             break;
+        case IR_ITOD:
+            /* int64 槽 → x87 整数加载转 double → 存回槽（fildq 支持已验证） */
+            nb_put(b, "  fildq ");
+            x64_slot(b, in->a, tb);
+            nb_put(b, "\n  fstpl ");
+            x64_slot(b, in->dst, tb);
+            nb_put(b, "\n");
+            break;
         case IR_FADD: case IR_FSUB: case IR_FMUL: case IR_FDIV:
             /* x87 浮点栈（tcc 汇编器不支持 SSE movsd）。
              * fsubp/fdivp 语义 st0 = st0 op st1（有方向），
@@ -199,17 +207,35 @@ static void x64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             }
             int start = tc > nargs ? tc - nargs : 0;
             int got = tc - start;
-            /* 参数寄存器表走接口（tb->int_arg_regs，阶段 2 参数化） */
-            for (int k = 0; k < got && k < tb->int_arg_count; k++) {
-                nb_put(b, "  movq ");
-                x64_slot(b, temp[start + k], tb);
-                nb_put(b, ", %s\n", tb->int_arg_regs[k]);
+            /* 参数装载分流（PB-浮点 ABI）：int → int_arg_regs，double → fp_arg_regs
+             * （movq 位模式搬运——tcc 汇编器支持 xmm 寄存器的 movq，不支持 movsd） */
+            int ii = 0, fi = 0;
+            int sp_stk[64], spc = 0;
+            for (int k = 0; k < got; k++) {
+                int vr = temp[start + k];
+                if (f->vreg_type && vr < f->vreg_count && f->vreg_type[vr] == 1) {
+                    if (fi < tb->fp_arg_count) {
+                        nb_put(b, "  movq ");
+                        x64_slot(b, vr, tb);
+                        nb_put(b, ", %s\n", tb->fp_arg_regs[fi++]);
+                    } else {
+                        sp_stk[spc++] = vr;
+                    }
+                } else {
+                    if (ii < tb->int_arg_count) {
+                        nb_put(b, "  movq ");
+                        x64_slot(b, vr, tb);
+                        nb_put(b, ", %s\n", tb->int_arg_regs[ii++]);
+                    } else {
+                        sp_stk[spc++] = vr;
+                    }
+                }
             }
-            if (got > tb->int_arg_count) {
+            if (spc > 0) {
                 /* 多余参数压栈（从右到左） */
-                for (int k = got - 1; k >= tb->int_arg_count; k--) {
+                for (int k = spc - 1; k >= 0; k--) {
                     nb_put(b, "  pushq ");
-                    x64_slot(b, temp[start + k], tb);
+                    x64_slot(b, sp_stk[k], tb);
                     nb_put(b, "\n");
                 }
             }
@@ -240,6 +266,23 @@ static void x64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
                 nb_put(b, ", %%rax\n  call *%%rax\n");
             }
             nb_put(b, "  addq $%d, %%rsp\n", 32 + (got > 4 ? 8 * (got - 4) : 0));
+            /* 返回值存储（PB-浮点 ABI）：目标函数浮点返回 → xmm0 位模式搬入槽 */
+            if (in->op == IR_CALL) {
+                int callee_dbl = 0;
+                for (int k = 0; k < p->fn_count; k++) {
+                    if (p->fns[k].name && in->sym &&
+                        strcmp(p->fns[k].name, in->sym) == 0) {
+                        callee_dbl = p->fns[k].ret_is_double;
+                        break;
+                    }
+                }
+                if (callee_dbl) {
+                    nb_put(b, "  movq %%xmm0, ");
+                    x64_slot(b, in->dst, tb);
+                    nb_put(b, "\n");
+                    break;
+                }
+            }
             nb_put(b, "  movq %%rax, ");
             x64_slot(b, in->dst, tb);
             nb_put(b, "\n");
@@ -247,9 +290,17 @@ static void x64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
         }
         case IR_RET:
             if (in->a >= 0) {
-                nb_put(b, "  movq ");
-                x64_slot(b, in->a, tb);
-                nb_put(b, ", %%rax\n");
+                if (f->vreg_type && in->a < f->vreg_count &&
+                    f->vreg_type[in->a] == 1) {
+                    /* 浮点返回：movq 位模式 → xmm0（Windows x64 浮点返回约定） */
+                    nb_put(b, "  movq ");
+                    x64_slot(b, in->a, tb);
+                    nb_put(b, ", %%xmm0\n");
+                } else {
+                    nb_put(b, "  movq ");
+                    x64_slot(b, in->a, tb);
+                    nb_put(b, ", %%rax\n");
+                }
             } else {
                 nb_put(b, "  xorl %%eax, %%eax\n");
             }
@@ -267,10 +318,23 @@ static void x64_fn_prologue(NBuf *b, const TargetBackend *tb,
     nb_put(b, "  pushq %%rbp\n");
     nb_put(b, "  movq %%rsp, %%rbp\n");
     nb_put(b, "  subq $%d, %%rsp\n", frame);
-    for (int i = 0; i < f->param_count && i < tb->int_arg_count; i++) {
-        nb_put(b, "  movq %s, ", tb->int_arg_regs[i]);
-        x64_slot(b, i, tb);
-        nb_put(b, "\n");
+    /* 参数入槽（PB-浮点 ABI）：int 参数走 int_arg_regs，double 走 fp_arg_regs
+     * （调用方/被调方同逻辑分配，天然自洽） */
+    int ii = 0, fi = 0;
+    for (int i = 0; i < f->param_count; i++) {
+        if (f->param_types[i] == 1) {
+            if (fi < tb->fp_arg_count) {
+                nb_put(b, "  movq %s, ", tb->fp_arg_regs[fi++]);
+                x64_slot(b, i, tb);
+                nb_put(b, "\n");
+            }
+        } else {
+            if (ii < tb->int_arg_count) {
+                nb_put(b, "  movq %s, ", tb->int_arg_regs[ii++]);
+                x64_slot(b, i, tb);
+                nb_put(b, "\n");
+            }
+        }
     }
 }
 
@@ -278,9 +342,15 @@ static void x64_fn_prologue(NBuf *b, const TargetBackend *tb,
 static void x64_fn_epilogue(NBuf *b, const TargetBackend *tb,
                             const IrFn *f, int need_ret)
 {
-    (void)tb; (void)f;
+    (void)tb;
     if (need_ret) {
-        nb_put(b, "  xorl %%eax, %%eax\n");
+        if (f->ret_is_double) {
+            /* 浮点隐式返回 0.0（0 位模式 = 0.0） */
+            nb_put(b, "  xorl %%eax, %%eax\n");
+            nb_put(b, "  movq %%rax, %%xmm0\n");
+        } else {
+            nb_put(b, "  xorl %%eax, %%eax\n");
+        }
         nb_put(b, "  leave\n  ret\n");
     }
 }

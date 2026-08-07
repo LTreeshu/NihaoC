@@ -35,6 +35,16 @@ static int ir_is_double(int vr)
     return vr >= 0 && F && vr < F->vreg_count && F->vreg_type[vr] == 1;
 }
 
+/* 混合类型提升：int → double（PB-浮点 ABI）。已 double 直接返回，否则发射 IR_ITOD */
+static int ir_to_double(int vr)
+{
+    if (ir_is_double(vr)) return vr;
+    int nd = ir_new_vreg(F);
+    ir_emit(F, IR_ITOD, nd, vr, -1, 0);
+    ir_set_double(nd);
+    return nd;
+}
+
 /* 可见性常量（与 cgen 的 enum nihao_vis 对齐）：NH_UNDEF=0,NH_CONST,NH_FLOW,NH_STATIC,NH_VAR */
 #define VIS_VAR   0
 #define VIS_CONST 1
@@ -548,6 +558,14 @@ static int ir_primary(CompilerState *cs)
             IrIns *in = &F->ins[ir_emit(F, IR_CALL, vr, -1, -1, nargs)];
             in->sym = name;         /* 外部符号（puts 等） */
             in->fn = -1;
+            /* PB-浮点 ABI：目标函数浮点返回 → 标记 dst vreg（后端按此存储 xmm0/fa0） */
+            for (int fi = 0; fi < P->fn_count; fi++) {
+                if (P->fns[fi].name && strcmp(P->fns[fi].name, name) == 0 &&
+                    P->fns[fi].ret_is_double) {
+                    ir_set_double(vr);
+                    break;
+                }
+            }
             return vr;
         }
         int vi = var_find(name);
@@ -689,8 +707,10 @@ static int ir_mul(CompilerState *cs, int line)
         next_tok(cs);
         int b = ir_primary(cs);
         int vr = ir_new_vreg(F);
-        /* PB-13：任一侧为 double → 浮点运算（% 无浮点版） */
+        /* PB-13：任一侧为 double → 浮点运算（% 无浮点版）；混合类型先提升 int 侧 */
         if ((ir_is_double(a) || ir_is_double(b)) && op != IR_MOD) {
+            if (!ir_is_double(a)) a = ir_to_double(a);
+            if (!ir_is_double(b)) b = ir_to_double(b);
             IrOp fop = (op == IR_MUL) ? IR_FMUL :
                        (op == IR_DIV) ? IR_FDIV : IR_FMUL;
             ir_emit(F, fop, vr, a, b, 0);
@@ -716,8 +736,10 @@ static int ir_add(CompilerState *cs, int line)
         next_tok(cs);
         int b = ir_mul(cs, line);
         int vr = ir_new_vreg(F);
-        /* PB-13：任一侧为 double → 浮点运算 */
+        /* PB-13：任一侧为 double → 浮点运算；混合类型先提升 int 侧 */
         if (ir_is_double(a) || ir_is_double(b)) {
+            if (!ir_is_double(a)) a = ir_to_double(a);
+            if (!ir_is_double(b)) b = ir_to_double(b);
             ir_emit(F, (op == IR_ADD) ? IR_FADD : IR_FSUB, vr, a, b, 0);
             ir_set_double(vr);
         } else {
@@ -747,8 +769,11 @@ static int ir_cmp(CompilerState *cs, int line)
         next_tok(cs);
         int b = ir_add(cs, line);
         int vr = ir_new_vreg(F);
-        /* PB-13：任一侧为 double → 浮点比较（imm 编码 0=EQ 1=NE 2=LT 3=LE 4=GT 5=GE） */
+        /* PB-13：任一侧为 double → 浮点比较（imm 编码 0=EQ 1=NE 2=LT 3=LE 4=GT 5=GE）；
+         * 混合类型先提升 int 侧 */
         if (ir_is_double(a) || ir_is_double(b)) {
+            if (!ir_is_double(a)) a = ir_to_double(a);
+            if (!ir_is_double(b)) b = ir_to_double(b);
             int fcmp = (op == IR_CMP_EQ) ? 0 : (op == IR_CMP_NE) ? 1 :
                        (op == IR_CMP_LT) ? 2 : (op == IR_CMP_LE) ? 3 :
                        (op == IR_CMP_GT) ? 4 : 5;
@@ -1780,12 +1805,15 @@ static void ir_func(CompilerState *cs)
     skip_newlines(cs);
     int nparam = 0;
     const char *pnames[32];
+    int ptypes[32] = {0};   /* 参数类型：0=int 1=double（PB-浮点 ABI） */
     if (cur_tok(cs) != TOK_RPAREN) {
         for (;;) {
             /* param: name i32（先收集，注册延后——mr 隐藏参数须在头部） */
             if (cur_tok(cs) != TOK_IDENTIFIER) break;
             pnames[nparam++] = cs->parser.lex->tok_str;
             next_tok(cs);
+            ptypes[nparam - 1] =
+                (cur_tok(cs) == TOK_F32 || cur_tok(cs) == TOK_F64) ? 1 : 0;
             next_tok(cs);           /* 跳过类型 */
             if (cur_tok(cs) != TOK_COMMA) break;
             next_tok(cs);
@@ -1797,6 +1825,8 @@ static void ir_func(CompilerState *cs)
         F->is_mr = 1;           /* multireturn 函数：返回聚合值 */
         next_tok(cs);
     } else if (cur_tok(cs) != TOK_LBRACE) {
+        F->ret_is_double =
+            (cur_tok(cs) == TOK_F32 || cur_tok(cs) == TOK_F64) ? 1 : 0;
         next_tok(cs);           /* 其他返回类型 */
     }
     /* 注册变量：mr 时 _mr_ret 必须是第 0 槽（调用约定：缓冲指针为第一参数） */
@@ -1804,7 +1834,12 @@ static void ir_func(CompilerState *cs)
         var_declare("_mr_ret", 0, -1, VIS_VAR);
     }
     for (int pi = 0; pi < nparam; pi++) {
-        var_declare(pnames[pi], 0, -1, VIS_VAR);
+        int vi = var_declare(pnames[pi], 0, -1, VIS_VAR);
+        F->param_types[pi + (F->is_mr ? 1 : 0)] = ptypes[pi];
+        if (ptypes[pi]) {
+            vtype[vi] = 1;
+            ir_set_double(vt[vi]);
+        }
     }
     F->param_count = nparam + (F->is_mr ? 1 : 0);
     ir_block(cs);

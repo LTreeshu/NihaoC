@@ -94,6 +94,7 @@ int irgen_backend_emit(IrProg *p, const char *outfile, const char *backend)
         nb_put(&b, ".text\n");
     }
 
+    int lbl_base = 0;   /* 跨函数 label 全局基数（label 编号 per-function 从 0 起） */
     for (int fi = 0; fi < p->fn_count; fi++) {
         IrFn *f = &p->fns[fi];
         /* 帧大小：槽区（vreg_count+1 个槽 × stride）+ 额外开销，向上取整对齐 */
@@ -108,12 +109,18 @@ int irgen_backend_emit(IrProg *p, const char *outfile, const char *backend)
 
         if (tb->fn_prologue) tb->fn_prologue(&b, tb, f, frame);
 
-        /* 指令循环 */
+        /* 指令循环。label 编号 per-function 从 0 起，多函数同一汇编文件会重名
+         * （.L0 跨函数重复）→ 发射前把本函数 label 加上全局基数（lbl_base） */
         for (int i = 0; i < f->ins_count; i++) {
             IrIns *in = &f->ins[i];
             if (in->op == IR_ALLOCA || in->op == IR_PARAM) continue;
+            if (in->op == IR_LABEL || in->op == IR_JMP ||
+                in->op == IR_JZ || in->op == IR_JNZ) {
+                in->label += lbl_base;
+            }
             if (tb->emit_ins) tb->emit_ins(&b, in, tb, p, f, i);
         }
+        lbl_base += f->label_count;
 
         /* 函数尾：无显式 return 时补隐式返回 */
         int need_ret = 1;

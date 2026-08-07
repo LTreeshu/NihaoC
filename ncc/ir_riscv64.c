@@ -64,6 +64,14 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             nb_put(b, in->op == IR_DIV ? "  div a0, a0, a1\n" : "  rem a0, a0, a1\n");
             rv_store_a0(b, in->dst, tb);
             break;
+        case IR_ITOD:
+            /* int64 槽 → a0 → fcvt.d.l → fa0 → fsd 槽（D 扩展） */
+            nb_put(b, "  ld a0, ");
+            rv_slot(b, in->a, tb);
+            nb_put(b, "\n  fcvt.d.l fa0, a0\n  fsd fa0, ");
+            rv_slot(b, in->dst, tb);
+            nb_put(b, "\n");
+            break;
         case IR_FADD: case IR_FSUB: case IR_FMUL: case IR_FDIV:
             /* D 扩展：fld fa0/fa1 → op.d → fsd（riscv 浮点方向明确，无 x87 坑） */
             nb_put(b, "  fld fa0, ");
@@ -171,12 +179,23 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             }
             int start = tc > nargs ? tc - nargs : 0;
             int got = tc - start;
-            /* a0-a7 参数装载（超出 8 个：本后端忽略，阶段 3 简化） */
-            int regn = got < tb->int_arg_count ? got : tb->int_arg_count;
-            for (int k = 0; k < regn; k++) {
-                nb_put(b, "  ld %s, ", tb->int_arg_regs[k]);
-                rv_slot(b, temp[start + k], tb);
-                nb_put(b, "\n");
+            /* 参数装载分流（PB-浮点 ABI）：int → a0-a7（ld），double → fa0-fa7（fld） */
+            int ii = 0, fi = 0;
+            for (int k = 0; k < got; k++) {
+                int vr = temp[start + k];
+                if (f->vreg_type && vr < f->vreg_count && f->vreg_type[vr] == 1) {
+                    if (fi < tb->fp_arg_count) {
+                        nb_put(b, "  fld %s, ", tb->fp_arg_regs[fi++]);
+                        rv_slot(b, vr, tb);
+                        nb_put(b, "\n");
+                    }
+                } else {
+                    if (ii < tb->int_arg_count) {
+                        nb_put(b, "  ld %s, ", tb->int_arg_regs[ii++]);
+                        rv_slot(b, vr, tb);
+                        nb_put(b, "\n");
+                    }
+                }
             }
             if (in->op == IR_CALL) {
                 nb_put(b, "  call %s\n", in->sym);
@@ -185,15 +204,38 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
                 rv_slot(b, in->a, tb);
                 nb_put(b, "\n  jalr ra, a0\n");
             }
-            /* 返回 a0 → dst 槽 */
+            /* 返回值存储：目标函数浮点返回 → fa0（fsd），否则 a0（sd） */
+            if (in->op == IR_CALL) {
+                int callee_dbl = 0;
+                for (int k = 0; k < p->fn_count; k++) {
+                    if (p->fns[k].name && in->sym &&
+                        strcmp(p->fns[k].name, in->sym) == 0) {
+                        callee_dbl = p->fns[k].ret_is_double;
+                        break;
+                    }
+                }
+                if (callee_dbl) {
+                    nb_put(b, "  fsd fa0, ");
+                    rv_slot(b, in->dst, tb);
+                    nb_put(b, "\n");
+                    break;
+                }
+            }
             rv_store_a0(b, in->dst, tb);
             break;
         }
         case IR_RET:
             if (in->a >= 0) {
-                nb_put(b, "  ld a0, ");
-                rv_slot(b, in->a, tb);
-                nb_put(b, "\n");
+                if (f->vreg_type && in->a < f->vreg_count &&
+                    f->vreg_type[in->a] == 1) {
+                    nb_put(b, "  fld fa0, ");
+                    rv_slot(b, in->a, tb);
+                    nb_put(b, "\n");
+                } else {
+                    nb_put(b, "  ld a0, ");
+                    rv_slot(b, in->a, tb);
+                    nb_put(b, "\n");
+                }
             } else {
                 nb_put(b, "  li a0, 0\n");
             }
@@ -214,11 +256,22 @@ static void rv_fn_prologue(NBuf *b, const TargetBackend *tb,
     nb_put(b, "  sd ra, 8(sp)\n");
     nb_put(b, "  sd s0, 0(sp)\n");
     nb_put(b, "  addi s0, sp, %d\n", frame);
-    /* 参数装载：a0-a7 → vreg 0..nparam-1 */
-    for (int i = 0; i < f->param_count && i < tb->int_arg_count; i++) {
-        nb_put(b, "  sd %s, ", tb->int_arg_regs[i]);
-        rv_slot(b, i, tb);
-        nb_put(b, "\n");
+    /* 参数装载（PB-浮点 ABI）：int → a0-a7（sd 槽），double → fa0-fa7（fsd 槽） */
+    int ii = 0, fi = 0;
+    for (int i = 0; i < f->param_count; i++) {
+        if (f->param_types[i] == 1) {
+            if (fi < tb->fp_arg_count) {
+                nb_put(b, "  fsd %s, ", tb->fp_arg_regs[fi++]);
+                rv_slot(b, i, tb);
+                nb_put(b, "\n");
+            }
+        } else {
+            if (ii < tb->int_arg_count) {
+                nb_put(b, "  sd %s, ", tb->int_arg_regs[ii++]);
+                rv_slot(b, i, tb);
+                nb_put(b, "\n");
+            }
+        }
     }
 }
 
@@ -227,9 +280,13 @@ static void rv_fn_prologue(NBuf *b, const TargetBackend *tb,
 static void rv_fn_epilogue(NBuf *b, const TargetBackend *tb,
                            const IrFn *f, int need_ret)
 {
-    (void)tb; (void)f;
+    (void)tb;
     if (need_ret) {
-        nb_put(b, "  li a0, 0\n");
+        if (f->ret_is_double) {
+            nb_put(b, "  fmv.d.x fa0, zero\n");   /* 浮点隐式返回 0.0 */
+        } else {
+            nb_put(b, "  li a0, 0\n");
+        }
         nb_put(b, "  ld ra, 8(sp)\n  ld s0, 0(sp)\n  addi sp, sp, %d\n  ret\n",
                g_rv_frame);
     }

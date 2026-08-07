@@ -22,6 +22,7 @@ typedef enum {
     IR_CMP_GT, IR_CMP_GE,
     IR_FADD, IR_FSUB, IR_FMUL, IR_FDIV,   /* dst = a op b（double，xmm） */
     IR_FCMP,        /* dst = (a cmp b) double 比较；imm: 0=EQ 1=NE 2=LT 3=LE 4=GT 5=GE */
+    IR_ITOD,        /* dst = (double)a（int64 → double 符号转换，混合类型提升） */
     IR_JMP,         /* goto label                     */
     IR_JZ,          /* if dst == 0 goto label         */
     IR_JNZ,         /* if dst != 0 goto label         */
@@ -60,6 +61,8 @@ typedef struct {
     int ins_cap;
     IrIns *ins;
     int *vreg_type;     /* vreg -> 0=int 1=double（随 vreg_count 动态增长） */
+    int ret_is_double;  /* 返回值为 f64/f32（PB-浮点 ABI） */
+    int param_types[32];/* 参数类型 0=int 1=double（param_count <= 32，与 pnames 对齐） */
 } IrFn;
 
 typedef struct {
