@@ -2278,6 +2278,13 @@ int ir_parse_file(CompilerState *cs, const char *filename)
                 next_tok(cs);
             }
             if (cur_tok(cs) == TOK_NEWLINE) next_tok(cs);
+        } else if (cur_tok(cs) == TOK_LINK) {
+            /* link "lib" [as] alias：静态库导入——IR 单文件模型解析跳过 */
+            next_tok(cs);
+            if (cur_tok(cs) == TOK_STRING_LITERAL) next_tok(cs);
+            if (cur_tok(cs) == TOK_AS) next_tok(cs);
+            if (cur_tok(cs) == TOK_IDENTIFIER) next_tok(cs);
+            if (cur_tok(cs) == TOK_NEWLINE) next_tok(cs);
         } else if (cur_tok(cs) == TOK_ALIGN) {
             /* 对齐块：IR 槽模型下跳过 */
             ir_align_block(cs);

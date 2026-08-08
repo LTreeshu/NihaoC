@@ -21,7 +21,7 @@
 - cgen 补 `#include <stddef.h>`（offsetof）
 - 前缀 `++x/--x`、数组初始化列表、switch/case（P0 三项已闭合，ir_loop/ir_switch 四后端通用）
 
-**已知 A 方案缺口**（见 TODO）：link 导入（规划）。
+**已知 A 方案缺口**（见 TODO）：无（link 导入解析闭环：`link "lib" alias`/`link "lib" as alias`/`link "lib"` 三种形式记录 link_libs；实际 -l 传 tcc 为规划特性）。
 已修复（2026-08-08/09）：struct 返回生成 C bug（`type__compound` → 真实返回类型名，四后端通过）；
 函数指针声明生成 bug（TYPE_FUNC 参数列表链入 params + `ret(*name[N])(params)` 声明 + `void[T[N]]`
 还原为函数指针数组，四后端通过，ir_fptr 升 IR_SUBSET）；

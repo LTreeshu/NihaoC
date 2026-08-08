@@ -426,6 +426,11 @@ void parse_module(CompilerState *cs)
                     next_tok(cs);
                     link_add_library(cs, lib_path, alias, lib_path);
                 }
+            } else if (cur_tok(cs) == TOK_IDENTIFIER) {
+                /* link "lib" alias：显式别名 */
+                char *alias = cs->parser.lex->tok_str;
+                next_tok(cs);
+                link_add_library(cs, lib_path, alias, lib_path);
             } else {
                 link_add_library(cs, lib_path, lib_path, lib_path);
             }
