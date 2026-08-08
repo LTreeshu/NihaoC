@@ -24,7 +24,7 @@ static int *vty;            /* 变量聚合类型索引（-1=标量/基本数组
 static int *vvis;           /* 变量可见性/存储期：0=var 1=const 2=flow 3=static 4=undef */
 static int *vtype;          /* 变量数值类型：0=int(默认) 1=double(f64/f32 槽化) */
 static int vn_count, vn_cap;
-static int last_mr_buf = -1; /* 最近一次 multireturn 调用返回的缓冲地址 vreg（供声明拷贝） */
+static int last_mr_buf = -1; /* 最近一次 sret（struct 返回）调用返回的缓冲地址 vreg（供声明拷贝） */
 
 /* ============================================================
  * cooking 编译期变量表（PB-9 深化）：cooking 块内 `const NAME [TYPE] = expr`
@@ -200,7 +200,7 @@ static void ir_agg_decl(CompilerState *cs, const char *name, int ti, int vis)
         } else {
             int v = ir_expr(cs);
             /* sret 调用（struct 返回函数）：缓冲地址是"值"（last_mr_buf），
-             * 缓冲值 + k*8 → LOAD → 聚合槽 k（与 multireturn 声明同逻辑） */
+             * 缓冲值 + k*8 → LOAD → 聚合槽 k（与 sret 声明同逻辑） */
             if (elems > 1 && last_mr_buf >= 0) {
                 int base = ir_new_vreg(F);
                 ir_emit(F, IR_MOV, base, last_mr_buf, -1, 0);
@@ -689,7 +689,7 @@ static int ir_primary(CompilerState *cs)
                 }
             }
             expect(cs, TOK_RPAREN);
-            /* multireturn 调用：目标函数是 mr → malloc 缓冲 → PARAM 缓冲+参数 →
+            /* sret 调用（struct 返回）：目标函数是 mr → malloc 缓冲 → PARAM 缓冲+参数 →
              * CALL → 返回缓冲地址（调用方拷贝到聚合槽） */
             int is_mr_call = 0;
             int mr_agg_ti = -1;
@@ -1672,10 +1672,10 @@ static void ir_stmt(CompilerState *cs)
         if (cur_tok(cs) == TOK_NEWLINE || cur_tok(cs) == TOK_RBRACE) {
             ir_emit(F, IR_RET, -1, -1, -1, 0);
         } else if (cur_tok(cs) == TOK_LBRACE) {
-            /* return {e0, e1, ...}：multireturn 聚合返回 → STORE 到 *_mr_ret */
+            /* return {e0, e1, ...}：聚合返回 → STORE 到 *_mr_ret（sret） */
             int retvi = F->is_mr ? var_find("_mr_ret") : -1;
             if (retvi < 0) {
-                nihao_error(cs, "ir: aggregate return outside multireturn function");
+                nihao_error(cs, "ir: aggregate return outside struct-returning function");
                 while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF) next_tok(cs);
                 expect(cs, TOK_RBRACE);
             } else {
@@ -1849,36 +1849,6 @@ static void ir_stmt(CompilerState *cs)
             nihao_error(cs, "ir: unexpected '%s %s' in statement", name, tname);
             skip_newlines(cs);
             return;
-        } else if (nt == TOK_MULTIRETURN) {
-            /* 多返回变量声明：v multireturn = mr_fn() */
-            next_tok(cs);           /* name */
-            next_tok(cs);           /* multireturn */
-            int ti = agg_type_find("__mr");
-            int elems = (ti >= 0) ? agg_types[ti].mcount : 0;
-            if (ti < 0) {
-                nihao_error(cs, "ir: multireturn type not defined (need 'multireturn struct {...}')");
-            }
-            expect(cs, TOK_ASSIGN);
-            int vi = var_declare(name, elems, ti, decl_vis);
-            int vr = ir_expr(cs);   /* mr 调用：返回缓冲地址（last_mr_buf 已设） */
-            if (elems > 0 && last_mr_buf >= 0) {
-                /* 缓冲地址是"值"（非槽）：缓冲值 + k*8 → LOAD → 聚合槽 k */
-                int base = ir_new_vreg(F);
-                ir_emit(F, IR_MOV, base, last_mr_buf, -1, 0);
-                for (int k = 0; k < elems; k++) {
-                    int off = ir_new_vreg(F);
-                    ir_emit(F, IR_CONST, off, -1, -1, (long long)k * 8);
-                    int addr = ir_new_vreg(F);
-                    ir_emit(F, IR_ADD, addr, base, off, 0);
-                    int lv = ir_new_vreg(F);
-                    ir_emit(F, IR_LOAD, lv, addr, -1, 0);
-                    ir_emit(F, IR_MOV, vt[vi] + k, lv, -1, 0);
-                }
-                last_mr_buf = -1;
-            } else if (vr >= 0) {
-                ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
-            }
-            skip_newlines(cs);
         } else if (is_type_token(nt)) {
             /* 声明: name i32 [N] = expr | = {e0, e1, ...} | name 函数指针类型 = fn */
             int decl_float = (nt == TOK_F64 || nt == TOK_F32);
@@ -2102,12 +2072,9 @@ static void ir_func(CompilerState *cs)
     }
     expect(cs, TOK_RPAREN);
     skip_newlines(cs);
-    if (cur_tok(cs) == TOK_MULTIRETURN) {
-        F->is_mr = 1;           /* multireturn 函数：返回聚合值 */
-        next_tok(cs);
-    } else if (cur_tok(cs) != TOK_LBRACE) {
-        /* struct 返回 = sret：具名聚合类型 → 复用 multireturn 隐藏 out-param
-         * 机制（返回聚合值经 _mr_ret 缓冲指针，调用方 malloc+拷贝） */
+    if (cur_tok(cs) != TOK_LBRACE) {
+        /* struct 返回 = sret：具名聚合类型 → 隐藏 out-param 机制
+         * （返回聚合值经 _mr_ret 缓冲指针，调用方 malloc+拷贝） */
         if (cur_tok(cs) == TOK_IDENTIFIER) {
             int rti = agg_type_find(cs->parser.lex->tok_str);
             if (rti >= 0) {
@@ -2161,15 +2128,8 @@ static void ir_func(CompilerState *cs)
 /* 顶层类型定义：Name struct { fields } / Name union { fields } / Name enum { A, B } */
 static void ir_type_decl(CompilerState *cs)
 {
-    const char *tname;
-    if (cur_tok(cs) == TOK_MULTIRETURN) {
-        /* multireturn struct { m1 u8 m2 u8 }：匿名多返回类型（固定名 __mr） */
-        tname = "__mr";
-        next_tok(cs);
-    } else {
-        tname = cs->parser.lex->tok_str;
-        next_tok(cs);
-    }
+    const char *tname = cs->parser.lex->tok_str;
+    next_tok(cs);
     TokenType kw = cur_tok(cs);
     next_tok(cs);   /* struct/union/enum */
     if (agg_count >= IR_MAX_AGG) {
@@ -2306,19 +2266,6 @@ int ir_parse_file(CompilerState *cs, const char *filename)
             } else {
                 nihao_error(cs, "ir: unexpected top-level identifier '%s'",
                             cs->parser.lex->tok_str);
-                next_tok(cs);
-            }
-        } else if (cur_tok(cs) == TOK_MULTIRETURN) {
-            /* 匿名多返回类型定义：multireturn struct { ... } */
-            LexerState *lx = cs->parser.lex;
-            lx->peek_valid = 0;
-            lexer_peek(lx);
-            TokenType nxt = lx->peek_tok;
-            lx->peek_valid = 0;
-            if (nxt == TOK_STRUCT) {
-                ir_type_decl(cs);
-            } else {
-                nihao_error(cs, "ir: multireturn must be followed by struct { }");
                 next_tok(cs);
             }
         } else if (cur_tok(cs) == TOK_COOKING) {

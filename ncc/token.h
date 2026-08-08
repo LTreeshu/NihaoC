@@ -136,7 +136,6 @@
     KeywordDef("unionof",  7, TOK_UNIONOF)         /**< member owner check */          \
     KeywordDef("bitoffsetof", 11, TOK_BITOFFSETOF) /**< bitfield offset */             \
     KeywordDef("as",       2, TOK_AS)              /**< link alias separator */        \
-    KeywordDef("multireturn", 11, TOK_MULTIRETURN) /**< multireturn struct */          \
 
 
 #define KeywordDef(str,len,token) token,

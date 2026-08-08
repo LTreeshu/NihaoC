@@ -839,9 +839,10 @@ alias time = stdlib.time
 
 const ConstValue i8 = 100
 
-multireturn struct{
+/* Multi return: named struct (same mechanism as C) */
+MultiResult struct {
     value1 u8
-    value u8
+    value2 u8
 }
 
 func main() 
@@ -869,7 +870,7 @@ func main()
     }
 
     // Multiple return value handling
-    returnValue multireturn = calculate()
+    returnValue MultiResult = calculate()
 
     return
     /* If the flow variable: dynptr, temp, is not returned,
@@ -877,7 +878,7 @@ func main()
     */
 }
 
-func calculate() multireturn  
+func calculate() MultiResult  
 {
     if visof(value) != _undef {
       return {0,0}
@@ -1347,7 +1348,7 @@ All of it is enforced statically — no runtime garbage collector, no runtime co
 | Types         | `void` `char` `string` `bool` `i8` `i16` `i32` `i64` `u8` `u16` `u32` `u64` `f32` `f64` `fx32` `fx64` `short` `int` `long` `float` `double` |
 | Storage/visibility | `const` `flow` `static` `var` `_undef` `_const` `_flow` `_static` `_var` |
 | Functions     | `func` `is` `return` `break` `continue` `goto` |
-| Aggregates    | `struct` `union` `enum` `alias` `multireturn` |
+| Aggregates    | `struct` `union` `enum` `alias` |
 | Modules       | `module` `use` `link` `linkas` `as` |
 | Control       | `if` `else` `switch` `case` `default` `for` `do` `while` |
 | Compile-time  | `cooking` `align` `static_assert` |

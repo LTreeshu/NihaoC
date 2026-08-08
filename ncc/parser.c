@@ -57,7 +57,7 @@ static int is_type_begin(TokenType tok)
 {
     return is_type_token(tok)
         || tok == TOK_CONST || tok == TOK_FLOW || tok == TOK_STATIC
-        || tok == TOK_VAR || tok == TOK_ALIAS || tok == TOK_MULTIRETURN;
+        || tok == TOK_VAR || tok == TOK_ALIAS;
 }
 
 /* ============================================================
@@ -781,6 +781,11 @@ void parse_declaration(CompilerState *cs)
         if (is_type_begin(cur_tok(cs)) || is_user_type_name(cs) || cur_tok(cs) == TOK_VOID) {
             parse_type(cs, &ret_type);
             has_ret = 1;
+            /* 返回类型挂到函数符号（堆拷贝）：return {..} 复合字面量生成用真实类型名。
+             * 注意挂 func_sym->type->next——sym_push 已 memcpy 拷贝 ftype，ftype->next 无效 */
+            CType *rtsave = nihao_malloc(cs, sizeof(CType));
+            memcpy(rtsave, &ret_type, sizeof(CType));
+            func_sym->type->next = rtsave;
         }
 
         /* determine C return type */
@@ -1109,9 +1114,16 @@ void parse_statement(CompilerState *cs)
             } else {
                 cgen_raw("return ");
                 if (cur_tok(cs) == TOK_LBRACE) {
-                    /* return {v1, v2, ...} compound literal */
+                    /* return {v1, v2, ...} compound literal——复合字面量类型
+                     * 用当前函数返回类型名（原硬编码 (type__compound) 未定义） */
                     next_tok(cs);
-                    cgen_raw("(type__compound)");
+                    const char *rt = "void";
+                    Symbol *f = cs->parser.cur_func;
+                    if (f && f->type && f->type->next) {
+                        const char *tn = c_type_name(f->type->next);
+                        if (tn && tn[0]) rt = tn;
+                    }
+                    cgen_raw("(%s)", rt);
                     cgen_raw("{");
                     if (cur_tok(cs) != TOK_RBRACE) {
                         parse_expression(cs);
@@ -2109,12 +2121,6 @@ void parse_statement_full(CompilerState *cs) {
             next_tok(cs);
             if (cur_tok(cs) != TOK_NEWLINE && cur_tok(cs) != TOK_RBRACE
                 && cur_tok(cs) != TOK_SEMICOLON) {
-
-                // if (cur_tok(cs) == TOK_MULTIRETURN) {
-                //     parse_multireturn(cs);
-                // } else {
-                //     parse_expression(cs);
-                // }
                 parse_expression(cs);
             }
             gen_return_statement(cs);

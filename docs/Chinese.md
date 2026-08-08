@@ -832,9 +832,10 @@ alias time = stdlib.time
 
 const ConstValue i8 = 100
 
-multireturn struct{
+/* 多返回值：命名结构体（与 C 机制一致） */
+MultiResult struct {
     value1 u8
-    value u8
+    value2 u8
 }
 
 func main() 
@@ -862,7 +863,7 @@ func main()
     }
 
     // Multiple return value handling
-    returnValue multireturn = calculate()
+    returnValue MultiResult = calculate()
 
     return
     /* If the flow variable: dynptr, temp, is not returned,
@@ -870,7 +871,7 @@ func main()
     */
 }
 
-func calculate() multireturn  
+func calculate() MultiResult  
 {
     if visof(value) != _undef {
       return {0,0}

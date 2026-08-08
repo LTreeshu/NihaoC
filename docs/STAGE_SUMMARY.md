@@ -33,7 +33,7 @@
 | PB-2 | 一元/复合运算、++/--、前缀 | ir_expr.nc、ir_prefix.nc |
 | PB-3/4 | 数组、struct/union/enum、初始化列表 | ir_array/struct.nc |
 | PB-5/6 | 存储期 visof、内置函数 sizeof/malloc 等 | ir_vis/builtin.nc |
-| PB-7/8 | 控制流 switch/is、多变量、函数指针、multireturn | ir_switch/multi/fptr/mr.nc |
+| PB-7/8 | 控制流 switch/is、多变量、函数指针、struct 返回值（sret） | ir_switch/multi/fptr/mr.nc |
 | PB-9 | 编译期 cooking（static_assert + **编译期变量表 ct_vars**，运行时引用折叠） | ir_cook.nc |
 | PB-12/13 | 指针 IR_ADDR/LOAD/STORE、浮点（x87 f64 运算 + **调用 ABI**：xmm/d0/fa0 参数、IR_ITOD/DTOI） | ir_ptr/float/fcall/conv.nc |
 | PB-16 | 调用约定：struct 参数按值展开（param_agg_ti）、return p 聚合返回（sret） | ir_sparam.nc |
@@ -48,7 +48,7 @@
 - ir_to_c LOAD/STORE 须类型感知（double → `*(double*)`，硬编码 int64_t 会截断位模式）
 - 一元负 double 不能发整数 IR_NEG（毁位模式）→ FSUB 0.0-a
 - 多函数同一汇编文件 label 重名 → ir_backend 发射前加跨函数 lbl_base
-- multireturn 缓冲地址是"值"不是"槽"；_mr_ret 注入 var 表头部
+- sret 缓冲地址是"值"不是"槽"；_mr_ret 注入 var 表头部
 - ir_primary 的 IDENTIFIER 分支先 next_tok 消费——后续分支（ct_var 等）勿再 next_tok（双重消费吞 token）
 
 ## 4. 测试体系

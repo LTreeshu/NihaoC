@@ -20,7 +20,6 @@
 - `link ...` – static library export usage
 - `linkas "..."` – static library export naming
 - `as` – alias binding keyword
-- `multireturn` – multiple return type definition
 - `cooking` – compile-time execution (`cooking { ... }` block)
 - `align` – byte alignment (`align n { ... }` block)
 - `continue` – continue next loop iteration

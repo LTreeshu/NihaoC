@@ -65,7 +65,7 @@ func main()
 ```
 
 > 说明：上例为**当前全量（A 方案）后端可编译**的语法。更多特性示例见
-> [`docs/Chinese.md`](./docs/Chinese.md)：多返回值（multireturn）、编译期
+> [`docs/Chinese.md`](./docs/Chinese.md)：多返回值（命名 struct 返回）、编译期
 > cooking/static_assert、指针 `.()` 解引用、`flow/static/const` 存储期与所有权、
 > 函数指针等（部分为 BNF 规划特性，实现进度见 [`TODO.md`](./TODO.md)）。
 >

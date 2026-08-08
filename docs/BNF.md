@@ -28,7 +28,7 @@
 
 <keyword>        ::= "module" | "use" | "link" | "linkas" | "as"
                    | "func" | "flow" | "static" | "const" | "var"
-                   | "struct" | "union" | "enum" | "alias" | "multireturn"
+                   | "struct" | "union" | "enum" | "alias"
                    | "if" | "else" | "switch" | "case" | "default"
                    | "for" | "do" | "while" | "is" | "break" | "continue"
                    | "goto" | "return" | "cooking" | "align"
@@ -112,7 +112,6 @@
 <type-decl>      ::= <identifier> "struct" "{" { <field-decl> } "}"
                    | <identifier> "union"  "{" { <field-decl> } "}"
                    | <identifier> "enum"   "{" { <enum-variant> } "}"
-                   | "multireturn" "struct" "{" { <field-decl> } "}"
 
 <enum-variant>   ::= <identifier> [ "=" <int-literal> ] | <enum-variant> "," <enum-variant>
 ```
@@ -385,7 +384,7 @@
 | ---- | -------- |
 | 模块/use/link/linkas | §2.1 |
 | alias 类型别名 | §2.2 |
-| struct/union/enum 命名定义、multireturn | §2.2 |
+| struct/union/enum 命名定义、struct 返回值 | §2.2 |
 | 位域 `name u8:1` | §3.1 |
 | 数组/动态数组/切片 | §3 |
 | 多维指针数组 `void[n][m]` | §3 |
