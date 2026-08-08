@@ -1939,7 +1939,7 @@ static void ir_stmt(CompilerState *cs)
             }
             skip_newlines(cs);
         } else if (nt == TOK_LBRACKET) {
-            /* 数组元素赋值 arr[idx] = expr */
+            /* 数组元素赋值 arr[idx] = expr | 切片赋值 arr[lo..hi] = {v0, v1, ...} */
             next_tok(cs);           /* name */
             next_tok(cs);           /* [ */
             int vi = var_find(name);
@@ -1948,7 +1948,41 @@ static void ir_stmt(CompilerState *cs)
                 skip_newlines(cs);
                 return;
             }
-            int idx = ir_expr(cs);
+            int idx = ir_expr(cs);   /* lo 或单下标 */
+            if (cur_tok(cs) == TOK_RANGE) {
+                /* 切片赋值：arr[lo..hi] = {v0, v1, ...}（逐个 STORE；hi 边界留校验） */
+                next_tok(cs);
+                int hi = ir_expr(cs);
+                (void)hi;
+                expect(cs, TOK_RBRACKET);
+                expect(cs, TOK_ASSIGN);
+                if (cur_tok(cs) == TOK_LBRACE) {
+                    next_tok(cs);
+                    skip_newlines(cs);
+                    int k = 0;
+                    if (cur_tok(cs) != TOK_RBRACE) {
+                        for (;;) {
+                            int v = ir_expr(cs);
+                            v = ir_coerce(v, vetyp[vi]);
+                            int offk = ir_new_vreg(F);
+                            ir_emit(F, IR_CONST, offk, -1, -1, k);
+                            int ik = ir_new_vreg(F);
+                            ir_emit(F, IR_ADD, ik, idx, offk, 0);
+                            int addr = ir_elem_addr(cs, vt[vi], ik);
+                            ir_emit(F, IR_STORE, -1, addr, v, 0);
+                            k++;
+                            if (cur_tok(cs) != TOK_COMMA) break;
+                            next_tok(cs);
+                            skip_newlines(cs);
+                        }
+                    }
+                    expect(cs, TOK_RBRACE);
+                } else {
+                    nihao_error(cs, "ir: slice assignment expects { v0, v1, ... }");
+                }
+                skip_newlines(cs);
+                return;
+            }
             expect(cs, TOK_RBRACKET);
             expect(cs, TOK_ASSIGN);
             int v = ir_expr(cs);

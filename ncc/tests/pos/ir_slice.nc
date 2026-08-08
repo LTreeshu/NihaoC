@@ -32,5 +32,29 @@ func main() {
     } else {
         puts("slice2 bad")
     }
+
+    /* 切片赋值：arr[lo..hi] = {v0, v1, ...} 批量写回 */
+    arr[1..4] = {2, 3, 4, 5}
+    if arr[1] == 2 && arr[3] == 4 && arr[5] == 60 {
+        puts("slice assign ok")
+    } else {
+        puts("slice assign bad")
+    }
+    /* 切片读取（写回后） */
+    p3 void = arr[2..4]
+    v3 i32 = *p3
+    if v3 == 3 {
+        puts("slice read2 ok")
+    } else {
+        puts("slice read2 bad")
+    }
+    /* 窄元素切片赋值 */
+    nb i8[5] = {1, 2, 3, 4, 5}
+    nb[1..3] = {9, 8, 7}
+    if nb[1] == 9 && nb[3] == 7 {
+        puts("slice narrow ok")
+    } else {
+        puts("slice narrow bad")
+    }
     return
 }
