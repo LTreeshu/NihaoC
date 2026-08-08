@@ -28,110 +28,48 @@ Source code example demonstration:
 ```c
 module main
 use stdio
-use stdlib
-link "libhttp.so" http
 
-alias http_client = http.http_client
-alias time = stdlib.time
-
-const ConstValue i8 = 100
-
-Structreturn struct {
-    value1 u8:4
-    value u8:4
+// 命名类型：struct（含位域字段）
+Packet struct {
+    type u8
+    len u8:4
+    flag u8:4
 }
 
-func main() 
+const MaxLen i8 = 100
+
+func main()
 {
-    puts("Program starting\n")
+    puts("Program starting")
 
-    // Dynamic memory allocation
-    flow dynptr void = malloc(i32)
-
-    // Pointer operations
-    dynptr.() = ConstValue
-    dynptr.(i8) = ConstValue
-
-    // Array operations
+    // 数组与浮点运算
     arry f32[3] = {1.1, 1.2, 1.3}
-    ptr void[3] = &arry
-    ptrarry void[3] = {&arry[2], &arry[1], &arry[0]}
-    ptrarry2 void[][3] = &ptrarry
-
-    ptrarry2[][1].() = 2.1
-
-    // Visibility checking
-    if visof(staticptr) == _static {
-        flow temp void = malloc(float32)
+    sum f64 = arry[0] + arry[1] + arry[2]
+    if sum > 3.0 {
+        puts("array ok")
     }
 
-    if visof(dynptr) == _flow {
-        puts("the ptr is _flow attribute \n");
-    }
+    // 结构体成员访问
+    p Packet
+    p.type = 1
+    p.len = MaxLen
+    p.flag = 1
 
-    // Multiple return value handling
-    result Structreturn = calculate()
+    // 可见性检查（编译期查询）
+    if visof(MaxLen) == _const {
+        puts("MaxLen is _const")
+    }
 
     return
-    /* If the flow variable: dynptr, temp, is not returned,
-     * they will be automatically free.
-    */
-}
-
-func calculate() Structreturn  
-{
-    if visof(value) != _undef {
-      return {0,0}
-    }
-    else if visof(ConstValue) == _static {
-      return {ConstValue, (ConstValue*2)}
-    }
-}
-
-// Inline function definition
-[[inline]]
-func add(a int, b int) int
-{
-    return (a+b)
-}
-
-// Static function definition
-[[static]]
-func mul(a int, b int) int
-{
-    return (a-b)
-}
-
-// Compile-time definitions
-
-// Compile-time function define 
-cooking maker(name char[], id u8) var_name {
-    return `name``id`
-}
-
-// define const u8 variable: var0, var1, var2 in Compile-time
-cooking {
-    var id u8 = 0
-    const maker("var", id++)
-    const maker("var", id++)
-    const maker("var", id++)
-}
-
-
-// Assign values at compile time
-cooking PI = 3.1415926
-// Assign values at initialization time
-const DoublePI f64 = PI * 2
-
-cooking {
-    // Compile-time calculation
-    const COMPILE_TIME_VALUE i32 = 10 * 20 + 5
-
-    // Compile-time assert
-    static_assert(sizeof(i32) == 4, "i32必须是4字节")
-    static_assert(COMPILE_TIME_VALUE == 205, "编译期计算错误")
 }
 ```
+
+> 说明：上例为**当前全量（A 方案）后端可编译**的语法。更多特性示例见
+> [`docs/Chinese.md`](./docs/Chinese.md)：多返回值（multireturn）、编译期
+> cooking/static_assert、指针 `.()` 解引用、`flow/static/const` 存储期与所有权、
+> 函数指针等（部分为 BNF 规划特性，实现进度见 [`TODO.md`](./TODO.md)）。
+>
+> 语言设计规范（完整 BNF）：[`docs/BNF.md`](./docs/BNF.md)。
 
 ## 构建与运行 | Build & Run
 
@@ -151,7 +89,13 @@ xmake test -b ir-c             # 指定后端
 | ---- | ---- |
 | `c`（默认） | 生成 C 文本，调用外部 tcc 编译为可执行文件 |
 | `native`（方案 A） | libtcc 进程内编译生成的 C 为机器码（无需外部 tcc） |
-| `ir-c` / `ir-native`（方案 B） | IR 中间层双后端：→C 文本 / →x86-64 汇编（Windows x64 ABI） |
+| `ir-c` / `ir-native`（方案 B） | IR 中间层：→C 文本 / →x86-64 汇编（Windows x64 ABI） |
+| `ir-riscv64`（方案 B） | IR → RISC-V 64 汇编（RV64I + D 浮点扩展，AAPCS 类约定，验汇编生成） |
+| `ir-arm64`（方案 B） | IR → AArch64 汇编（AAPCS64，验汇编生成） |
+
+> 三架构后端全齐：x86-64（Win64）、riscv64（RV64）、arm64（AAPCS64）；
+> 后两者生成标准 GAS 汇编（`-backend=ir-riscv64 -o out.s`），本机无交叉汇编器，
+> 仅验证汇编生成正确性（`ncc build xx.nc -backend=ir-riscv64 -o rv.s`）。
 
 TCC 安装目录通过 `NIHAO_TCC_DIR` 环境变量指定（如 `/d/devtools/tcc`，MSYS 路径自动归一化），否则从 PATH 探测。
 

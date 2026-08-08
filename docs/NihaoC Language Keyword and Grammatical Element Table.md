@@ -18,6 +18,19 @@
 - `func` no return value function return value no attribute function definition
 - `alias` – type alias
 - `link ...` – static library export usage
+- `linkas "..."` – static library export naming
+- `as` – alias binding keyword
+- `multireturn` – multiple return type definition
+- `cooking` – compile-time execution (`cooking { ... }` block)
+- `align` – byte alignment (`align n { ... }` block)
+- `continue` – continue next loop iteration
+- `default` – default branch option
+- `goto` – jump keyword
+- `true` / `false` – boolean literals
+- `bitoffsetof` – bit-field member offset
+- `holdof` – variable owner query
+- `string` – string type alias (same as `char[]`)
+- `register` / `restrict` / `volatile` – C-style qualifiers
 - `struct` – structure definition
 - `union` – union definition
 - `enum` – enumeration definition
@@ -38,7 +51,7 @@
 - `break` – exit branch
 - `return` – function return
 - `visof` – visibility check
-- `malloc` – dynamic memory allocation
+- `malloc` – dynamic memory allocation (builtin function, not a keyword)
 
 ###### Type Keywords
 
@@ -51,17 +64,18 @@
 - `u16` – 16‑bit unsigned integer type
 - `u32` – 32‑bit unsigned integer type
 - `u64` – 64‑bit unsigned integer type
+- `i64` – 64‑bit signed integer type
 - `f32` – 32‑bit floating‑point type
 - `f64` – 64‑bit floating‑point type
 - `fx32` – 32‑bit fixed‑point type
 - `fx64` – 64‑bit fixed‑point type
 - `char` – character type
 - `char[]` – string type
-- `short` – character type (legacy)
-- `int` – character type (legacy)
-- `long` – character type (legacy)
-- `float` – character type (legacy)
-- `double` – character type (legacy)
+- `short` – short integer (C-compat)
+- `int` – integer (C-compat)
+- - `long` – long integer (C-compat)
+- - `float` – single-precision float (C-compat)
+- - `double` – double-precision float (C-compat)
 
 ###### Reserved Operators
 

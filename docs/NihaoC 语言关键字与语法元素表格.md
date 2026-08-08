@@ -33,6 +33,19 @@
 - `alias` 类型别名
 
 - `link ...` 静态库导出使用
+- `linkas "..."` 静态库导出命名
+- `as` 别名绑定关键字
+- `multireturn` 多返回值类型定义关键字
+- `cooking` 编译期执行关键字（`cooking { ... }` 块）
+- `align` 字节对齐关键字（`align n { ... }` 块）
+- `continue` 继续下一次循环
+- `default` 分支默认选项
+- `goto` 跳转关键字
+- `true` / `false` 布尔字面量
+- `bitoffsetof` 位域成员偏移
+- `holdof` 变量持有者查询
+- `string` 字符串类型别名（同 `char[]`）
+- `register` / `restrict` / `volatile` C 风格修饰字
 
 - `struct` 结构体定义
 
@@ -74,7 +87,7 @@
 
 - `visof` 可见性检查
 
-- `malloc` 动态内存分配
+- `malloc` 动态内存分配（内置函数，非关键字）
 
 ###### 类型关键字
 
@@ -95,6 +108,7 @@
 - `u32` 32位无符号整数类型
 
 - `u64` 64位无符号整数类型
+- `i64` 64位有符号整数类型
 
 - `f32` 32位浮点数类型
 
@@ -106,17 +120,17 @@
 
 - `char` 字符类型
 
-- `char[]` 字符类型
+- `char[]` 字符串类型
 
-- `short` 字符类型
+- `short` 短整型（C 兼容）
 
-- `int` 字符类型
+- `int` 整型（C 兼容）
 
-- `long` 字符类型
+- `long` 长整型（C 兼容）
 
-- `float` 字符类型
+- `float` 单精度浮点（C 兼容）
 
-- `double` 字符类型
+- `double` 双精度浮点（C 兼容）
 
 ###### 预留操作符
 

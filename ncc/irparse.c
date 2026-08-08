@@ -26,6 +26,29 @@ static int *vtype;          /* 变量数值类型：0=int(默认) 1=double(f64/f
 static int vn_count, vn_cap;
 static int last_mr_buf = -1; /* 最近一次 multireturn 调用返回的缓冲地址 vreg（供声明拷贝） */
 
+/* ============================================================
+ * cooking 编译期变量表（PB-9 深化）：cooking 块内 `const NAME [TYPE] = expr`
+ * 声明的编译期常量，供后续 static_assert / 编译期表达式使用（跨块共享）。
+ * 编译期语义，不生成运行时代码。
+ * ============================================================ */
+static struct { const char *name; long long val; } ct_vars[64];
+static int ct_vars_count;
+
+static int ct_var_exist(const char *name)
+{
+    for (int i = 0; i < ct_vars_count; i++) {
+        if (strcmp(ct_vars[i].name, name) == 0) return 1;
+    }
+    return 0;
+}
+static long long ct_var_find(const char *name)
+{
+    for (int i = 0; i < ct_vars_count; i++) {
+        if (strcmp(ct_vars[i].name, name) == 0) return ct_vars[i].val;
+    }
+    return 0;
+}
+
 /* vreg 浮点类型辅助（PB-13：vreg_type 表在 IrFn，随 vreg_count 增长） */
 static void ir_set_double(int vr)
 {
@@ -721,6 +744,13 @@ static int ir_primary(CompilerState *cs)
         }
         int vi = var_find(name);
         if (vi < 0) {
+            /* cooking 编译期变量：运行时引用折叠为常量（PB-9 深化）。
+             * 注意：name 已被上面 next_tok 消费，这里不要再推进 token！ */
+            if (ct_var_exist(name)) {
+                int vr = ir_new_vreg(F);
+                ir_emit(F, IR_CONST, vr, -1, -1, ct_var_find(name));
+                return vr;
+            }
             /* 可能是函数名引用（取函数地址，供函数指针赋值） */
             for (int fi = 0; fi < P->fn_count; fi++) {
                 if (P->fns[fi].name && strcmp(P->fns[fi].name, name) == 0) {
@@ -1062,6 +1092,10 @@ static long long ir_const_prim(CompilerState *cs)
     if (t == TOK_IDENTIFIER) {
         const char *name = cs->parser.lex->tok_str;
         long long eval = 0;
+        if (ct_var_exist(name)) {        /* cooking 编译期变量优先 */
+            next_tok(cs);
+            return ct_var_find(name);
+        }
         if (enum_const_find(name, &eval)) {
             next_tok(cs);
             return eval;
@@ -1168,7 +1202,8 @@ static void ir_static_assert(CompilerState *cs)
     }
 }
 
-/* cooking { ... }：编译期块——执行块内 static_assert，其余 item 跳过 */
+/* cooking { ... }：编译期块——执行 static_assert；`const NAME [TYPE] = expr`
+ * 声明编译期变量（ct_vars 表，跨块共享）；其余 item 跳过 */
 static void ir_cooking(CompilerState *cs)
 {
     next_tok(cs);               /* cooking */
@@ -1178,8 +1213,33 @@ static void ir_cooking(CompilerState *cs)
         if (cur_tok(cs) == TOK_IDENTIFIER &&
             strcmp(cs->parser.lex->tok_str, "static_assert") == 0) {
             ir_static_assert(cs);
+        } else if (cur_tok(cs) == TOK_CONST) {
+            /* 编译期常量：const NAME [TYPE] = expr → 存 ct_vars */
+            next_tok(cs);
+            if (cur_tok(cs) != TOK_IDENTIFIER) {
+                nihao_error(cs, "ir: cooking const: expected name");
+                while (cur_tok(cs) != TOK_NEWLINE && cur_tok(cs) != TOK_RBRACE &&
+                       cur_tok(cs) != TOK_EOF) next_tok(cs);
+            } else {
+                const char *cname = cs->parser.lex->tok_str;
+                next_tok(cs);
+                if (is_type_token(cur_tok(cs))) next_tok(cs);   /* 可选类型 */
+                if (cur_tok(cs) == TOK_ASSIGN) {
+                    next_tok(cs);
+                    long long v = ir_const_expr(cs);
+                    if (ct_var_exist(cname)) {
+                        nihao_error(cs, "ir: cooking const '%s' redefined", cname);
+                    } else if (ct_vars_count < 64) {
+                        ct_vars[ct_vars_count].name = cname;
+                        ct_vars[ct_vars_count].val = v;
+                        ct_vars_count++;
+                    }
+                } else {
+                    nihao_error(cs, "ir: cooking const: expected '='");
+                }
+            }
         } else {
-            next_tok(cs);       /* 其他编译期 item（var-decl/cooking-call）跳过 */
+            next_tok(cs);       /* 其他编译期 item（cooking-call 等）跳过 */
         }
         skip_newlines(cs);
     }
