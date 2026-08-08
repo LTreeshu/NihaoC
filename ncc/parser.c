@@ -1,5 +1,10 @@
 #include "ncc.h"
 
+/* cooking 编译期（A 方案）：前向声明——parse_statement 内 case 先于定义使用 */
+static long long pc_or(CompilerState *cs);
+static void parse_static_assert(CompilerState *cs);
+static void parse_cooking_block(CompilerState *cs);
+
 
 /* ============================================================
  * Parser Initialization
@@ -428,10 +433,25 @@ void parse_module(CompilerState *cs)
         skip_newlines(cs);
     }
 
-    /* Parse top-level declarations */
+    /* Parse top-level declarations（cooking 编译期块单独分派） */
     while (cur_tok(cs) != TOK_EOF) {
-        parse_declaration(cs);
-        skip_newlines(cs);
+        if (cur_tok(cs) == TOK_COOKING) {
+            parse_cooking_block(cs);
+        } else if (cur_tok(cs) == TOK_ALIGN) {
+            /* align n { ... }：对齐块——块体按普通声明处理（对齐留给 C 布局） */
+            next_tok(cs);
+            if (cur_tok(cs) == TOK_INT_CONST) next_tok(cs);
+            if (cur_tok(cs) == TOK_LBRACE) next_tok(cs);
+            skip_newlines(cs);
+            while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF) {
+                parse_declaration(cs);
+                skip_newlines(cs);
+            }
+            if (cur_tok(cs) == TOK_RBRACE) next_tok(cs);
+        } else {
+            parse_declaration(cs);
+            skip_newlines(cs);
+        }
     }
 }
 
@@ -1310,18 +1330,8 @@ void parse_statement(CompilerState *cs)
         }
 
         case TOK_COOKING:
-            /* Compile-time execution block: skip for core subset */
-            next_tok(cs);
-            expect(cs, TOK_LBRACE);
-            {
-                int depth = 1;
-                while (depth > 0 && cur_tok(cs) != TOK_EOF) {
-                    if (cur_tok(cs) == TOK_LBRACE) depth++;
-                    else if (cur_tok(cs) == TOK_RBRACE) depth--;
-                    if (depth > 0) next_tok(cs);
-                }
-                expect(cs, TOK_RBRACE);
-            }
+            /* 编译期块：static_assert 求值 + 编译期常量（parse_cooking_block） */
+            parse_cooking_block(cs);
             break;
 
         default:
@@ -1471,6 +1481,230 @@ static void parse_builtin_kw(CompilerState *cs, TokenType kw)
     nihao_error(cs, "unknown builtin keyword");
 }
 
+/* ============================================================
+ * cooking 编译期（A 方案，与 IR 子集 PB-9 对齐）：
+ *   cooking { static_assert(expr, "msg") / const NAME [TYPE] = expr / ... }
+ * 常量折叠链 pc_*：int 字面量/一元/四则/移位/比较/相等/位运算/逻辑/括号/
+ * enum 常量/可见性枚举/sizeof(类型)；编译期变量表 ct_vars（跨块共享）
+ * ============================================================ */
+static struct { const char *name; long long val; } ct_vars[64];
+static int ct_vars_count;
+
+static int ct_var_exist(const char *name)
+{
+    for (int i = 0; i < ct_vars_count; i++)
+        if (strcmp(ct_vars[i].name, name) == 0) return 1;
+    return 0;
+}
+static long long ct_var_find(const char *name)
+{
+    for (int i = 0; i < ct_vars_count; i++)
+        if (strcmp(ct_vars[i].name, name) == 0) return ct_vars[i].val;
+    return 0;
+}
+
+static long long pc_or(CompilerState *cs);
+static long long pc_prim(CompilerState *cs)
+{
+    TokenType t = cur_tok(cs);
+    if (t == TOK_INT_CONST) { long long v = cs->parser.lex->tok_val.i; next_tok(cs); return v; }
+    if (t == TOK_TRUE) { next_tok(cs); return 1; }
+    if (t == TOK_FALSE) { next_tok(cs); return 0; }
+    if (t == TOK_LPAREN) {
+        next_tok(cs);
+        long long v = pc_or(cs);
+        if (cur_tok(cs) == TOK_RPAREN) next_tok(cs);
+        return v;
+    }
+    if (t == TOK__UNDEF || t == TOK__CONST || t == TOK__FLOW ||
+        t == TOK__STATIC || t == TOK__VAR) {
+        next_tok(cs);
+        return (t == TOK__UNDEF) ? 0 : (t == TOK__CONST) ? 1 :
+               (t == TOK__FLOW) ? 2 : (t == TOK__STATIC) ? 3 : 4;
+    }
+    if (t == TOK_SIZEOF) {
+        next_tok(cs);
+        if (cur_tok(cs) == TOK_LPAREN) next_tok(cs);
+        if (is_type_begin(cur_tok(cs)) || is_user_type_name(cs)) {
+            CType tmp;
+            parse_type(cs, &tmp);
+            if (cur_tok(cs) == TOK_RPAREN) next_tok(cs);
+            return tmp.size ? (long long)tmp.size : 0;
+        }
+        while (cur_tok(cs) != TOK_RPAREN && cur_tok(cs) != TOK_NEWLINE &&
+               cur_tok(cs) != TOK_EOF) next_tok(cs);
+        if (cur_tok(cs) == TOK_RPAREN) next_tok(cs);
+        return 8;   /* sizeof(expr)：8 字节槽 */
+    }
+    if (t == TOK_IDENTIFIER) {
+        const char *name = cs->parser.lex->tok_str;
+        if (ct_var_exist(name)) { next_tok(cs); return ct_var_find(name); }
+        Symbol *s = sym_find(cs, name);
+        if (s && s->kind == SYM_ENUM) { next_tok(cs); return (long long)s->addr; }
+        nihao_error(cs, "constant expression: unknown identifier '%s'", name);
+        next_tok(cs);
+        return 0;
+    }
+    nihao_error(cs, "constant expression: unexpected token '%s'", token_name(t));
+    next_tok(cs);
+    return 0;
+}
+static long long pc_unary(CompilerState *cs)
+{
+    TokenType t = cur_tok(cs);
+    if (t == TOK_MINUS) { next_tok(cs); return -pc_unary(cs); }
+    if (t == TOK_LOGICAL_NOT) { next_tok(cs); return !pc_unary(cs); }
+    if (t == TOK_BITWISE_NOT) { next_tok(cs); return ~pc_unary(cs); }
+    return pc_prim(cs);
+}
+static long long pc_mul(CompilerState *cs)
+{
+    long long a = pc_unary(cs);
+    for (;;) {
+        TokenType t = cur_tok(cs);
+        if (t == TOK_STAR) { next_tok(cs); a *= pc_unary(cs); }
+        else if (t == TOK_SLASH) { next_tok(cs); long long d = pc_unary(cs); a = d ? a / d : 0; }
+        else if (t == TOK_PERCENT) { next_tok(cs); long long d = pc_unary(cs); a = d ? a % d : 0; }
+        else return a;
+    }
+}
+static long long pc_add(CompilerState *cs)
+{
+    long long a = pc_mul(cs);
+    for (;;) {
+        TokenType t = cur_tok(cs);
+        if (t == TOK_PLUS) { next_tok(cs); a += pc_mul(cs); }
+        else if (t == TOK_MINUS) { next_tok(cs); a -= pc_mul(cs); }
+        else return a;
+    }
+}
+static long long pc_shift(CompilerState *cs)
+{
+    long long a = pc_add(cs);
+    for (;;) {
+        TokenType t = cur_tok(cs);
+        if (t == TOK_LEFT_SHIFT) { next_tok(cs); a <<= pc_add(cs); }
+        else if (t == TOK_RIGHT_SHIFT) { next_tok(cs); a >>= pc_add(cs); }
+        else return a;
+    }
+}
+static long long pc_rel(CompilerState *cs)
+{
+    long long a = pc_shift(cs);
+    for (;;) {
+        TokenType t = cur_tok(cs);
+        if (t == TOK_LT) { next_tok(cs); a = a < pc_shift(cs); }
+        else if (t == TOK_GT) { next_tok(cs); a = a > pc_shift(cs); }
+        else if (t == TOK_LE) { next_tok(cs); a = a <= pc_shift(cs); }
+        else if (t == TOK_GE) { next_tok(cs); a = a >= pc_shift(cs); }
+        else return a;
+    }
+}
+static long long pc_eq(CompilerState *cs)
+{
+    long long a = pc_rel(cs);
+    for (;;) {
+        TokenType t = cur_tok(cs);
+        if (t == TOK_EQ) { next_tok(cs); a = a == pc_rel(cs); }
+        else if (t == TOK_NE) { next_tok(cs); a = a != pc_rel(cs); }
+        else return a;
+    }
+}
+static long long pc_bitand(CompilerState *cs)
+{
+    long long a = pc_eq(cs);
+    while (cur_tok(cs) == TOK_BITWISE_AND) { next_tok(cs); a &= pc_eq(cs); }
+    return a;
+}
+static long long pc_bitxor(CompilerState *cs)
+{
+    long long a = pc_bitand(cs);
+    while (cur_tok(cs) == TOK_BITWISE_XOR) { next_tok(cs); a ^= pc_bitand(cs); }
+    return a;
+}
+static long long pc_bitor(CompilerState *cs)
+{
+    long long a = pc_bitxor(cs);
+    while (cur_tok(cs) == TOK_BITWISE_OR) { next_tok(cs); a |= pc_bitxor(cs); }
+    return a;
+}
+static long long pc_and(CompilerState *cs)
+{
+    long long a = pc_bitor(cs);
+    while (cur_tok(cs) == TOK_LOGICAL_AND) { next_tok(cs); long long b = pc_bitor(cs); a = a && b; }
+    return a;
+}
+static long long pc_or(CompilerState *cs)
+{
+    long long a = pc_and(cs);
+    while (cur_tok(cs) == TOK_LOGICAL_OR) { next_tok(cs); long long b = pc_and(cs); a = a || b; }
+    return a;
+}
+
+/* static_assert(expr, "msg")：编译期断言 */
+static void parse_static_assert(CompilerState *cs)
+{
+    next_tok(cs);               /* static_assert */
+    if (cur_tok(cs) == TOK_LPAREN) next_tok(cs);
+    long long v = pc_or(cs);
+    const char *msg = "";
+    if (cur_tok(cs) == TOK_COMMA) {
+        next_tok(cs);
+        if (cur_tok(cs) == TOK_STRING_LITERAL) {
+            msg = cs->parser.lex->tok_str;
+            next_tok(cs);
+        }
+    }
+    if (cur_tok(cs) == TOK_RPAREN) next_tok(cs);
+    if (!v) {
+        nihao_error(cs, "static_assert failed: %s", msg);
+    }
+}
+
+/* cooking { ... }：编译期块——static_assert 求值 + 编译期常量声明 */
+static void parse_cooking_block(CompilerState *cs)
+{
+    next_tok(cs);               /* cooking */
+    if (cur_tok(cs) != TOK_LBRACE) {
+        nihao_error(cs, "cooking must be followed by { }");
+        return;
+    }
+    next_tok(cs);
+    skip_newlines(cs);
+    while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF) {
+        if (cur_tok(cs) == TOK_IDENTIFIER &&
+            strcmp(cs->parser.lex->tok_str, "static_assert") == 0) {
+            parse_static_assert(cs);
+        } else if (cur_tok(cs) == TOK_CONST) {
+            /* 编译期常量：const NAME [TYPE] = expr → 存 ct_vars */
+            next_tok(cs);
+            if (cur_tok(cs) == TOK_IDENTIFIER) {
+                const char *cname = cs->parser.lex->tok_str;
+                next_tok(cs);
+                if (is_type_token(cur_tok(cs))) next_tok(cs);
+                if (cur_tok(cs) == TOK_ASSIGN) {
+                    next_tok(cs);
+                    long long v = pc_or(cs);
+                    if (ct_var_exist(cname)) {
+                        nihao_error(cs, "cooking const '%s' redefined", cname);
+                    } else if (ct_vars_count < 64) {
+                        ct_vars[ct_vars_count].name = cname;
+                        ct_vars[ct_vars_count].val = v;
+                        ct_vars_count++;
+                    }
+                } else {
+                    nihao_error(cs, "cooking const: expected '='");
+                }
+            }
+        } else {
+            next_tok(cs);       /* 其他编译期 item 跳过 */
+        }
+        skip_newlines(cs);
+    }
+    if (cur_tok(cs) == TOK_RBRACE) next_tok(cs);
+    skip_newlines(cs);
+}
+
 static void parse_primary(CompilerState *cs)
 {
     TokenType tok = cur_tok(cs);
@@ -1523,6 +1757,12 @@ static void parse_primary(CompilerState *cs)
                 vis_check_usable(cs, sym);
             }
             next_tok(cs);
+
+            /* cooking 编译期变量：运行时引用折叠为常量（PB-9，与 IR 子集对齐） */
+            if (!sym && ct_var_exist(name)) {
+                cgen_raw("%lld", ct_var_find(name));
+                break;
+            }
 
             /* Builtin calls: sizeof/typeof/alignof/offsetof/visof/malloc/... */
             if (cur_tok(cs) == TOK_LPAREN) {
@@ -2197,8 +2437,8 @@ void parse_statement_full(CompilerState *cs) {
             break;
 
         case TOK_COOKING:
-            // parse_cooking_block(cs);
-            // cooking_generate_code(cs);
+            /* 顶层编译期块：static_assert 求值 + 编译期常量（parse_cooking_block） */
+            parse_cooking_block(cs);
             break;
 
         default:
