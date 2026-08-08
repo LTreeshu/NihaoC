@@ -155,6 +155,11 @@ void parse_type(CompilerState *cs, CType *type)
                     }
                     CType pt;
                     parse_type(cs, &pt);
+                    /* 参数类型链入 params 链表（头插；c_type_name 收集后反转） */
+                    CType *psave = type_new(cs, TYPE_NONE);
+                    memcpy(psave, &pt, sizeof(CType));
+                    psave->next = type->params;
+                    type->params = psave;
                     type->param_count++;
                     if (cur_tok(cs) == TOK_COMMA) next_tok(cs);
                     skip_newlines(cs);
@@ -164,7 +169,21 @@ void parse_type(CompilerState *cs, CType *type)
                 if (is_type_begin(cur_tok(cs)) || is_user_type_name(cs)) {
                     CType *ret = type_new(cs, TYPE_NONE);
                     parse_type(cs, ret);
-                    type->next = ret;
+                    if (ret->kind == TYPE_ARRAY && ret->ref) {
+                        /* `void(params) T[N]`：返回类型解析把 [N] 吃掉了。
+                         * NihaoC 惯例（如 table void(u8)[2]）中 [N] 修饰整个
+                         * 函数指针（函数指针数组）→ 还原：vtype 包装成
+                         * TYPE_ARRAY(ref=函数指针)，返回类型恢复为元素类型 */
+                        CType *arr = type_new(cs, TYPE_ARRAY);
+                        type->next = ret->ref;   /* 先：返回类型 = 元素类型 */
+                        arr->ref = type_new(cs, type->kind);
+                        memcpy(arr->ref, type, sizeof(CType));  /* 拷贝修正后的函数指针 */
+                        arr->param_count = ret->param_count;
+                        arr->size = ret->size;
+                        *type = *arr;
+                    } else {
+                        type->next = ret;
+                    }
                 } else if (cur_tok(cs) == TOK_VOID) {
                     /* explicit "void" return: generic pointer */
                     CType *ret = type_new(cs, TYPE_VOID);
@@ -172,7 +191,7 @@ void parse_type(CompilerState *cs, CType *type)
                     type->next = ret;
                 }
             }
-            return;
+            break;   /* 不 return：继续走数组/指针后缀循环（void[3]、void(i64) i64[2]） */
         case TOK_CHAR:
             type->kind = TYPE_CHAR;
             type->size = 1;
@@ -758,10 +777,20 @@ void parse_declaration(CompilerState *cs)
         param->next = func_sym->params;
         func_sym->params = param;
 
-                char one[128];
-                snprintf(one, sizeof(one), "%s%s %s%s",
-                         cparams[0] ? ", " : "", c_type_name(&ptype), pname,
-                         c_type_suffix(&ptype));
+                char one[256];
+                if (ptype.kind == TYPE_FUNC) {
+                    /* 函数指针参数：ret(*name)(params) */
+                    char pstr[256];
+                    c_type_params(&ptype, pstr, sizeof(pstr));
+                    snprintf(one, sizeof(one), "%s%s(*%s)(%s)",
+                             cparams[0] ? ", " : "",
+                             c_type_name(ptype.next), pname,
+                             pstr[0] ? pstr : "void");
+                } else {
+                    snprintf(one, sizeof(one), "%s%s %s%s",
+                             cparams[0] ? ", " : "", c_type_name(&ptype), pname,
+                             c_type_suffix(&ptype));
+                }
                 strncat(cparams, one, sizeof(cparams) - strlen(cparams) - 1);
 
                 if (cur_tok(cs) == TOK_COMMA) {
@@ -857,8 +886,26 @@ void parse_declaration(CompilerState *cs)
     var_sym->vis = vis;
 
     /* emit declaration header */
-    cgen_raw("%s%s%s %s%s", is_const ? "const " : "", is_static ? "static " : "",
-             c_type_name(&vtype), name, c_type_suffix(&vtype));
+    {
+        int is_fptr = (vtype.kind == TYPE_FUNC ||
+                       (vtype.kind == TYPE_ARRAY && vtype.ref &&
+                        vtype.ref->kind == TYPE_FUNC));
+        if (is_fptr) {
+            /* 函数指针（数组）：C 为 ret(*name[suffix])(params)
+             * 类型名包在名字两侧，数组后缀 [N] 插在 *name 后 */
+            CType *ft = (vtype.kind == TYPE_FUNC) ? &vtype : vtype.ref;
+            char pstr[512];
+            c_type_params(ft, pstr, sizeof(pstr));
+            cgen_raw("%s%s%s(*%s%s)(%s)", is_const ? "const " : "",
+                     is_static ? "static " : "",
+                     c_type_name(ft->next), name, c_type_suffix(&vtype),
+                     pstr[0] ? pstr : "void");
+        } else {
+            cgen_raw("%s%s%s %s%s", is_const ? "const " : "",
+                     is_static ? "static " : "",
+                     c_type_name(&vtype), name, c_type_suffix(&vtype));
+        }
+    }
 
     /* initializer */
     if (cur_tok(cs) == TOK_ASSIGN) {

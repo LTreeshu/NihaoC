@@ -21,7 +21,10 @@
 - cgen 补 `#include <stddef.h>`（offsetof）
 - 前缀 `++x/--x`、数组初始化列表、switch/case（P0 三项已闭合，ir_loop/ir_switch 四后端通用）
 
-**已知 A 方案缺口**（见 TODO）：struct 返回生成 C bug（`type__compound` 未定义）、函数指针声明生成 bug、link 导入未实现、cooking 顶层块（parser.c 注释掉）。
+**已知 A 方案缺口**（见 TODO）：link 导入未实现、cooking 顶层块（parser.c 注释掉）。
+已修复（2026-08-08）：struct 返回生成 C bug（`type__compound` → 真实返回类型名，四后端通过）；
+函数指针声明生成 bug（TYPE_FUNC 参数列表链入 params + `ret(*name[N])(params)` 声明 + `void[T[N]]`
+还原为函数指针数组，四后端通过，ir_fptr 升 IR_SUBSET）。
 
 ## 3. B 方案（IR）现状
 
@@ -66,6 +69,6 @@ xmake test --all      # 全矩阵：c/native 12P、ir 后端 ~20 用例，0 FAIL
 - PB-3 剩余：切片 `[a..b]`、动态数组 `[...]`（IR 与全量）
 - PB-9 剩余：编译期函数调用（cooking-call 执行）
 - x86-64 SysV 变体（验汇编）、loongarch 后端
-- A 方案：struct 返回 cgen bug、函数指针 cgen bug
+- A 方案：link 导入、cooking 顶层块
 - PA-9：-run/Linux 实测（无环境）
 - 文档：Chinese.md/English.md 示例已核对符合 BNF v2.0（含规划特性）

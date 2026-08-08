@@ -399,6 +399,7 @@ void cgen_dedent(void);
 const char *cgen_result(void);
 const char *c_type_name(CType *t);
 const char *c_type_suffix(CType *t);
+void c_type_params(const CType *t, char *out, int sz);   /* 函数指针参数列表 */
 void cgen_header(void);
 
 /* native.c - libtcc machine-code backend (-backend=native) */

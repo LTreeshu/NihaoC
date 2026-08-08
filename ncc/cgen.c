@@ -108,6 +108,26 @@ const char *cgen_result(void)
  * Uses a small static buffer; caller must consume immediately.
  * ============================================================ */
 
+/* 函数指针参数类型列表 → "int64_t, int64_t"（params 链表头插 → 收集反转）。
+ * 供 c_type_name(TYPE_FUNC) 与函数指针变量/参数声明共用 */
+void c_type_params(const CType *t, char *out, int sz)
+{
+    char plist[16][64];
+    int pc = 0;
+    if (sz <= 0) return;
+    out[0] = '\0';
+    if (!t) return;
+    for (const CType *pp = t->params; pp && pc < 16; pp = pp->next) {
+        const char *nm = c_type_name((CType *)pp);
+        snprintf(plist[pc], sizeof(plist[pc]), "%s", nm);
+        pc++;
+    }
+    for (int i = pc - 1; i >= 0; i--) {
+        if (out[0]) strncat(out, ", ", (size_t)(sz - strlen(out) - 1));
+        strncat(out, plist[i], (size_t)(sz - strlen(out) - 1));
+    }
+}
+
 const char *c_type_name(CType *t)
 {
     static char buf[256];
@@ -172,11 +192,15 @@ const char *c_type_name(CType *t)
             }
             return "void*";
         case TYPE_FUNC:
-            /* Function pointer: void(args) ret -> ret(*)(args) */
+            /* Function pointer: void(args) ret -> ret(*)(args)。
+             * 参数类型存在 params 链表（头插存储 → 先收集到本地数组再反转输出；
+             * ⚠️ c_type_name 返回 static buf，须立即拷贝到本地槽） */
             {
                 const char *rt = t->next ? c_type_name(t->next) : "void";
-                const char *fn = cg.func_return_name[0] ? cg.func_return_name : "void";
-                snprintf(buf, sizeof(buf), "%s(*)(%s)", rt, fn);
+                char pstr[512];
+                c_type_params(t, pstr, sizeof(pstr));
+                snprintf(buf, sizeof(buf), "%s(*)(%s)", rt,
+                         pstr[0] ? pstr : "void");
                 (void)elem;
                 return buf;
             }
