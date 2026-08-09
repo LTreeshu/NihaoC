@@ -59,6 +59,13 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
                       in->op == IR_SUB ? "  sub a0, a0, a1\n" : "  mul a0, a0, a1\n");
             rv_store_a0(b, in->dst, tb);
             break;
+        case IR_SHL: case IR_SHR: case IR_AND: case IR_OR:
+            rv_ld2(b, in, tb);
+            nb_put(b, in->op == IR_SHL ? "  sll a0, a0, a1\n" :
+                      in->op == IR_SHR ? "  srl a0, a0, a1\n" :
+                      in->op == IR_AND ? "  and a0, a0, a1\n" : "  or a0, a0, a1\n");
+            rv_store_a0(b, in->dst, tb);
+            break;
         case IR_DIV: case IR_MOD:
             rv_ld2(b, in, tb);
             nb_put(b, in->op == IR_DIV ? "  div a0, a0, a1\n" : "  rem a0, a0, a1\n");

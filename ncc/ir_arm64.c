@@ -84,6 +84,14 @@ static void a64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
                       in->op == IR_SUB ? "  sub x0, x0, x1\n" : "  mul x0, x0, x1\n");
             a64_st_x0(b, in->dst, tb);
             break;
+        case IR_SHL: case IR_SHR: case IR_AND: case IR_OR:
+            a64_ld_x0(b, in->a, tb);
+            a64_ld_reg(b, "x1", in->b, tb);
+            nb_put(b, in->op == IR_SHL ? "  lsl x0, x0, x1\n" :
+                      in->op == IR_SHR ? "  lsr x0, x0, x1\n" :
+                      in->op == IR_AND ? "  and x0, x0, x1\n" : "  orr x0, x0, x1\n");
+            a64_st_x0(b, in->dst, tb);
+            break;
         case IR_DIV: case IR_MOD:
             a64_ld_x0(b, in->a, tb);
             a64_ld_reg(b, "x1", in->b, tb);

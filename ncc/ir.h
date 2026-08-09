@@ -16,6 +16,7 @@ typedef enum {
     IR_CONST,       /* dst = imm                      */
     IR_MOV,         /* dst = a                        */
     IR_ADD, IR_SUB, IR_MUL, IR_DIV, IR_MOD,
+    IR_SHL, IR_SHR, IR_AND, IR_OR,   /* 位运算（位域/位操作）：dst = a op b */
     IR_NEG,         /* dst = -a                       */
     IR_NOT,         /* dst = ~a（按位取反）            */
     IR_CMP_EQ, IR_CMP_NE, IR_CMP_LT, IR_CMP_LE,

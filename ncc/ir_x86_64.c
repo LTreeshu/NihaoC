@@ -59,6 +59,26 @@ static void x64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             x64_slot(b, in->dst, tb);
             nb_put(b, "\n");
             break;
+        case IR_SHL: case IR_SHR:
+            /* 移位：计数须在 cl（movq b→rcx；shlq/shrq %cl, %rax） */
+            nb_put(b, "  movq ");
+            x64_slot(b, in->a, tb);
+            nb_put(b, ", %%rax\n  movq ");
+            x64_slot(b, in->b, tb);
+            nb_put(b, ", %%rcx\n  %sq %%cl, %%rax\n  movq %%rax, ",
+                   in->op == IR_SHL ? "shl" : "shr");
+            x64_slot(b, in->dst, tb);
+            nb_put(b, "\n");
+            break;
+        case IR_AND: case IR_OR:
+            nb_put(b, "  movq ");
+            x64_slot(b, in->a, tb);
+            nb_put(b, ", %%rax\n  %sq ", in->op == IR_AND ? "and" : "or");
+            x64_slot(b, in->b, tb);
+            nb_put(b, ", %%rax\n  movq %%rax, ");
+            x64_slot(b, in->dst, tb);
+            nb_put(b, "\n");
+            break;
         case IR_ITOD:
             /* int64 槽 → x87 整数加载转 double → 存回槽（fildq 支持已验证） */
             nb_put(b, "  fildq ");

@@ -133,6 +133,7 @@ typedef struct {
     int kind;               /* 0=struct 1=union 2=enum */
     const char *mnames[IR_MAX_MEMB];   /* 成员名（enum 为 variant 名） */
     long long mvals[IR_MAX_MEMB];      /* enum variant 值 */
+    int mbits[IR_MAX_MEMB];            /* 位域宽度（0=非位域；槽内低 N 位） */
     int mcount;
 } IrAggType;
 static IrAggType agg_types[IR_MAX_AGG];
@@ -170,6 +171,48 @@ static int agg_member_find(int ti, const char *mname)
     for (int i = 0; i < a->mcount; i++)
         if (strcmp(a->mnames[i], mname) == 0) return i;
     return -1;
+}
+
+/* ---- 位域（槽内低 N 位）---- */
+static int ir_bitmask(int bits)
+{
+    long long m = (bits >= 64) ? -1 : ((1LL << bits) - 1);
+    int v = ir_new_vreg(F);
+    ir_emit(F, IR_CONST, v, -1, -1, m);
+    return v;
+}
+/* 读位域：LOAD → AND mask（bits<=0 时原样 LOAD） */
+static int ir_bf_load(int addr, int bits)
+{
+    int vr = ir_new_vreg(F);
+    ir_emit(F, IR_LOAD, vr, addr, -1, 0);
+    if (bits > 0) {
+        int mv = ir_bitmask(bits);
+        int r2 = ir_new_vreg(F);
+        ir_emit(F, IR_AND, r2, vr, mv, 0);
+        vr = r2;
+    }
+    return vr;
+}
+/* 写位域（RMW）：读槽 → AND ~mask → OR (v & mask) → STORE；bits<=0 直接 STORE */
+static void ir_bf_store(int addr, int v, int bits)
+{
+    if (bits <= 0) {
+        ir_emit(F, IR_STORE, -1, addr, v, 0);
+        return;
+    }
+    int cur = ir_new_vreg(F);
+    ir_emit(F, IR_LOAD, cur, addr, -1, 0);
+    int mask = ir_bitmask(bits);
+    int notm = ir_new_vreg(F);
+    ir_emit(F, IR_NOT, notm, mask, -1, 0);
+    int c1 = ir_new_vreg(F);
+    ir_emit(F, IR_AND, c1, cur, notm, 0);
+    int v1 = ir_new_vreg(F);
+    ir_emit(F, IR_AND, v1, v, mask, 0);
+    int r = ir_new_vreg(F);
+    ir_emit(F, IR_OR, r, c1, v1, 0);
+    ir_emit(F, IR_STORE, -1, addr, r, 0);
 }
 
 /* 聚合类型声明：name Type [= {...}|= expr]
@@ -810,6 +853,13 @@ static int ir_primary(CompilerState *cs)
             ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
             int vr = ir_new_vreg(F);
             ir_emit(F, IR_LOAD, vr, addr, -1, 0);
+            /* 位域成员：AND 掩码取低 N 位 */
+            if (agg_types[vty[vi]].mbits[fi] > 0) {
+                int mv = ir_bitmask(agg_types[vty[vi]].mbits[fi]);
+                int r2 = ir_new_vreg(F);
+                ir_emit(F, IR_AND, r2, vr, mv, 0);
+                vr = r2;
+            }
             return vr;
         }
         /* 赋值表达式（表达式级）：x = e / x op= e / x++ / x--，返回新值。
@@ -1819,17 +1869,26 @@ static void ir_stmt(CompilerState *cs)
                 next_tok(cs);
                 int b = ir_expr(cs);
                 int nv;
+                int bfbits = agg_types[vty[vi]].mbits[fi];
                 if (!is_compound) {
                     nv = b;
                 } else {
-                    int cur = ir_new_vreg(F);
-                    ir_emit(F, IR_MOV, cur, vt[vi] + off, -1, 0);
+                    int cur;
+                    if (bfbits > 0) {
+                        /* 位域复合赋值：基于位域值运算（LOAD+AND 取低 N 位） */
+                        int caddr = ir_new_vreg(F);
+                        ir_emit(F, IR_ADDR, caddr, vt[vi], -1, off);
+                        cur = ir_bf_load(caddr, bfbits);
+                    } else {
+                        cur = ir_new_vreg(F);
+                        ir_emit(F, IR_MOV, cur, vt[vi] + off, -1, 0);
+                    }
                     nv = ir_new_vreg(F);
                     ir_emit(F, aop, nv, cur, b, 0);
                 }
                 int addr = ir_new_vreg(F);
                 ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
-                ir_emit(F, IR_STORE, -1, addr, nv, 0);
+                ir_bf_store(addr, nv, bfbits);
                 skip_newlines(cs);
             } else {
                 nihao_error(cs, "ir: expected '=' after member access");
@@ -2232,9 +2291,13 @@ static void ir_type_decl(CompilerState *cs)
                 }
                 break;
             }
-            if (cur_tok(cs) == TOK_COLON) {        /* 位域 :N，忽略宽度 */
+            if (cur_tok(cs) == TOK_COLON) {        /* 位域 :N——记录宽度（槽内低 N 位） */
                 next_tok(cs);
-                if (cur_tok(cs) == TOK_INT_CONST) next_tok(cs);
+                if (cur_tok(cs) == TOK_INT_CONST) {
+                    long long bw = cs->parser.lex->tok_val.i;
+                    a->mbits[a->mcount] = (bw > 0 && bw < 64) ? (int)bw : 0;
+                    next_tok(cs);
+                }
             }
             if (cur_tok(cs) == TOK_ASSIGN) {       /* 默认值：仅支持简单常量 */
                 next_tok(cs);

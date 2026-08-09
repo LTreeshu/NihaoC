@@ -55,6 +55,10 @@ static const char *bin_op(IrOp op)
         case IR_MUL: return "*";
         case IR_DIV: return "/";
         case IR_MOD: return "%";
+        case IR_SHL: return "<<";
+        case IR_SHR: return ">>";
+        case IR_AND: return "&";
+        case IR_OR:  return "|";
         default: return "?";
     }
 }
@@ -152,6 +156,7 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                     break;
                 case IR_ADD: case IR_SUB: case IR_MUL:
                 case IR_DIV: case IR_MOD:
+                case IR_SHL: case IR_SHR: case IR_AND: case IR_OR:
                     cb_put(&b, "    t%d = t%d %s t%d;\n",
                            in->dst, in->a, bin_op(in->op), in->b);
                     break;
