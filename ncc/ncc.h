@@ -397,6 +397,9 @@ void cgen_blank(void);
 void cgen_indent(void);
 void cgen_dedent(void);
 const char *cgen_result(void);
+int cgen_mark(void);                /* 分段缓冲：mark/slice/truncate */
+const char *cgen_slice(int mark);
+void cgen_truncate(int mark);
 const char *c_type_name(CType *t);
 const char *c_type_suffix(CType *t);
 void c_type_params(const CType *t, char *out, int sz);   /* 函数指针参数列表 */

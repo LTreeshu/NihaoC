@@ -353,13 +353,37 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
     return vn_count++;
 }
 
-/* 数组元素地址：&arr[0] + idx*8（元素统一 8 字节，与 vreg 模型一致） */
-static int ir_elem_addr(CompilerState *cs, int base_vreg, int idx_vreg)
+/* 数组元素寻址宽度：槽模型数组一律 8 字节；仅动态字符串（vetyp 码 8，
+ * char[] 池地址）按 1 字节。vetyp 其他码只影响值截断（ir_coerce），不参与寻址 */
+static int ir_elem_width(int code)
 {
+    return code == 8 ? 1 : 8;
+}
+
+/* 数组元素地址：&arr[0] + idx*width（width 编码进 ELEM_ADDR imm；imm=0 兼容=8）
+ * is_ptr：动态字符串（vetyp=8 池地址）——槽里存的是指针值，取槽值（MOV）后
+ * **向前偏移**（池内存向上布局；ELEM_ADDR 是后端栈布局方向，不适用） */
+static int ir_elem_addr(CompilerState *cs, int base_vreg, int idx_vreg, int width, int is_ptr)
+{
+    if (is_ptr) {
+        int base = ir_new_vreg(F);
+        ir_emit(F, IR_MOV, base, base_vreg, -1, 0);
+        int addr = ir_new_vreg(F);
+        if (width == 1) {
+            ir_emit(F, IR_ADD, addr, base, idx_vreg, 0);
+        } else {
+            int wv = ir_new_vreg(F);
+            ir_emit(F, IR_CONST, wv, -1, -1, width);
+            int off = ir_new_vreg(F);
+            ir_emit(F, IR_MUL, off, idx_vreg, wv, 0);
+            ir_emit(F, IR_ADD, addr, base, off, 0);
+        }
+        return addr;
+    }
     int base = ir_new_vreg(F);
     ir_emit(F, IR_ADDR, base, base_vreg, -1, 0);
     int addr = ir_new_vreg(F);
-    ir_emit(F, IR_ELEM_ADDR, addr, base, idx_vreg, 0);
+    ir_emit(F, IR_ELEM_ADDR, addr, base, idx_vreg, width == 8 ? 0 : width);
     return addr;
 }
 
@@ -824,12 +848,17 @@ static int ir_primary(CompilerState *cs)
                 next_tok(cs);
                 ir_expr(cs);            /* hi 忽略 */
                 expect(cs, TOK_RBRACKET);
-                return ir_elem_addr(cs, vt[vi], idx);
+                return ir_elem_addr(cs, vt[vi], idx, ir_elem_width(vetyp[vi]), vetyp[vi] == 8);
             }
             expect(cs, TOK_RBRACKET);
-            int addr = ir_elem_addr(cs, vt[vi], idx);
+            int addr = ir_elem_addr(cs, vt[vi], idx, ir_elem_width(vetyp[vi]), vetyp[vi] == 8);
             int vr = ir_new_vreg(F);
-            ir_emit(F, IR_LOAD, vr, addr, -1, 0);
+            if (vetyp[vi] == 8) {
+                /* 动态字符串元素（char，1 字节）：IR_LOAD8 字节读（0-255） */
+                ir_emit(F, IR_LOAD8, vr, addr, -1, 0);
+            } else {
+                ir_emit(F, IR_LOAD, vr, addr, -1, 0);
+            }
             if (vetyp[vi] == 1) ir_set_double(vr);   /* PB-1：浮点元素标记（运算/比较用） */
             return vr;
         }
@@ -1920,6 +1949,7 @@ static void ir_stmt(CompilerState *cs)
             next_tok(cs);           /* name */
             next_tok(cs);           /* 类型 */
             int elems = 0;
+            int is_arr = 0;         /* 出现过 [..]（数组/字符串；标量 char 非数组） */
             if (cur_tok(cs) == TOK_LPAREN) {
                 /* 函数指针类型 void(params) [ret]：跳过参数列表与可选返回类型 */
                 next_tok(cs);
@@ -1934,6 +1964,7 @@ static void ir_stmt(CompilerState *cs)
                 }
             } else if (cur_tok(cs) == TOK_LBRACKET) {
                 next_tok(cs);
+                is_arr = 1;         /* char[] 动态字符串与数组共用此标记 */
                 if (cur_tok(cs) == TOK_RANGE || cur_tok(cs) == TOK_ELLIPSIS) {
                     /* 纯动态数组 [...] / [..]：固定默认容量（增长语义留 TODO） */
                     elems = 8;
@@ -1952,6 +1983,9 @@ static void ir_stmt(CompilerState *cs)
             int vi = var_declare(name, elems, -1, decl_vis);
             if (elems > 0) {
                 vetyp[vi] = vt_code;    /* 数组元素类型（元素截断/浮点标记用） */
+            } else if (vt_code == 2 && elems == 0 && is_arr) {
+                /* char[] 动态字符串：池地址（字节布局）——寻址宽度 1（码 8 标记） */
+                vetyp[vi] = 8;
             } else if (vt_code == 1) {
                 vtype[vi] = 1;          /* f64/f32 变量 → double 槽 */
                 ir_set_double(vt[vi]);  /* 槽 vreg 类型同步（ir_to_c 声明 double） */
@@ -2027,8 +2061,9 @@ static void ir_stmt(CompilerState *cs)
                             ir_emit(F, IR_CONST, offk, -1, -1, k);
                             int ik = ir_new_vreg(F);
                             ir_emit(F, IR_ADD, ik, idx, offk, 0);
-                            int addr = ir_elem_addr(cs, vt[vi], ik);
-                            ir_emit(F, IR_STORE, -1, addr, v, 0);
+                            int addr = ir_elem_addr(cs, vt[vi], ik, ir_elem_width(vetyp[vi]), vetyp[vi] == 8);
+                            if (vetyp[vi] == 8) ir_emit(F, IR_STORE8, -1, addr, v, 0);
+                            else ir_emit(F, IR_STORE, -1, addr, v, 0);
                             k++;
                             if (cur_tok(cs) != TOK_COMMA) break;
                             next_tok(cs);
@@ -2046,8 +2081,9 @@ static void ir_stmt(CompilerState *cs)
             expect(cs, TOK_ASSIGN);
             int v = ir_expr(cs);
             v = ir_coerce(v, vetyp[vi]);   /* PB-1：元素类型协调 */
-            int addr = ir_elem_addr(cs, vt[vi], idx);
-            ir_emit(F, IR_STORE, -1, addr, v, 0);
+            int addr = ir_elem_addr(cs, vt[vi], idx, ir_elem_width(vetyp[vi]), vetyp[vi] == 8);
+            if (vetyp[vi] == 8) ir_emit(F, IR_STORE8, -1, addr, v, 0);
+            else ir_emit(F, IR_STORE, -1, addr, v, 0);
             skip_newlines(cs);
         } else {
             /* 表达式语句（如 puts(...) 调用） */

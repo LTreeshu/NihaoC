@@ -180,12 +180,14 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             rv_store_a0(b, in->dst, tb);
             break;
         case IR_ELEM_ADDR:
-            /* 元素地址 = 基址 - idx*8（与 x86-64 同方向：槽向下） */
+            /* 元素地址 = 基址 - idx*width（槽向下；imm=宽度，0 兼容=8） */
             nb_put(b, "  ld a0, ");
             rv_slot(b, in->a, tb);
             nb_put(b, "\n  ld a1, ");
             rv_slot(b, in->b, tb);
-            nb_put(b, "\n  slli a1, a1, 3\n  sub a0, a0, a1\n");
+            nb_put(b, "\n  slli a1, a1, %d\n  sub a0, a0, a1\n",
+                   in->imm == 1 ? 0 : in->imm == 2 ? 1 :
+                   in->imm == 4 ? 2 : 3);
             rv_store_a0(b, in->dst, tb);
             break;
         case IR_LOAD:
@@ -200,6 +202,19 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             nb_put(b, "\n  ld a1, ");
             rv_slot(b, in->b, tb);
             nb_put(b, "\n  sd a1, 0(a0)\n");
+            break;
+        case IR_LOAD8:
+            nb_put(b, "  ld a0, ");
+            rv_slot(b, in->a, tb);
+            nb_put(b, "\n  lbu a0, 0(a0)\n");
+            rv_store_a0(b, in->dst, tb);
+            break;
+        case IR_STORE8:
+            nb_put(b, "  ld a0, ");
+            rv_slot(b, in->a, tb);
+            nb_put(b, "\n  ld a1, ");
+            rv_slot(b, in->b, tb);
+            nb_put(b, "\n  sb a1, 0(a0)\n");
             break;
         case IR_CALL: case IR_CALLI: {
             int nargs = (int)in->imm;

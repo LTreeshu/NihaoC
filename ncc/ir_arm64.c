@@ -184,10 +184,12 @@ static void a64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             a64_st_x0(b, in->dst, tb);
             break;
         case IR_ELEM_ADDR:
-            /* 元素地址 = 基地址值 - idx*8（槽向下，与 x86/riscv 同方向） */
+            /* 元素地址 = 基地址值 - idx*width（槽向下；imm=宽度，0 兼容=8） */
             a64_ld_x0(b, in->a, tb);
             a64_ld_reg(b, "x1", in->b, tb);
-            nb_put(b, "  sub x0, x0, x1, lsl #3\n");
+            nb_put(b, "  sub x0, x0, x1, lsl #%d\n",
+                   in->imm == 1 ? 0 : in->imm == 2 ? 1 :
+                   in->imm == 4 ? 2 : 3);
             a64_st_x0(b, in->dst, tb);
             break;
         case IR_LOAD:
@@ -199,6 +201,16 @@ static void a64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             a64_ld_x0(b, in->a, tb);           /* 地址值 */
             a64_ld_reg(b, "x1", in->b, tb);    /* 值 */
             nb_put(b, "  str x1, [x0]\n");
+            break;
+        case IR_LOAD8:
+            a64_ld_x0(b, in->a, tb);
+            nb_put(b, "  ldrb w0, [x0]\n");
+            a64_st_x0(b, in->dst, tb);
+            break;
+        case IR_STORE8:
+            a64_ld_x0(b, in->a, tb);
+            a64_ld_reg(b, "x1", in->b, tb);
+            nb_put(b, "  strb w1, [x0]\n");
             break;
         case IR_CALL: case IR_CALLI: {
             int nargs = (int)in->imm;

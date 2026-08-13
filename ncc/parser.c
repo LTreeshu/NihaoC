@@ -648,6 +648,7 @@ void parse_declaration(CompilerState *cs)
         char names[8][64];
         int nnames = 0;
         int has_init[8] = {0};
+        int init_seg[8] = {0};      /* 每个 init 表达式在 C 缓冲的段起点 */
         skip_newlines(cs);
         while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF && nnames < 8) {
             if (cur_tok(cs) != TOK_IDENTIFIER) {
@@ -660,7 +661,8 @@ void parse_declaration(CompilerState *cs)
             if (cur_tok(cs) == TOK_ASSIGN) {
                 has_init[nnames] = 1;
                 next_tok(cs);
-                parse_expression(cs); /* emits init expr */
+                init_seg[nnames] = cgen_mark();
+                parse_expression(cs); /* 值 emit 到 [seg, len) 段，生成时重排 */
             }
             nnames++;
             if (cur_tok(cs) == TOK_COMMA) next_tok(cs);
@@ -669,13 +671,42 @@ void parse_declaration(CompilerState *cs)
         expect(cs, TOK_RBRACE);
         CType bt;
         parse_type(cs, &bt);
-        /* C:  type a = ...; type b = ...;  (multi-decl handled per-name) */
-        cgen_raw("%s%s %s", vis == VIS_CONST ? "const " : "", c_type_name(&bt), names[0]);
-        cgen_line(";");
-        for (int i = 1; i < nnames; i++) {
-            cgen_line("%s%s %s;", vis == VIS_CONST ? "const " : "", c_type_name(&bt), names[i]);
+        /* 先收集每个 init 值段文本（段边界 = 相邻 init 起点 / 当前 len），
+         * 再 truncate 掉原始位置，最后按 name 顺序重排输出 */
+        char init_text[8][512];
+        int had_any_init = 0;
+        for (int i = 0; i < nnames; i++) {
+            init_text[i][0] = '\0';
+            if (has_init[i]) {
+                had_any_init = 1;
+                int nxt = (i + 1 < nnames && has_init[i + 1]) ? init_seg[i + 1]
+                                                              : cgen_mark();
+                int seg_len = nxt - init_seg[i];
+                if (seg_len > 0 && seg_len < (int)sizeof(init_text[i])) {
+                    memcpy(init_text[i], cgen_slice(init_seg[i]), (size_t)seg_len);
+                    init_text[i][seg_len] = '\0';
+                }
+            }
         }
-        (void)has_init;
+        if (had_any_init) cgen_truncate(init_seg[0]);  /* 清原始值段 */
+        for (int i = 0; i < nnames; i++) {
+            cgen_raw("%s%s %s", vis == VIS_CONST ? "const " : "",
+                     c_type_name(&bt), names[i]);
+            if (has_init[i] && init_text[i][0]) {
+                char *p = init_text[i];
+                while (*p == ' ' || *p == '\t') p++;   /* 段含缩进前导，trim */
+                cgen_raw(" = %s", p);
+            }
+            cgen_line(";");
+            /* 注册符号表（否则后续赋值被当推断声明 → redeclaration） */
+            if (cs->parser.cur_func) {
+                Symbol *vs = sym_push_local(cs, cs->parser.cur_func, names[i], &bt);
+                vs->vis = vis;
+            } else {
+                Symbol *vs = sym_push(cs, SYM_VARIABLE, names[i], &bt);
+                vs->vis = vis;
+            }
+        }
         return;
     }
 
@@ -1936,7 +1967,7 @@ static void parse_primary(CompilerState *cs)
 }
 
 /* Dereference chain: x.(T) / x?.(T) / x.()  followed by .m [i] (args) ... */
-static void parse_deref_chain(CompilerState *cs)
+static void parse_deref_chain(CompilerState *cs, int line)
 {
     char *name = cs->parser.lex->tok_str;
     Symbol *sym = sym_find(cs, name);
@@ -2008,9 +2039,11 @@ static void parse_deref_chain(CompilerState *cs)
             cgen_raw(")");
             expect(cs, TOK_RPAREN);
         } else if (tok == TOK_INCREMENT) {
+            if (cs->parser.lex->line_num != line) break;   /* 跨行不算后缀 ++ */
             cgen_raw("++");
             next_tok(cs);
         } else if (tok == TOK_DECREMENT) {
+            if (cs->parser.lex->line_num != line) break;   /* 跨行不算后缀 -- */
             cgen_raw("--");
             next_tok(cs);
         } else {
@@ -2030,7 +2063,7 @@ static void parse_postfix(CompilerState *cs, int line)
         lexer_peek(lex);
         if (lex->peek_tok == TOK_DOT_PAREN || lex->peek_tok == TOK_SAFE_DOT) {
             lex->peek_valid = 0;
-            parse_deref_chain(cs);
+            parse_deref_chain(cs, cs->parser.lex->line_num);
             return;
         }
         lex->peek_valid = 0;
@@ -2088,9 +2121,11 @@ static void parse_postfix(CompilerState *cs, int line)
                 next_tok(cs);
             }
         } else if (tok == TOK_INCREMENT) {
+            if (cs->parser.lex->line_num != line) break;   /* 跨行不算后缀 ++ */
             cgen_raw("++");
             next_tok(cs);
         } else if (tok == TOK_DECREMENT) {
+            if (cs->parser.lex->line_num != line) break;   /* 跨行不算后缀 -- */
             cgen_raw("--");
             next_tok(cs);
         } else {

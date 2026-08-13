@@ -232,12 +232,14 @@ static void x64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             nb_put(b, "\n");
             break;
         case IR_ELEM_ADDR:
-            /* 元素地址 = 基址 - idx*8（槽向下生长：slot(a+k) = slot(a) - 8k） */
+            /* 元素地址 = 基址 - idx*width（槽向下生长；imm=宽度，0 兼容=8） */
             nb_put(b, "  movq ");
             x64_slot(b, in->a, tb);
             nb_put(b, ", %%rax\n  movq ");
             x64_slot(b, in->b, tb);
-            nb_put(b, ", %%rcx\n  shlq $3, %%rcx\n  subq %%rcx, %%rax\n  movq %%rax, ");
+            nb_put(b, ", %%rcx\n  imulq $%d, %%rcx, %%rcx\n  subq %%rcx, %%rax\n  movq %%rax, ",
+                   in->imm == 1 ? 1 : in->imm == 2 ? 2 :
+                   in->imm == 4 ? 4 : 8);
             x64_slot(b, in->dst, tb);
             nb_put(b, "\n");
             break;
@@ -254,6 +256,20 @@ static void x64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             nb_put(b, ", %%rax\n  movq ");
             x64_slot(b, in->b, tb);
             nb_put(b, ", %%rcx\n  movq %%rcx, (%%rax)\n");
+            break;
+        case IR_LOAD8:
+            nb_put(b, "  movq ");
+            x64_slot(b, in->a, tb);
+            nb_put(b, ", %%rax\n  movzbl (%%rax), %%eax\n  movq %%rax, ");
+            x64_slot(b, in->dst, tb);
+            nb_put(b, "\n");
+            break;
+        case IR_STORE8:
+            nb_put(b, "  movq ");
+            x64_slot(b, in->a, tb);
+            nb_put(b, ", %%rax\n  movq ");
+            x64_slot(b, in->b, tb);
+            nb_put(b, ", %%rcx\n  movb %%cl, (%%rax)\n");
             break;
         case IR_CALL: case IR_CALLI: {
             /* 取本 CALL 前最近的 nargs 个 PARAM */

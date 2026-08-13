@@ -241,9 +241,11 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                     }
                     break;
                 case IR_ELEM_ADDR:
-                    /* 元素地址 = 基址 + idx*8（C 数组向上，字节连续） */
-                    cb_put(&b, "    t%d = t%d + t%d * 8;\n",
-                           in->dst, in->a, in->b);
+                    /* 元素地址 = 基址 + idx*width（imm=宽度，0 兼容=8） */
+                    cb_put(&b, "    t%d = t%d + t%d * %d;\n",
+                           in->dst, in->a, in->b,
+                           in->imm == 1 ? 1 : in->imm == 2 ? 2 :
+                           in->imm == 4 ? 4 : 8);
                     break;
                 case IR_LOAD:
                     /* 类型感知存取（PB-1 数组元素宽度/浮点数组）：dst 标记 double → double 指针 */
@@ -258,6 +260,14 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                     cb_put(&b, "    *(%s*)(intptr_t)t%d = t%d;\n",
                            (f->vreg_type && in->b < f->vreg_count &&
                             f->vreg_type[in->b] == 1) ? "double" : "int64_t",
+                           in->a, in->b);
+                    break;
+                case IR_LOAD8:
+                    cb_put(&b, "    t%d = *(uint8_t*)(intptr_t)t%d;\n",
+                           in->dst, in->a);
+                    break;
+                case IR_STORE8:
+                    cb_put(&b, "    *(uint8_t*)(intptr_t)t%d = t%d;\n",
                            in->a, in->b);
                     break;
                 case IR_RET:

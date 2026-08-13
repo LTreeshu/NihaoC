@@ -103,6 +103,27 @@ const char *cgen_result(void)
     return cg.buf ? cg.buf : "";
 }
 
+/* 分段缓冲：cgen_mark 记录位置；cgen_slice 取 [mark,len) 文本（须立即使用）；
+ * cgen_truncate 回退到 mark——多变量声明等"值先 emit 后重排"场景用 */
+int cgen_mark(void)
+{
+    return cg.len;
+}
+const char *cgen_slice(int mark)
+{
+    static char slice_buf[4096];
+    int n = cg.len - mark;
+    if (n <= 0) return "";
+    if (n >= (int)sizeof(slice_buf)) n = (int)sizeof(slice_buf) - 1;
+    memcpy(slice_buf, cg.buf + mark, (size_t)n);
+    slice_buf[n] = '\0';
+    return slice_buf;
+}
+void cgen_truncate(int mark)
+{
+    if (mark >= 0 && mark <= cg.len) cg.len = mark;
+}
+
 /* ============================================================
  * Type name mapping: NihaoC CType -> C type string
  * Uses a small static buffer; caller must consume immediately.
