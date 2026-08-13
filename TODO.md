@@ -68,7 +68,7 @@ ncc/
 ### P1 — 工程质量
 
 - [ ] **构建系统统一**：Makefile 与 xmake.lua 双轨并存，需明确主用一套（建议 xmake），另一套标记 legacy；`make test` 内的测试用例仍是旧语法，需更新。
-- [ ] **回归测试扩容**：tests/pos（9）+ tests/err（4）覆盖面不足。补充：struct/数组/位域/别名/cooking 编译期执行/visof/多返回值/跨文件模块/flow 自动释放等用例。
+- [x] **回归测试扩容（2026-08-13 完成）**：IR_SUBSET 9→23（14 用例升四后端：12 全量可跑 + ir_prefix/ir_multi 修复后升）；顺带修复 3 个全量真 bug（跨行后缀 ++ 误吃 / multi-decl init 残留 / 动态字符串池寻址）。IR_ONLY 剩 6（语法差异：ir_ptr/builtin/mr/slice/sparam/bitfield）。
 - [x] **多后端参数化测试（已于 2026-08-05 完成）**：`xmake test --all` 四后端全矩阵（c/native/ir-c/ir-native），双向白名单 IR_SUBSET/IR_ONLY，PASS/FAIL/SKIP 统计；原 python run_tests.py 已废弃删除
 - [x] **IR 管线回归测试（已于 2026-08-05 完成）**：`xmake test -b ir-c / ir-native` 对 IR_SUBSET 白名单用例建立等价基线（当前 3 用例，随语法扩展扩充）
 
