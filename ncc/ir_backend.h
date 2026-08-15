@@ -73,5 +73,6 @@ int irgen_backend_emit(IrProg *p, const char *outfile, const char *backend);
 extern const TargetBackend x86_64_backend;
 extern const TargetBackend riscv64_backend;   /* 阶段 3 */
 extern const TargetBackend arm64_backend;      /* PB-20 */
+extern const TargetBackend loongarch64_backend; /* 阶段 4 */
 
 #endif /* IR_BACKEND_H */

@@ -291,6 +291,8 @@ static int parse_args(CompilerState *cs, int argc, char **argv)
                     cs->backend = 4;
                 } else if (strcmp(be, "ir-arm64") == 0) {
                     cs->backend = 5;
+                } else if (strcmp(be, "ir-loongarch64") == 0) {
+                    cs->backend = 6;
                 } else {
                     fprintf(stderr, "Error: unknown backend '%s' "
                             "(c|native|ir-c|ir-native)\n", be);
