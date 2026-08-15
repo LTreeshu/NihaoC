@@ -51,5 +51,12 @@ func main() {
     } else {
         puts("dyn str bad")
     }
+    /* 动态字符串写（STORE8 字节写）：改 d[1] 不污染邻字节 */
+    d[1] = 120
+    if d[0] == 104 && d[1] == 120 && d[2] == 0 {
+        puts("dyn str write ok")
+    } else {
+        puts("dyn str write bad")
+    }
     return
 }
