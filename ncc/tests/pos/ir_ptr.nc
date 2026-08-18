@@ -3,8 +3,8 @@ module main
 func main() {
     x i32 = 42
     p = &x
-    *p = 43
-    y i32 = *p
+    p.() = 43
+    y i32 = p.()
     if y == 43 {
         puts("ptr ok")
     } else {

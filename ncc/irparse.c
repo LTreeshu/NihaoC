@@ -862,6 +862,17 @@ static int ir_primary(CompilerState *cs)
             if (vetyp[vi] == 1) ir_set_double(vr);   /* PB-1：浮点元素标记（运算/比较用） */
             return vr;
         }
+        if (cur_tok(cs) == TOK_DOT_PAREN) {
+            /* 指针解引用 p.() → LOAD(*p)（p 变量存目标地址值；全量同语法。
+             * 注意 DOT_PAREN 已含 '('——token 流 p, DOT_PAREN, ')'） */
+            next_tok(cs);
+            expect(cs, TOK_RPAREN);
+            int addr = ir_new_vreg(F);
+            ir_emit(F, IR_MOV, addr, vt[vi], -1, 0);    /* p 槽值 = 目标地址（MOV 勿 LOAD） */
+            int vr = ir_new_vreg(F);
+            ir_emit(F, IR_LOAD, vr, addr, -1, 0);       /* 读目标内容 */
+            return vr;
+        }
         if (cur_tok(cs) == TOK_DOT) {
             /* 成员访问 s.field -> LOAD(&s + off*8) */
             next_tok(cs);
@@ -1863,6 +1874,24 @@ static void ir_stmt(CompilerState *cs)
             int vr = ir_new_vreg(F);
             ir_emit(F, op, vr, vt[vi], one, 0);
             ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
+            skip_newlines(cs);
+        } else if (nt == TOK_DOT_PAREN) {
+            /* 指针解引用赋值 p.() = e（STORE 到 *p） */
+            next_tok(cs);           /* name */
+            int vi = var_find(name);
+            if (vi < 0) {
+                nihao_error(cs, "ir: undeclared variable '%s'", name);
+                skip_newlines(cs);
+                return;
+            }
+            next_tok(cs);           /* .( */
+            expect(cs, TOK_RPAREN);
+            expect(cs, TOK_ASSIGN);
+            int v = ir_expr(cs);
+            v = ir_coerce(v, vtype[vi]);
+            int addr = ir_new_vreg(F);
+            ir_emit(F, IR_MOV, addr, vt[vi], -1, 0);    /* p 槽值 = 目标地址（MOV 勿 LOAD） */
+            ir_emit(F, IR_STORE, -1, addr, v, 0);
             skip_newlines(cs);
         } else if (nt == TOK_DOT) {
             /* 成员赋值 s.field = e / s.field op= e */

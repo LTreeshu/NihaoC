@@ -43,14 +43,14 @@ func main() {
 
     /* malloc：动态分配 + 指针读写（NihaoC 指针用 void 类型声明） */
     flow p void = malloc(i32)
-    *p = 42
-    if *p == 42 {
+    p.() = 42
+    if p.() == 42 {
         puts("malloc ok")
     } else {
         puts("malloc bad")
     }
-    *p = 50
-    if *p == 50 {
+    p.() = 50
+    if p.() == 50 {
         puts("malloc write ok")
     } else {
         puts("malloc write bad")
