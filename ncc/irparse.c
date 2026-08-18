@@ -2468,14 +2468,26 @@ int ir_compile(CompilerState *cs, const char *filename, int backend, int verbose
 
     /* verbose: dump IR 指令序列（调试用） */
     if (verbose) {
+        static const char *op_names[] = {
+            "NOP", "CONST", "MOV", "ADD", "SUB", "MUL", "DIV", "MOD",
+            "SHL", "SHR", "AND", "OR", "NEG", "NOT",
+            "CMP_EQ", "CMP_NE", "CMP_LT", "CMP_LE", "CMP_GT", "CMP_GE",
+            "FADD", "FSUB", "FMUL", "FDIV", "FCMP", "ITOD", "DTOI",
+            "TRUNC", "JMP", "JZ", "JNZ", "CALL", "CALLI", "PARAM", "RET",
+            "LABEL", "ALLOCA", "ADDR", "ELEM_ADDR", "LOAD", "STORE",
+            "LOAD8", "STORE8", "LD_ADDR", "END",
+        };
         for (int fi = 0; fi < P->fn_count; fi++) {
             IrFn *f = &P->fns[fi];
             printf("IR fn: %s (params=%d, vregs=%d)\n",
                    f->name, f->param_count, f->vreg_count);
             for (int i = 0; i < f->ins_count; i++) {
                 IrIns *in = &f->ins[i];
-                printf("  %2d: op=%-3d dst=%2d a=%2d b=%2d imm=%lld%s%s\n",
-                       i, (int)in->op,
+                int opi = (int)in->op;
+                const char *on = (opi >= 0 && opi < (int)(sizeof(op_names) /
+                                 sizeof(op_names[0]))) ? op_names[opi] : "?";
+                printf("  %2d: %-8s dst=%2d a=%2d b=%2d imm=%lld%s%s\n",
+                       i, on,
                        in->dst, in->a, in->b, (long long)in->imm,
                        in->sym ? " sym=" : "", in->sym ? in->sym : "");
             }

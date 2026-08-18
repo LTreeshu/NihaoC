@@ -198,6 +198,7 @@ static void print_usage(void)
         "  build <file>    Compile to an executable (keep <out>.c intermediate)\n"
         "  run <file>      Compile and run, extra args after '--' passed to program\n"
         "  debug <file>    Compile with verbose info, show generated C, then run\n"
+        "                  debug <file> --ir : dump IR tri-address code (IR pipeline)\n"
         "  test            Run the regression test suite (tests/)\n"
         "  lex <file>      Dump the token stream of a source file\n"
         "\n"
@@ -809,23 +810,28 @@ static int cmd_run(int argc, char **argv)
 static int cmd_debug(int argc, char **argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "Usage: nihao debug <file.nc>\n");
+        fprintf(stderr, "Usage: nihao debug <file.nc> [--ir]\n");
         return 1;
     }
     CompilerState *cs = nihao_new();
     g_cs = cs;
-    int n = 4;
-    char **nargv = calloc(5, sizeof(char *));
+    int use_ir = (argc >= 4 && strcmp(argv[3], "--ir") == 0);
+    int n = use_ir ? 5 : 4;
+    char **nargv = calloc((size_t)n + 1, sizeof(char *));
     nargv[0] = argv[0];
     nargv[1] = argv[2];
     nargv[2] = "-v";
     nargv[3] = "-g";
+    if (use_ir) {
+        nargv[4] = "-backend=ir-c";   /* IR 管线：verbose 时 dump 三地址码 */
+    }
     int rc = compile_argv(cs, n, nargv);
     if (rc == 0) {
         char cpath[1024];
         snprintf(cpath, sizeof(cpath), "%s.c",
                  cs->output_file ? cs->output_file : "a.out");
-        printf("\n=== generated C (%s) ===\n", cpath);
+        printf("\n=== generated %s (%s) ===\n",
+               use_ir ? "IR->C" : "C", cpath);
         FILE *fp = fopen(cpath, "rb");
         if (fp) {
             char buf[4096];
@@ -835,7 +841,7 @@ static int cmd_debug(int argc, char **argv)
             }
             fclose(fp);
         }
-        printf("=== end C ===\n");
+        printf("=== end %s ===\n", use_ir ? "IR->C" : "C");
     }
     free(nargv);
     nihao_cleanup(cs);
