@@ -56,5 +56,23 @@ func main() {
     } else {
         puts("slice narrow bad")
     }
+    /* len()：数组容量 / 动态字符串长 / 切片逻辑长度（常量边界） */
+    if len(arr) == 5 {
+        puts("len arr ok")
+    } else {
+        puts("len arr bad")
+    }
+    d char[] = "hello"
+    if len(d) == 5 {
+        puts("len str ok")
+    } else {
+        puts("len str bad")
+    }
+    sl = arr[1..4]
+    if len(sl) == 3 && sl.() == 20 {
+        puts("len slice ok")
+    } else {
+        puts("len slice bad")
+    }
     return
 }

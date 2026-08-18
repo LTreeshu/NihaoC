@@ -61,5 +61,14 @@ func main() {
     } else {
         puts("enum blue bad")
     }
+    /* struct 整体赋值拷贝（逐成员；拷贝后独立） */
+    p2 Person
+    p2 = p
+    p2.age = 999
+    if p2.age == 999 && p2.score == 90 && p.age == 25 {
+        puts("struct copy ok")
+    } else {
+        puts("struct copy bad")
+    }
     return
 }

@@ -24,6 +24,34 @@ static int *vty;            /* 变量聚合类型索引（-1=标量/基本数组
 static int *vvis;           /* 变量可见性/存储期：0=var 1=const 2=flow 3=static 4=undef */
 static int *vtype;          /* 变量数值类型：0=int(默认) 1=double(f64/f32 槽化) */
 static int vn_count, vn_cap;
+
+/* goto/label：标签名 → label id（per 函数，ir_func 进入时清零）。
+ * 用独立编号空间（BASE 偏移）避免与 ir_new_label 的 if/while 分支冲突 */
+#define IR_MAX_LABELS 32
+#define IR_GOTO_LABEL_BASE 1000
+static char g_label_names[IR_MAX_LABELS][64];
+static int g_label_count;
+static int ir_label_get(const char *name)
+{
+    for (int i = 0; i < g_label_count; i++)
+        if (strcmp(g_label_names[i], name) == 0) return IR_GOTO_LABEL_BASE + i;
+    if (g_label_count < IR_MAX_LABELS) {
+        snprintf(g_label_names[g_label_count], 64, "%s", name);
+        return IR_GOTO_LABEL_BASE + g_label_count++;
+    }
+    return IR_GOTO_LABEL_BASE;
+}
+/* vreg 是否编译期常量（查其最近一次定义是否 IR_CONST） */
+static int vreg_const(IrFn *f, int vr, long long *out)
+{
+    for (int i = f->ins_count - 1; i >= 0; i--) {
+        if (f->ins[i].dst == vr) {
+            if (f->ins[i].op == IR_CONST) { *out = f->ins[i].imm; return 1; }
+            return 0;
+        }
+    }
+    return 0;
+}
 static int last_mr_buf = -1; /* 最近一次 sret（struct 返回）调用返回的缓冲地址 vreg（供声明拷贝） */
 
 /* ============================================================
@@ -47,6 +75,68 @@ static long long ct_var_find(const char *name)
         if (strcmp(ct_vars[i].name, name) == 0) return ct_vars[i].val;
     }
     return 0;
+}
+
+/* ---- 编译期函数（PB-9 深化：cooking-call 宏式展开）----
+ * cooking 块内 `const NAME(p1, p2) = expr` 定义；调用 NAME(a, b) 时
+ * 参数名替换为实参字面量 → 临时 lexer 求值（实参须编译期常量） */
+#define IR_MAX_CTFUNC 32
+#define IR_MAX_CTFPARAM 4
+static long long ir_const_expr(CompilerState *cs);   /* ct_func_call 前向 */
+static struct {
+    const char *name;
+    char params[IR_MAX_CTFPARAM][64];
+    int param_count;
+    char expr_src[512];
+} ct_funcs[IR_MAX_CTFUNC];
+static int ct_funcs_count;
+
+static int ct_func_find(const char *name)
+{
+    for (int i = 0; i < ct_funcs_count; i++)
+        if (strcmp(ct_funcs[i].name, name) == 0) return i;
+    return -1;
+}
+static long long ct_func_call(CompilerState *cs, int cf, long long *args, int ac)
+{
+    /* 参数替换：expr_src 中参数名（词边界）→ 实参字面量 */
+    char buf[512];
+    int bi = 0;
+    const char *src = ct_funcs[cf].expr_src;
+    int i = 0;
+    while (src[i] != '\0' && bi < (int)sizeof(buf) - 16) {
+        if ((src[i] >= 'a' && src[i] <= 'z') || (src[i] >= 'A' && src[i] <= 'Z') ||
+            src[i] == '_') {
+            int j = i;
+            while ((src[j] >= 'a' && src[j] <= 'z') || (src[j] >= 'A' && src[j] <= 'Z') ||
+                   (src[j] >= '0' && src[j] <= '9') || src[j] == '_') j++;
+            int plen = j - i;
+            int pi = -1;
+            for (int k = 0; k < ct_funcs[cf].param_count; k++)
+                if ((int)strlen(ct_funcs[cf].params[k]) == plen &&
+                    strncmp(src + i, ct_funcs[cf].params[k], (size_t)plen) == 0) {
+                    pi = k; break;
+                }
+            if (pi >= 0 && pi < ac) {
+                bi += snprintf(buf + bi, (int)sizeof(buf) - bi - 1, "%lld", args[pi]);
+            } else {
+                memcpy(buf + bi, src + i, (size_t)plen); bi += plen;
+            }
+            i = j;
+        } else {
+            buf[bi++] = src[i++];
+        }
+    }
+    buf[bi] = '\0';
+    /* 临时 lexer 求值（保存/恢复 cs->parser.lex） */
+    LexerState tlex;
+    LexerState *save = cs->parser.lex;
+    cs->parser.lex = &tlex;
+    lexer_init(cs, "<cooking-fn>", buf);
+    lexer_next(&tlex);
+    long long v = ir_const_expr(cs);
+    cs->parser.lex = save;
+    return v;
 }
 
 /* vreg 浮点类型辅助（PB-13：vreg_type 表在 IrFn，随 vreg_count 增长） */
@@ -649,6 +739,27 @@ static int ir_primary(CompilerState *cs)
     }
     if (t == TOK_IDENTIFIER) {
         const char *name = cs->parser.lex->tok_str;
+        /* len(x)：内置——数组/动态字符串/切片变量的逻辑长度（ve 表） */
+        if (strcmp(name, "len") == 0) {
+            LexerState *lx0 = cs->parser.lex;
+            lx0->peek_valid = 0;
+            lexer_peek(lx0);
+            if (lx0->peek_tok == TOK_LPAREN) {
+                next_tok(cs);           /* len */
+                next_tok(cs);           /* ( */
+                long long vlen = 0;
+                if (cur_tok(cs) == TOK_IDENTIFIER) {
+                    int vi2 = var_find(cs->parser.lex->tok_str);
+                    if (vi2 >= 0) vlen = ve[vi2];
+                    next_tok(cs);
+                }
+                expect(cs, TOK_RPAREN);
+                int vr = ir_new_vreg(F);
+                ir_emit(F, IR_CONST, vr, -1, -1, vlen);
+                return vr;
+            }
+            lx0->peek_valid = 0;
+        }
         /* enum 常量优先（编译期值） */
         {
             long long eval;
@@ -1182,6 +1293,35 @@ static long long ir_const_prim(CompilerState *cs)
     if (t == TOK_IDENTIFIER) {
         const char *name = cs->parser.lex->tok_str;
         long long eval = 0;
+        /* 编译期函数调用（cooking-call）：NAME(args) → 宏式展开求值 */
+        {
+            int cf = ct_func_find(name);
+            if (cf >= 0) {
+                LexerState *lx = cs->parser.lex;
+                lx->peek_valid = 0;
+                lexer_peek(lx);
+                if (lx->peek_tok == TOK_LPAREN) {
+                    next_tok(cs);
+                    next_tok(cs);           /* name ( */
+                    long long args[IR_MAX_CTFPARAM];
+                    int ac = 0;
+                    if (cur_tok(cs) != TOK_RPAREN) {
+                        for (;;) {
+                            if (ac >= IR_MAX_CTFPARAM) {
+                                nihao_error(cs, "ir: too many args to cooking function");
+                                break;
+                            }
+                            args[ac++] = ir_const_expr(cs);
+                            if (cur_tok(cs) != TOK_COMMA) break;
+                            next_tok(cs);
+                        }
+                    }
+                    expect(cs, TOK_RPAREN);
+                    return ct_func_call(cs, cf, args, ac);
+                }
+                lx->peek_valid = 0;
+            }
+        }
         if (ct_var_exist(name)) {        /* cooking 编译期变量优先 */
             next_tok(cs);
             return ct_var_find(name);
@@ -1314,7 +1454,46 @@ static void ir_cooking(CompilerState *cs)
                 const char *cname = cs->parser.lex->tok_str;
                 next_tok(cs);
                 if (is_type_token(cur_tok(cs))) next_tok(cs);   /* 可选类型 */
-                if (cur_tok(cs) == TOK_ASSIGN) {
+                if (cur_tok(cs) == TOK_LPAREN) {
+                    /* 编译期函数定义：const NAME(p1, p2) = expr（宏式展开） */
+                    int cf = ct_funcs_count;
+                    next_tok(cs);
+                    int pc = 0;
+                    while (cur_tok(cs) != TOK_RPAREN && cur_tok(cs) != TOK_EOF &&
+                           pc < IR_MAX_CTFPARAM) {
+                        if (cur_tok(cs) == TOK_IDENTIFIER) {
+                            snprintf(ct_funcs[cf].params[pc], 64, "%s",
+                                     cs->parser.lex->tok_str);
+                            pc++;
+                            next_tok(cs);
+                        } else {
+                            next_tok(cs);
+                        }
+                        if (cur_tok(cs) == TOK_COMMA) next_tok(cs);
+                    }
+                    expect(cs, TOK_RPAREN);
+                    if (cur_tok(cs) == TOK_ASSIGN) {
+                        next_tok(cs);
+                        /* 截取表达式源文本（mark buf_ptr → 行尾） */
+                        LexerState *lx = cs->parser.lex;
+                        char *mark = lx->buf_ptr;
+                        while (cur_tok(cs) != TOK_NEWLINE && cur_tok(cs) != TOK_RBRACE &&
+                               cur_tok(cs) != TOK_EOF) next_tok(cs);
+                        char *end = lx->buf_ptr;
+                        int n = (int)(end - mark);
+                        if (n > 0 && n < (int)sizeof(ct_funcs[cf].expr_src)) {
+                            memcpy(ct_funcs[cf].expr_src, mark, (size_t)n);
+                            ct_funcs[cf].expr_src[n] = '\0';
+                            ct_funcs[cf].name = cname;
+                            ct_funcs[cf].param_count = pc;
+                            ct_funcs_count++;
+                        } else {
+                            nihao_error(cs, "ir: cooking function body too long");
+                        }
+                    } else {
+                        nihao_error(cs, "ir: cooking function: expected '='");
+                    }
+                } else if (cur_tok(cs) == TOK_ASSIGN) {
                     next_tok(cs);
                     long long v = ir_const_expr(cs);
                     if (ct_var_exist(cname)) {
@@ -1432,6 +1611,36 @@ static void ir_stmt(CompilerState *cs)
     else if (t == TOK_FLOW)   { decl_vis = VIS_FLOW;   has_prefix = 1; next_tok(cs); t = cur_tok(cs); }
     else if (t == TOK_STATIC) { decl_vis = VIS_STATIC; has_prefix = 1; next_tok(cs); t = cur_tok(cs); }
     else if (t == TOK_VAR)    { decl_vis = VIS_VAR;    has_prefix = 1; next_tok(cs); t = cur_tok(cs); }
+    /* 标签：name:（C 风格，lexer 注释 label suffix；peek 下一 token） */
+    if (t == TOK_IDENTIFIER && !has_prefix) {
+        LexerState *lx = cs->parser.lex;
+        lx->peek_valid = 0;
+        lexer_peek(lx);
+        if (lx->peek_tok == TOK_COLON) {
+            int lid = ir_label_get(lx->tok_str);
+            next_tok(cs);
+            next_tok(cs);           /* name : */
+            ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+            F->ins[F->ins_count - 1].label = lid;
+            skip_newlines(cs);
+            return;
+        }
+        lx->peek_valid = 0;
+    }
+    if (t == TOK_GOTO) {
+        /* goto name → IR_JMP（label 首引用即分配，无需先定义） */
+        next_tok(cs);
+        if (cur_tok(cs) == TOK_IDENTIFIER) {
+            int lid = ir_label_get(cs->parser.lex->tok_str);
+            next_tok(cs);
+            ir_emit(F, IR_JMP, -1, -1, -1, 0);
+            F->ins[F->ins_count - 1].label = lid;
+        } else {
+            nihao_error(cs, "ir: expected label name after 'goto'");
+        }
+        skip_newlines(cs);
+        return;
+    }
     if (t == TOK_IF) {
         next_tok(cs);
         int c = ir_expr(cs);
@@ -1830,6 +2039,56 @@ static void ir_stmt(CompilerState *cs)
             next_tok(cs);           /* = */
             int vi = var_find(name);
             if (vi < 0) vi = var_declare(name, 0, -1, VIS_VAR);
+            if (vty[vi] >= 0 && agg_types[vty[vi]].kind != 2 &&
+                cur_tok(cs) == TOK_IDENTIFIER) {
+                /* 聚合整体赋值：逐成员拷贝（struct 语义；union 共享槽拷 1；
+                 * 嵌套 struct 成员按展开槽计数留 TODO） */
+                int src = var_find(cs->parser.lex->tok_str);
+                if (src >= 0 && vty[src] >= 0 &&
+                    agg_types[vty[src]].kind == agg_types[vty[vi]].kind) {
+                    int n = agg_types[vty[vi]].kind == 1 ? 1 :
+                            agg_types[vty[vi]].mcount;
+                    next_tok(cs);   /* src name */
+                    for (int k = 0; k < n; k++)
+                        ir_emit(F, IR_MOV, vt[vi] + k, vt[src] + k, -1, 0);
+                    skip_newlines(cs);
+                    return;
+                }
+            }
+            if (cur_tok(cs) == TOK_IDENTIFIER) {
+                /* 切片 rhs：s = arr[lo..hi]——记录逻辑长度（常量边界）+ 指针 */
+                LexerState *lx2 = cs->parser.lex;
+                lx2->peek_valid = 0;
+                lexer_peek(lx2);
+                if (lx2->peek_tok == TOK_LBRACKET) {
+                    const char *arrn = lx2->tok_str;
+                    int avi = var_find(arrn);
+                    if (avi >= 0) {
+                        next_tok(cs);   /* arr */
+                        next_tok(cs);   /* [ */
+                        int lo = ir_expr(cs);
+                        if (cur_tok(cs) == TOK_RANGE) {
+                            next_tok(cs);
+                            int hi = ir_expr(cs);
+                            expect(cs, TOK_RBRACKET);
+                            long long lov, hiv;
+                            if (vreg_const(F, lo, &lov) && vreg_const(F, hi, &hiv))
+                                ve[vi] = (int)(hiv - lov);
+                            int addr = ir_elem_addr(cs, vt[avi], lo,
+                                                    ir_elem_width(vetyp[avi]),
+                                                    vetyp[avi] == 8);
+                            ir_emit(F, IR_MOV, vt[vi], addr, -1, 0);
+                            skip_newlines(cs);
+                            return;
+                        }
+                        nihao_error(cs, "ir: expected '..' in slice assignment rhs");
+                        skip_newlines(cs);
+                        return;
+                    }
+                    lx2->peek_valid = 0;
+                }
+                lx2->peek_valid = 0;
+            }
             int vr = ir_expr(cs);
             ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             skip_newlines(cs);
@@ -2054,6 +2313,11 @@ static void ir_stmt(CompilerState *cs)
                     ir_emit(F, IR_ADDR, addr, vt[vi], -1, k);
                     ir_emit(F, IR_STORE, -1, addr, cv, 0);
                 }
+            } else if (vetyp[vi] == 8 && cur_tok(cs) == TOK_STRING_LITERAL) {
+                /* 动态字符串 char[] = "lit"：记录逻辑长度（len() 用），存池地址 */
+                ve[vi] = (int)strlen(cs->parser.lex->tok_str);
+                int vr = ir_expr(cs);
+                ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             } else {
                 int vr = ir_expr(cs);
                 vr = ir_coerce(vr, vtype[vi]);   /* PB-1：目标类型协调（DTOI/ITOD/TRUNC） */
@@ -2195,6 +2459,7 @@ static void ir_func(CompilerState *cs)
     next_tok(cs);
     F = ir_fn_new(P, fname, is_main);
     var_reset();
+    g_label_count = 0;      /* goto/label 表 per 函数清零 */
 
     expect(cs, TOK_LPAREN);
     skip_newlines(cs);

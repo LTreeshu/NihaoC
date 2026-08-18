@@ -1129,8 +1129,31 @@ void parse_statement(CompilerState *cs)
 {
     TokenType tok = cur_tok(cs);
 
+    /* 标签：name:（C 风格，lexer 注释 label suffix；peek 下一 token） */
+    if (tok == TOK_IDENTIFIER) {
+        LexerState *lx = cs->parser.lex;
+        lx->peek_valid = 0;
+        lexer_peek(lx);
+        if (lx->peek_tok == TOK_COLON) {
+            cgen_line("%s:;", lx->tok_str);
+            next_tok(cs);
+            next_tok(cs);           /* name : */
+            return;
+        }
+        lx->peek_valid = 0;
+    }
 
     switch (tok) {
+        case TOK_GOTO:
+            next_tok(cs);
+            if (cur_tok(cs) == TOK_IDENTIFIER) {
+                cgen_line("goto %s;", cs->parser.lex->tok_str);
+                next_tok(cs);
+            } else {
+                nihao_error(cs, "expected label name after 'goto'");
+            }
+            break;
+
         case TOK_IF:
             parse_if_stmt(cs);
             break;

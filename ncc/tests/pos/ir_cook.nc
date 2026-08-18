@@ -17,6 +17,19 @@ cooking {
     static_assert(BASE + 5 == 15, "ct var add")
 }
 
+/* 编译期函数（PB-9 深化：cooking-call 宏式展开）：const NAME(p) = expr，
+ * 调用时参数替换为实参字面量 → 临时 lexer 求值；支持嵌套与组合 */
+cooking {
+    const sq(x) = x * x
+    const cube(x) = x * x * x
+    static_assert(sq(5) == 25, "sq(5) != 25")
+    static_assert(cube(3) == 27, "cube(3) != 27")
+    static_assert(sq(sq(2)) == 16, "ct fn nested")
+    static_assert(sq(cube(2)) == 64, "ct fn compose")
+    static_assert(sq(BASE + 1) == 121, "ct fn with var")
+    static_assert(sq(1 + 2) == 9, "ct fn parens")
+}
+
 /* 跨块使用 + 由变量推导新变量 */
 cooking {
     static_assert(BASE == 10, "ct var cross block")
@@ -46,3 +59,4 @@ func main() {
     }
     return
 }
+    /* 编译期函数（cooking-call 宏式展开）——定义在 cooking 块内，上面已有 */
