@@ -1,6 +1,6 @@
 # NihaoC 项目进度与 TODO 清单
 
-> 更新日期：2026-08-05
+> 更新日期：2026-08-18
 > 本文档反映 `ncc/` 活跃开发目录（git `28bfb3f`）的最新状态，源码已同步至本目录 `ncc/`。
 
 ---
@@ -54,7 +54,7 @@ ncc/
 
 ### P0 — 核心功能缺口（影响"可用"）
 
-- [ ] **IR 前端覆盖全量语法**：`irparse.c` 目前只支持最小子集（module/use/func、局部变量、if/else/while/return、整数表达式、puts 调用）。需将 parser.c 已实现的 struct、数组、位域、类型别名、`cooking` 编译期、`flow`/`visof`、多返回值、跨文件模块等全部语法迁移到 IR 管线。
+- [~] **IR 前端覆盖全量语法**：已完成大部分（截至 8/18：struct/union/enum、数组/位域、cooking 编译期、flow/visof、多返回值(sret)、switch、link、函数指针、类型别名、切片；IR_SUBSET 25 用例四后端一致）。剩余细项：goto、命名空间、部分 is 模式。
 - [x] **IR 路径用户函数调用符号 bug（已于 2026-08-05 修复，ncc 提交 c3c91dc）**：`tests/pos/hello.nc`（含用户自定义函数 `add`）经 `-backend=ir-native` 编译报 `undefined symbol '__imp_add'`。根因与修复：
   - `ir_to_native.c`：Windows 下所有 CALL 都生成 `call *__imp_<sym>`，用户函数（程序内符号）无 `__imp_` 别名 → 区分用户函数（直接 `call sym`）与外部导入符号（`__imp_` 间接调用）；
   - `ir_to_native.c`：栈帧对齐逻辑取反（frame 应为 16 的倍数，原代码在已是 16 倍数时 +8 反而破坏对齐）；
@@ -62,19 +62,19 @@ ncc/
   - `ir_to_c.c`：为用户函数生成前置原型，消除"调用先于定义"的隐式声明。
   - 验证：hello.nc 四后端（c/native/ir-c/ir-native）输出一致；13/13 回归通过；调用先于定义场景双后端通过。
 - [ ] **统一后端管线**：当前存在"parser→C 文本"与"irparse→IR→C/asm"两条并行管线，需决策最终走向——若以 IR 为长期架构，则 parser.c 逐步替换为 irparse.c 的全量版本，避免三套 C 生成（codegen.c / cgen.c / ir_to_c.c）长期并存。
-- [ ] **IR 层数据模型扩展**：浮点、64 位整型、结构体（含嵌套与赋值拷贝）、数组下标、指针运算目前在 IR 指令集中未覆盖，需补充指令或降级策略。
+- [~] **IR 层数据模型扩展**：浮点(f64/x87+riscv D)、64 位整型、struct(含 sret 返回/参数展开)、数组下标、指针运算、位运算、字节读写(LOAD8/STORE8)、.() 解引用均已覆盖（PB-1/3/4/13/14/16/18 + 位域 + 动态字符串）。剩余：struct 嵌套赋值拷贝、f32 严格宽度。
 - [ ] **IR native 后端寄存器分配**：`ir_to_native.c` 目前虚拟寄存器全部映射为 rbp 栈槽（无寄存器分配），性能与调用约定（Windows x64 shadow space / SysV）需完善，并支持浮点调用。
 
 ### P1 — 工程质量
 
 - [ ] **构建系统统一**：Makefile 与 xmake.lua 双轨并存，需明确主用一套（建议 xmake），另一套标记 legacy；`make test` 内的测试用例仍是旧语法，需更新。
-- [x] **回归测试扩容（2026-08-13 完成）**：IR_SUBSET 9→23（14 用例升四后端：12 全量可跑 + ir_prefix/ir_multi 修复后升）；顺带修复 3 个全量真 bug（跨行后缀 ++ 误吃 / multi-decl init 残留 / 动态字符串池寻址）。IR_ONLY 剩 6（语法差异：ir_ptr/builtin/mr/slice/sparam/bitfield）。
+- [x] **回归测试扩容（2026-08-13 完成）**：IR_SUBSET 9→23（14 用例升四后端：12 全量可跑 + ir_prefix/ir_multi 修复后升）；顺带修复 3 个全量真 bug（跨行后缀 ++ 误吃 / multi-decl init 残留 / 动态字符串池寻址）。IR_ONLY 剩 4（语义差异：ir_builtin 槽模型 sizeof/mr 旧语法/slice 读/sparam 无类型成员）。
 - [x] **多后端参数化测试（已于 2026-08-05 完成）**：`xmake test --all` 四后端全矩阵（c/native/ir-c/ir-native），双向白名单 IR_SUBSET/IR_ONLY，PASS/FAIL/SKIP 统计；原 python run_tests.py 已废弃删除
 - [x] **IR 管线回归测试（已于 2026-08-05 完成）**：`xmake test -b ir-c / ir-native` 对 IR_SUBSET 白名单用例建立等价基线（当前 3 用例，随语法扩展扩充）
 
 ### P2 — 架构与扩展
 
-- [ ] **arch/ 多架构后端**：arch/x86、arm、loongarch、rsicv 目前是空目录。若计划脱离 libtcc 自研代码生成，需逐步填充（x86 已有 IR→汇编基础，可先行）。
+- [x] **arch/ 多架构后端（2026-08-15 完成）**：四目标架构全齐——x86-64（ir_x86_64.c，Win64 ABI）、riscv64（RV64I+D）、arm64（AAPCS64）、**loongarch64（2026-08-15 新增，LA64 指令映射）**；均经 TargetBackend 抽象（ir_backend.c 注册表 + CLI -backend=ir-<arch>）。arch/ 空目录为历史遗留，实际后端在 ncc/ 下。
 - [x] **editors/sublime 语法高亮分支丢失（已于 2026-08-05 合并，ncc 提交 959c9f2）**：当前分支（feat/backend-ir）下 editors/ 为空；已从 main 分支（`bffabcd` 创建、`e208b7f` 修复 [[attr]]）提取合并 `editors/README.md`、`editors/sublime/nihaoc.sublime-syntax`（164 行）、`editors/sublime/demo.nc`，并同步至 NihaoC/ncc。
 - [ ] **CLI 完善**：`debug` 子命令实现、`init` 模板与当前语法对齐、错误信息带行列定位并中文化。
 - [ ] **文档与实现对齐**：docs/ 中 Chinese.md / English.md / BNF.md 描述的部分语法（cooking、link、多返回值等）与当前实现有差距，需产出一份"已实现 vs 规划"对照表；README 示例代码需用当前编译器实测。
@@ -151,7 +151,7 @@ ncc/
 - [x] **PB-17 IR_CALL 参数收集 bug（2026-08-07 验证已修复）**：sret/多返回机制重构时已改为收集模式（args[] 收集 → 按序发射 PARAM+CALL），嵌套调用 dbl(add(3,4))、多参数嵌套 add(dbl(2),dbl(3))、连续调用链、嵌套作 puts 参数——双后端全对（已验证）
 - [x] **PB-18 ir_to_c 类型化输出（2026-08-07 完成）**：字符串池地址参数包 `(char*)`（is_str_addr 检测 LD_ADDR __str_N——puts 等外部函数参数消除 pointer-from-integer）；malloc 返回值包 `(int64_t)(intptr_t)`（void* → int64 消除 integer-from-pointer）。生成 C 全矩阵 0 warning（assignment makes 类），行为不变 0 FAIL
 - [x] **PB-19 -run 内存执行（已于 2026-08-06 与 PA-1 一并文档化）**：Linux only，README 已说明原因与替代方案
-- [x] **PB-20 arch/ 多架构（2026-08-08 验证完成）**：**arm64 后端 ir_arm64.c 已就绪**（AAPCS64：stp x29,x30 帧、d0-d7 浮点参数、fadd/fsub/fmul/fdiv、ldp 恢复，全栈槽 x29-stride*(N+1)，只验汇编生成）——ir_fcall/ir_sparam/ir_float/ir_loop 汇编生成正确；riscv64（RV64I+D）+ arm64 + x86-64（Win64）**三架构后端全齐**。剩余：loongarch（空目录）
+- [x] **PB-20 arch/ 多架构（2026-08-08 验证完成）**：**arm64 后端 ir_arm64.c 已就绪**（AAPCS64：stp x29,x30 帧、d0-d7 浮点参数、fadd/fsub/fmul/fdiv、ldp 恢复，全栈槽 x29-stride*(N+1)，只验汇编生成）——ir_fcall/ir_sparam/ir_float/ir_loop 汇编生成正确；riscv64（RV64I+D）+ arm64 + x86-64（Win64）**三架构后端全齐**。**loongarch64（2026-08-15 完成）——四架构收官**（PB-20 延伸，克隆 riscv64 + LA64 映射，汇编生成验证）
 
 ### 测试与集成待办
 - [x] **PB-21 IR 后端回归基线（已于 2026-08-05 完成）**：run_tests.py 加 --backend 全矩阵；IR 双后端用 IR_SUBSET 白名单（当前 hello/ir_demo），其余用例标 SKIP，语法扩展时同步扩充白名单
