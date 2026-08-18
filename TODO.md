@@ -1,6 +1,6 @@
 # NihaoC 项目进度与 TODO 清单
 
-> 更新日期：2026-08-18
+> 更新日期：2026-08-19
 > 本文档反映 `ncc/` 活跃开发目录（git `28bfb3f`）的最新状态，源码已同步至本目录 `ncc/`。
 
 ---
@@ -54,7 +54,7 @@ ncc/
 
 ### P0 — 核心功能缺口（影响"可用"）
 
-- [~] **IR 前端覆盖全量语法**：已完成大部分（截至 8/18：struct/union/enum、数组/位域、cooking 编译期、flow/visof、多返回值(sret)、switch、link、函数指针、类型别名、切片；IR_SUBSET 25 用例四后端一致）。剩余细项：goto、命名空间、部分 is 模式。
+- [~] **IR 前端覆盖全量语法**：已完成大部分（截至 8/18：struct/union/enum、数组/位域、cooking 编译期、flow/visof、多返回值(sret)、switch、link、函数指针、类型别名、切片；IR_SUBSET 25 用例四后端一致）。剩余细项：命名空间、部分 is 模式（goto 已于 2026-08-19 完成：全量+IR，ir_goto.nc IR_SUBSET 四后端）。
 - [x] **IR 路径用户函数调用符号 bug（已于 2026-08-05 修复，ncc 提交 c3c91dc）**：`tests/pos/hello.nc`（含用户自定义函数 `add`）经 `-backend=ir-native` 编译报 `undefined symbol '__imp_add'`。根因与修复：
   - `ir_to_native.c`：Windows 下所有 CALL 都生成 `call *__imp_<sym>`，用户函数（程序内符号）无 `__imp_` 别名 → 区分用户函数（直接 `call sym`）与外部导入符号（`__imp_` 间接调用）；
   - `ir_to_native.c`：栈帧对齐逻辑取反（frame 应为 16 的倍数，原代码在已是 16 倍数时 +8 反而破坏对齐）；
@@ -62,7 +62,7 @@ ncc/
   - `ir_to_c.c`：为用户函数生成前置原型，消除"调用先于定义"的隐式声明。
   - 验证：hello.nc 四后端（c/native/ir-c/ir-native）输出一致；13/13 回归通过；调用先于定义场景双后端通过。
 - [ ] **统一后端管线**：当前存在"parser→C 文本"与"irparse→IR→C/asm"两条并行管线，需决策最终走向——若以 IR 为长期架构，则 parser.c 逐步替换为 irparse.c 的全量版本，避免三套 C 生成（codegen.c / cgen.c / ir_to_c.c）长期并存。
-- [~] **IR 层数据模型扩展**：浮点(f64/x87+riscv D)、64 位整型、struct(含 sret 返回/参数展开)、数组下标、指针运算、位运算、字节读写(LOAD8/STORE8)、.() 解引用均已覆盖（PB-1/3/4/13/14/16/18 + 位域 + 动态字符串）。剩余：struct 嵌套赋值拷贝、f32 严格宽度。
+- [~] **IR 层数据模型扩展**：浮点(f64/x87+riscv D)、64 位整型、struct(含 sret 返回/参数展开)、数组下标、指针运算、位运算、字节读写(LOAD8/STORE8)、.() 解引用均已覆盖（PB-1/3/4/13/14/16/18 + 位域 + 动态字符串）。struct 整体赋值拷贝（2026-08-19 完成：b = a 逐成员 MOV，union 1 槽）。剩余：struct 嵌套展开、f32 严格宽度。
 - [ ] **IR native 后端寄存器分配**：`ir_to_native.c` 目前虚拟寄存器全部映射为 rbp 栈槽（无寄存器分配），性能与调用约定（Windows x64 shadow space / SysV）需完善，并支持浮点调用。
 
 ### P1 — 工程质量
@@ -123,7 +123,7 @@ ncc/
 - [x] **PB-1 类型系统（2026-08-07 全部完成）**：变量 vtype 扩展为类型编码（0=i64 1=f64/f32 2=i8 3=i16 4=i32 5=u8 6=u16 7=u32，与 IrFn.param_types 同编码）；**窄整数语义**：槽仍 8 字节，赋值时截断+符号/零扩展存槽（读回即正确值）——新指令 **IR_TRUNC**（imm: 0=i8 1=i16 2=i32 3=u8 4=u16 5=u32）：ir-to-c `(int8_t)` 等强转、x86-64 `shlq+sarq/shrq` 移位法（无 SSE 依赖）、riscv64 `slli+srai/srli`；截断点：声明初始化、表达式级赋值（=、复合 op=、++/--）；参数声明记录窄类型（值已符号扩展，入槽直通）。**数组元素宽度（完成）**：新增 vetyp[] 元素类型表——初始化列表/元素赋值 STORE 前截断、浮点元素读值标记 double；**ir-to-c LOAD/STORE 类型感知**（dst/源 vreg 为 double → `*(double*)`，原硬编码 `*(int64_t*)` 会把 double 位模式截断成整数）。**双向转换（完成）**：新指令 **IR_DTOI**（double→int64 截断向零：ir-to-c `(int64_t)`、x86-64 x87 `fistpq` 前 **fstcw/fldcw 切 RC=向零 0x0C00**（fistpq 默认最近舍入 3.7→4，实验确认后改用 rsp 动态让出 16 字节临时区）、riscv64 `fcvt.l.d`）；**ir_coerce 统一目标类型协调**（float 目标+int 源→ITOD、int 目标+double 源→DTOI、窄→TRUNC），4 个调用点。**顺带修一元负 double bug**（`-x` 原发整数 IR_NEG 毁 double 位模式 → float 走 FSUB 0.0-a）与**逻辑非 double**（`!x` → FCMP EQ 0.0）。**char[]/字符串类型化（完成）**：TOK_CHAR → i8 编码（变量/参数/数组元素宽度截断）、字符字面量 `'A'` → ASCII 常量、字符串数组 `s char[N] = "hello"` 逐字节 STORE 含 NUL（截断到容量）、`string` 类型=指针别名（LD_ADDR 字符串地址）。ir_narrow/narray/conv/str.nc（IR_ONLY）双后端一致通过，riscv64 验证。
 - [x] **PB-2 一元与复合运算（全部完成 2026-08-06）**：一元 `-x`（IR_NEG）、`!x`（==0 比较）、`~x`（新增 IR_NOT 指令，双后端实现）、复合赋值 `+= -= *= /= %=`、后缀 `x++`/`x--`、前缀 `++x`/`--x` 全部实现。用例：ir_expr.nc（IR_SUBSET，四后端）+ ir_prefix.nc（IR_ONLY，前缀专用）。
 - [x] **P1 前缀 `++x`/`--x`（2026-08-07 验证已支持）**——全量 parse_unary 已有 case（PB-2 期间顺带实现）；顺带补齐 IR 前端前缀 ++/--（ir_primary 处理，含浮点变量 FADD/FSUB 路由）
-- [x] **PB-3 数组（全部完成 2026-08-07）**：声明 `name i32[N]`、下标 `arr[i]` 读写、初始化列表；**动态数组** `[6...]`/`[...]`（固定容量槽，增长语义留 TODO）；**切片** `arr[lo..hi]`/`arr[..hi]` → 返回 `&arr[lo]` 指针。**重要修复**：新增 `IR_ELEM_ADDR`（元素地址按后端布局方向：ir-c 向上 +idx*8 / ir-native 向下 -idx*8，slot 向下生长）；ir-c 数组基改 C 数组声明 `t{base}[N]`（元素槽 vreg 连续分配但只发基 ALLOCA，ADDR imm=k 生成 `&t{base}[k]`）——**修复 ir_array native 的 sum bad（原字节偏移 &t0+8 方向错、C 变量不连续被测试盲区掩盖）**。用例 ir_array.nc + ir_slice.nc（IR_ONLY）双后端通过。**切片赋值（2026-08-09 完成）**：`arr[lo..hi] = {v0, v1, ...}` 批量写回（逐个 STORE + ir_coerce 窄元素；hi 边界校验留 TODO）——ir_slice.nc 扩展（写回/读取/窄元素）双后端一致。剩余：动态增长、按类型宽度元素、切片长度语义（void 指针无长度）。
+- [x] **PB-3 数组（全部完成 2026-08-07）**：声明 `name i32[N]`、下标 `arr[i]` 读写、初始化列表；**动态数组** `[6...]`/`[...]`（固定容量槽，增长语义留 TODO）；**切片** `arr[lo..hi]`/`arr[..hi]` → 返回 `&arr[lo]` 指针。**重要修复**：新增 `IR_ELEM_ADDR`（元素地址按后端布局方向：ir-c 向上 +idx*8 / ir-native 向下 -idx*8，slot 向下生长）；ir-c 数组基改 C 数组声明 `t{base}[N]`（元素槽 vreg 连续分配但只发基 ALLOCA，ADDR imm=k 生成 `&t{base}[k]`）——**修复 ir_array native 的 sum bad（原字节偏移 &t0+8 方向错、C 变量不连续被测试盲区掩盖）**。用例 ir_array.nc + ir_slice.nc（IR_ONLY）双后端通过。**切片赋值（2026-08-09 完成）**：`arr[lo..hi] = {v0, v1, ...}` 批量写回（逐个 STORE + ir_coerce 窄元素；hi 边界校验留 TODO）——ir_slice.nc 扩展（写回/读取/窄元素）双后端一致。**len() 切片长度语义（2026-08-19 完成）**：len(arr) 数组容量（ve 表）、len(d) 动态字符串长（char[] 初始化记录 slen）、len(s) 切片逻辑长度（s = arr[lo..hi] 常量边界记录 hi-lo，vreg_const 查 CONST imm）——len 是普通标识符（peek LPAREN 特判）返回 IR_CONST。剩余：动态增长、按类型宽度元素、切片运行时边界长度。
 - [x] **P1 数组初始化列表 `= {1,2,3}`（2026-08-07 完成）**——parse_declaration 的 initializer 分支加 `{` 处理（原样输出元素列表给 C），数组/聚合初始化均可用
 - [x] **PB-4 struct/union/enum（2026-08-06 完成）**：命名类型定义 `Name struct/union/enum { }`、enum 常量（`Color enum{RED,GREEN,BLUE}`，可显式赋值）、成员读写 `s.field`（含复合赋值）、union 共享槽 0、struct/union 初始化列表、聚合类型变量（成员按序分配独立槽，ADDR imm 直接引用槽 vreg）。用例 ir_struct.nc（IR_ONLY）双后端通过。剩余：匿名/内联嵌套类型、位域宽度（8 字节槽模型忽略）、成员默认值仅支持简单常量。
 - [x] **PB-5 存储期属性 + visof（2026-08-06 完成）**：变量声明前缀 `const/static/flow/var`（记录可见性到变量表 vvis）；`visof(x)` 编译期查询（visof 是关键字 TOK_VISOF，返回 NH_* 常量 0-4）；可见性枚举常量 `_undef/_const/_flow/_static/_var` 作表达式常量；`is _flow` 等可见性模式（比较 is_val == NH_*）+ 标识符/枚举模式。用例 ir_vis.nc（IR_ONLY）双后端通过。
@@ -132,7 +132,7 @@ ncc/
 - [x] **PB-7 控制流补齐（全部完成 2026-08-06）**：for（init;cond;step，step 记录重放）、break/continue（循环栈）、do（while 别名，前测循环）、is 模式匹配（匹配循环条件值，支持 `-1` / `0..50` 闭区间；配套新增**表达式级赋值** `x += 1` / `x++` 使 `while x += 1 { is -1 {...} }` 可用）、switch（C 风格 `switch(e){ case e: ... default: ... }`，延迟绑定 JZ 布局，break 跳出 switch / continue 非法）。用例 ir_switch.nc（IR_ONLY）双后端通过。剩余：is 的标识符模式（_flow/_static，需 visof）、`is pat => stmt` 单语句形式（lexer 无 `=>` token）
 - [x] **P1 全量 switch/case（2026-08-07 完成）**——parse_statement 加 TOK_SWITCH 分支，生成 C 原生 switch（case 表达式须编译期常量），每个 case 后自动 break（NihaoC 无 fallthrough 语义）；break 天然跳出。P0 综合用例 p0_case.nc（IR_SUBSET）四后端一致通过
 - [x] **PB-8 多返回值、函数指针、多变量声明（全部完成 2026-08-07）**：多变量声明 `var {a=0,b=1} i8`——ir_stmt 前缀后 `{` 走 ir_multi_decl（收集 name=init 对 → 类型/聚合/数组 → 逐个 var_declare+MOV），无前缀 `{` 仍是块语句（无冲突）；用例 ir_multi.nc。**顺带补齐 &&/|| 短路逻辑层**（ir_logical_and/or，JZ/JNZ 跳转跳过右侧求值）。**函数指针最小集**——新指令 `IR_CALLI`（dst=call *(a)）：ir_to_c 生成 `((int64_t (*)())tN)(args)`，ir_to_native 生成 `movq slot(a),%rax; call *%rax`；声明 `fp void(i32,i32) i32 = add2`（声明分支跳过函数指针类型参数列表+返回类型）；函数名引用 → IR_LD_ADDR sym（取函数地址）；变量后跟 `(` → 间接调用。用例 ir_fptr.nc。**多返回值（struct 返回 sret 机制）**——命名结构体返回：`func f() Result`（IrFn.is_mr，隐藏 out-param `_mr_ret` 注入 var 表头部第 0 槽）；`return {e0,e1,...}` 聚合返回（STORE 到 *_mr_ret+k*8 + bare RET）；调用 `v Result = f()`（malloc 连续缓冲 → PARAM 缓冲+参数 → CALL → 缓冲值偏移 LOAD → 拷贝到聚合槽，last_mr_buf 标记）；成员访问复用 struct 机制。⚠️ `multireturn` 关键字已于 2026-08-08 移除（设计澄清：多返回=命名 struct，非关键字），用例 ir_mr.nc 改用 `Result struct`。三用例均 IR_ONLY 双后端通过
-- [x] **PB-9 编译期（2026-08-08 完成）**：`static_assert(expr,"msg")` 编译期断言——`ir_const_expr` 常量折叠求值链（int 字面量/一元 -!~/四则取模/比较/&&/||/括号/enum 常量/sizeof(type)/visof(x)/可见性枚举/编译期变量），失败时报 `static_assert failed: msg`；`cooking { ... }` 编译期块（顶层+函数内）；**编译期变量表（完成）**：`const NAME [TYPE] = expr` 存 ct_vars（跨块共享、重复声明报错），static_assert/编译期表达式可用，**运行时引用折叠为常量**（ir_primary var_find 失败分支查 ct_var——⚠️ 该分支前已 next_tok 消费标识符，勿再 next_tok 双重消费）；`align N { ... }` 对齐块——IR 8 字节槽模型下跳过块体。用例 ir_cook.nc（IR_ONLY）双后端通过。剩余：编译期函数调用（cooking-call 执行，全量也未实现）
+- [x] **PB-9 编译期（2026-08-19 收官）**：`static_assert(expr,"msg")` 编译期断言——`ir_const_expr` 常量折叠求值链（int 字面量/一元 -!~/四则取模/比较/&&/||/括号/enum 常量/sizeof(type)/visof(x)/可见性枚举/编译期变量），失败时报 `static_assert failed: msg`；`cooking { ... }` 编译期块（顶层+函数内）；**编译期变量表（完成）**：`const NAME [TYPE] = expr` 存 ct_vars（跨块共享、重复声明报错），static_assert/编译期表达式可用，**运行时引用折叠为常量**；`align N { ... }` 对齐块跳过。**编译期函数调用 cooking-call（2026-08-19 完成）**：`const NAME(p1,p2) = expr` 宏式展开——mark buf_ptr 截表达式源文本，调用 NAME(args) 时参数名词边界替换为实参字面量 → 临时 lexer（lexer_init+lexer_next）求值再恢复；支持嵌套/组合/ct 变量参与。用例 ir_cook.nc（IR_ONLY）双后端通过
 - [x] **PB-10 use 模块（2026-08-07 最小支持）**：`use name[.name]` 解析跳过（IR 单文件模型，模块内容需内联；入口 use 循环修复 `.` 残留 token）
 - [x] **PB-11 字符串池去重（2026-08-07）**：ir_add_string 查重，相同字符串复用同一 __str_N
 
@@ -155,8 +155,8 @@ ncc/
 
 ### 测试与集成待办
 - [x] **PB-21 IR 后端回归基线（已于 2026-08-05 完成）**：run_tests.py 加 --backend 全矩阵；IR 双后端用 IR_SUBSET 白名单（当前 hello/ir_demo），其余用例标 SKIP，语法扩展时同步扩充白名单
-- [ ] **PB-22 IR 专用用例扩充**：浮点、数组、复杂控制流、嵌套调用
-- [ ] **PB-23 CLI**：-backend 帮助文档化、debug 子命令支持 IR
+- [x] **PB-22 IR 用例扩充（超额完成）**：IR_SUBSET 25 + IR_ONLY 5 共 30 用例，覆盖浮点/数组/位域/字符串/切片/编译期/goto/多返回值/函数指针/struct
+- [x] **PB-23 CLI（2026-08-18 完成）**：`nihao debug <file> --ir` 走 IR 管线 dump 三地址码 + 显示 IR->C；IR dump op 数字 → 44 条指令名表
 
 ### 架构决策
 - [ ] **PB-24 统一管线**：irparse 全量迁移完成前决策最终走向（parser→IR 单管线 vs 双管线并存）
