@@ -224,10 +224,30 @@ typedef struct {
     const char *mnames[IR_MAX_MEMB];   /* 成员名（enum 为 variant 名） */
     long long mvals[IR_MAX_MEMB];      /* enum variant 值 */
     int mbits[IR_MAX_MEMB];            /* 位域宽度（0=非位域；槽内低 N 位） */
+    int mtype[IR_MAX_MEMB];            /* 成员聚合类型索引（-1=标量；嵌套用） */
+    int moff[IR_MAX_MEMB];             /* 成员起始槽偏移（递归展开） */
     int mcount;
+    int mslots;                        /* 类型总槽数（递归；union=1 enum=1） */
 } IrAggType;
 static IrAggType agg_types[IR_MAX_AGG];
 static int agg_count;
+
+/* 递归计算成员起始槽偏移与总槽数（嵌套 struct；union/enum=1 槽；
+ * mslots>0 表示已计算（memset 清零后首次计算）） */
+static int agg_compute_offsets(int ti)
+{
+    IrAggType *a = &agg_types[ti];
+    if (a->mslots > 0 || a->kind == 2) return a->kind == 2 ? 1 : a->mslots;
+    if (a->kind == 1) { a->mslots = 1; return 1; }
+    int off = 0;
+    for (int i = 0; i < a->mcount; i++) {
+        a->moff[i] = off;
+        int ms = (a->mtype[i] >= 0) ? agg_compute_offsets(a->mtype[i]) : 1;
+        off += ms;
+    }
+    a->mslots = off;
+    return off;
+}
 
 /* enum 常量查找 */
 static int enum_const_find(const char *name, long long *val)
@@ -310,7 +330,7 @@ static void ir_bf_store(int addr, int v, int bits)
 static void ir_agg_decl(CompilerState *cs, const char *name, int ti, int vis)
 {
     IrAggType *a = &agg_types[ti];
-    int elems = (a->kind == 2) ? 1 : a->mcount;
+    int elems = (a->kind == 2) ? 1 : a->mslots;
     int vi = var_declare(name, elems, ti, vis);
     if (cur_tok(cs) == TOK_ASSIGN) {
         next_tok(cs);
@@ -985,7 +1005,7 @@ static int ir_primary(CompilerState *cs)
             return vr;
         }
         if (cur_tok(cs) == TOK_DOT) {
-            /* 成员访问 s.field -> LOAD(&s + off*8) */
+            /* 成员访问 s.field / s.a.x 链式（嵌套）→ LOAD(&s + off*8) */
             next_tok(cs);
             const char *fname = cs->parser.lex->tok_str;
             next_tok(cs);
@@ -993,20 +1013,36 @@ static int ir_primary(CompilerState *cs)
                 nihao_error(cs, "ir: '%s' is not an aggregate variable", name);
                 return ir_new_vreg(F);
             }
-            int fi = agg_member_find(vty[vi], fname);
-            if (fi < 0) {
-                nihao_error(cs, "ir: no member '%s' in type '%s'", fname,
-                            agg_types[vty[vi]].name);
-                return ir_new_vreg(F);
+            int ti = vty[vi];
+            int off = 0;
+            int last_fi = -1;
+            for (;;) {
+                int fi = agg_member_find(ti, fname);
+                if (fi < 0) {
+                    nihao_error(cs, "ir: no member '%s' in type '%s'", fname,
+                                agg_types[ti].name);
+                    return ir_new_vreg(F);
+                }
+                last_fi = fi;
+                off += (agg_types[ti].kind == 1) ? 0 : agg_types[ti].moff[fi];
+                int mt = agg_types[ti].mtype[fi];
+                if (mt >= 0 && cur_tok(cs) == TOK_DOT) {
+                    /* 聚合成员：继续链（嵌套 struct） */
+                    ti = mt;
+                    next_tok(cs);
+                    fname = cs->parser.lex->tok_str;
+                    next_tok(cs);
+                    continue;
+                }
+                break;
             }
-            int off = (agg_types[vty[vi]].kind == 1) ? 0 : fi;  /* union 共享槽 0 */
             int addr = ir_new_vreg(F);
             ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
             int vr = ir_new_vreg(F);
             ir_emit(F, IR_LOAD, vr, addr, -1, 0);
             /* 位域成员：AND 掩码取低 N 位 */
-            if (agg_types[vty[vi]].mbits[fi] > 0) {
-                int mv = ir_bitmask(agg_types[vty[vi]].mbits[fi]);
+            if (agg_types[ti].mbits[last_fi] > 0) {
+                int mv = ir_bitmask(agg_types[ti].mbits[last_fi]);
                 int r2 = ir_new_vreg(F);
                 ir_emit(F, IR_AND, r2, vr, mv, 0);
                 vr = r2;
@@ -2041,13 +2077,13 @@ static void ir_stmt(CompilerState *cs)
             if (vi < 0) vi = var_declare(name, 0, -1, VIS_VAR);
             if (vty[vi] >= 0 && agg_types[vty[vi]].kind != 2 &&
                 cur_tok(cs) == TOK_IDENTIFIER) {
-                /* 聚合整体赋值：逐成员拷贝（struct 语义；union 共享槽拷 1；
-                 * 嵌套 struct 成员按展开槽计数留 TODO） */
+                /* 聚合整体赋值：逐成员拷贝（struct 按展开槽数（嵌套递归），
+                 * union 共享槽拷 1） */
                 int src = var_find(cs->parser.lex->tok_str);
                 if (src >= 0 && vty[src] >= 0 &&
                     agg_types[vty[src]].kind == agg_types[vty[vi]].kind) {
                     int n = agg_types[vty[vi]].kind == 1 ? 1 :
-                            agg_types[vty[vi]].mcount;
+                            agg_types[vty[vi]].mslots;
                     next_tok(cs);   /* src name */
                     for (int k = 0; k < n; k++)
                         ir_emit(F, IR_MOV, vt[vi] + k, vt[src] + k, -1, 0);
@@ -2163,15 +2199,28 @@ static void ir_stmt(CompilerState *cs)
             }
             next_tok(cs);           /* . */
             const char *fname = cs->parser.lex->tok_str;
-            int fi = agg_member_find(vty[vi], fname);
-            if (fi < 0) {
-                nihao_error(cs, "ir: no member '%s' in type '%s'", fname,
-                            agg_types[vty[vi]].name);
-                skip_newlines(cs);
-                return;
+            int ti = vty[vi];
+            int off = 0;
+            int fi = -1;
+            for (;;) {
+                fi = agg_member_find(ti, fname);
+                if (fi < 0) {
+                    nihao_error(cs, "ir: no member '%s' in type '%s'", fname,
+                                agg_types[ti].name);
+                    skip_newlines(cs);
+                    return;
+                }
+                off += (agg_types[ti].kind == 1) ? 0 : agg_types[ti].moff[fi];
+                int mt = agg_types[ti].mtype[fi];
+                next_tok(cs);           /* field */
+                if (mt >= 0 && cur_tok(cs) == TOK_DOT) {
+                    ti = mt;            /* 嵌套：继续链 */
+                    next_tok(cs);       /* . */
+                    fname = cs->parser.lex->tok_str;
+                    continue;
+                }
+                break;
             }
-            next_tok(cs);           /* field */
-            int off = (agg_types[vty[vi]].kind == 1) ? 0 : fi;  /* union 共享槽 0 */
             TokenType at = cur_tok(cs);
             /* 注意：不用 -1 哨兵判断——IrOp 枚举在 tcc 下底层为 unsigned，
              * `aop < 0` 恒假会导致纯赋值误入复合路径。用布尔标志。 */
@@ -2186,7 +2235,7 @@ static void ir_stmt(CompilerState *cs)
                 next_tok(cs);
                 int b = ir_expr(cs);
                 int nv;
-                int bfbits = agg_types[vty[vi]].mbits[fi];
+                int bfbits = agg_types[ti].mbits[fi];
                 if (!is_compound) {
                     nv = b;
                 } else {
@@ -2609,17 +2658,26 @@ static void ir_type_decl(CompilerState *cs)
             }
             a->mnames[a->mcount] = cs->parser.lex->tok_str;
             next_tok(cs);
-            /* 跳过成员类型：只跳基本类型关键字与数组括号。
+            /* 成员类型：自定义聚合类型（IDENTIFIER）记录索引，否则跳过基本类型；
              * 注意：struct 体内换行不产生 NEWLINE（brace_depth>0），
              * 遇非类型 token（下一成员名/冒号/赋值）即成员结束。 */
-            while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF &&
-                   cur_tok(cs) != TOK_COLON && cur_tok(cs) != TOK_ASSIGN) {
-                if (is_type_token(cur_tok(cs)) ||
-                    cur_tok(cs) == TOK_LBRACKET || cur_tok(cs) == TOK_RBRACKET) {
+            a->mtype[a->mcount] = -1;
+            if (cur_tok(cs) == TOK_IDENTIFIER) {
+                int ti2 = agg_type_find(cs->parser.lex->tok_str);
+                if (ti2 >= 0) {
+                    a->mtype[a->mcount] = ti2;
                     next_tok(cs);
-                    continue;
                 }
-                break;
+            } else {
+                while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF &&
+                       cur_tok(cs) != TOK_COLON && cur_tok(cs) != TOK_ASSIGN) {
+                    if (is_type_token(cur_tok(cs)) ||
+                        cur_tok(cs) == TOK_LBRACKET || cur_tok(cs) == TOK_RBRACKET) {
+                        next_tok(cs);
+                        continue;
+                    }
+                    break;
+                }
             }
             if (cur_tok(cs) == TOK_COLON) {        /* 位域 :N——记录宽度（槽内低 N 位） */
                 next_tok(cs);
@@ -2644,6 +2702,7 @@ static void ir_type_decl(CompilerState *cs)
         }
         expect(cs, TOK_RBRACE);
     }
+    agg_compute_offsets(agg_count);   /* 嵌套：递归算成员偏移/总槽数 */
     agg_count++;
 }
 
