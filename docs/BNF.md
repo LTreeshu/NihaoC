@@ -244,6 +244,9 @@
                    | "structof" "(" <type-name> "," <expr> ")"
                    | "unionof" "(" <type-name> "," <expr> ")"
                    | "visof" "(" <expr> ")"
+                   | "len" "(" <identifier> ")"
+                     (* len(x)：x 的逻辑长度——数组=容量、动态字符串 char[]=字面量长、
+                        切片变量 s=arr[lo..hi] 的边界差 hi-lo（编译期常量，返回编译期值），2026-08-19 *)
 
 <malloc-expr>    ::= "malloc" "(" <type-name> ")"
                    | "malloc" "(" <type-name> "[" <int-literal> "]" ")"
@@ -291,6 +294,7 @@
 <break-stmt>     ::= "break"
 <continue-stmt>  ::= "continue"
 <goto-stmt>      ::= "goto" <identifier>
+<label-def>      ::= <identifier> ":"                 (* 标签定义（C 风格，语句级，函数内唯一）*)
 
 <expr-stmt>      ::= <expr>
 <empty-stmt>     ::= ";" | "#"
@@ -300,6 +304,7 @@
 > - `is` 模式匹配用于 `while` / `do` 循环体内，如 `is -1 { break }`、`is 0..50 { continue }`。
 > - `while var1 += 1 { ... }`：循环条件允许赋值表达式。
 > - `do <expr> { ... }`：条件在块外（求值后执行块），区别于 C 的 do-while。
+> - 标签 `name:` 与 goto 配套：函数内先定义或后定义均可（跳转目标延迟解析）；IR 与全量实现一致（2026-08-19）。
 
 ---
 
@@ -347,10 +352,12 @@
 
 ```
 <cooking-block>  ::= "cooking" "{" { <cooking-item> } "}"
-<cooking-item>   ::= <var-decl> | <cooking-call> | <static-assert>
+<cooking-item>   ::= <var-decl> | <ct-func-def> | <ct-func-call> | <static-assert>
 
-<cooking-call>   ::= "const" <identifier> "(" <expr> { "," <expr> } ")" [ <identifier> ]
-                   | <identifier> "(" <expr> { "," <expr> } ")"     (* 编译期函数调用，如 maker("var", id++) *)
+<ct-func-def>    ::= "const" <identifier> "(" <identifier> { "," <identifier> } ")"
+                     "=" <expr>            (* 编译期函数定义（宏式，参数编译期常量）*)
+<ct-func-call>   ::= <identifier> "(" <expr> { "," <expr> } ")"
+                     (* 编译期函数调用：参数替换为实参字面量后求值（支持嵌套/组合），2026-08-19 *)
 
 <static-assert>  ::= "static_assert" "(" <expr> "," <string-literal> ")"
 

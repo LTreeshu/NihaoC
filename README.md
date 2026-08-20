@@ -92,9 +92,10 @@ xmake test -b ir-c             # 指定后端
 | `ir-c` / `ir-native`（方案 B） | IR 中间层：→C 文本 / →x86-64 汇编（Windows x64 ABI） |
 | `ir-riscv64`（方案 B） | IR → RISC-V 64 汇编（RV64I + D 浮点扩展，AAPCS 类约定，验汇编生成） |
 | `ir-arm64`（方案 B） | IR → AArch64 汇编（AAPCS64，验汇编生成） |
+| `ir-loongarch64`（方案 B） | IR → LoongArch64 汇编（LA64 基础指令集，验汇编生成，2026-08-15） |
 
-> 三架构后端全齐：x86-64（Win64）、riscv64（RV64）、arm64（AAPCS64）；
-> 后两者生成标准 GAS 汇编（`-backend=ir-riscv64 -o out.s`），本机无交叉汇编器，
+> **四架构后端全齐**：x86-64（Win64）、riscv64（RV64）、arm64（AAPCS64）、loongarch64（LA64）；
+> 后三者生成标准 GAS 汇编（`-backend=ir-riscv64 -o out.s`），本机无交叉汇编器，
 > 仅验证汇编生成正确性（`ncc build xx.nc -backend=ir-riscv64 -o rv.s`）。
 
 TCC 安装目录通过 `NIHAO_TCC_DIR` 环境变量指定（如 `/d/devtools/tcc`，MSYS 路径自动归一化），否则从 PATH 探测。
