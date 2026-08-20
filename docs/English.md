@@ -34,6 +34,9 @@ NiHao is a new statically compiled language designed for system-level programmin
 - `bitoffsetof(type,bitmember)` — returns the bit offset
 - `holdof(type, member)` — returns the base address of the enclosing aggregate
 - `visof(var)` — visibility inspection, returns the visibility attribute
+- `len(x)` — logical length (2026-08-19): array = capacity; dynamic `char[]` = literal length;
+  slice variable `s = arr[lo..hi]` = boundary difference `hi-lo` (bounds must be compile-time
+  constants; returns a compile-time value)
 
 ### 2.4 Keyword Reference
 
@@ -79,6 +82,10 @@ NiHao is a new statically compiled language designed for system-level programmin
 | `i32`   | Signed 32-bit integer       | 4 bytes |
 | `i64`   | Signed 64-bit integer       | 8 bytes |
 | `f32`   | Single-precision float      | 4 bytes |
+
+> f32 strict width (implemented 2026-08-19): values are rounded to single precision on
+> assignment/initialization (storage-truncation semantics); arithmetic still promotes to
+> double. `f32 x = 0.1` stores back so that `x != 0.1` (f64 literal).
 | `f64`   | Double-precision float      | 8 bytes |
 | `fx32`  | Fixed-point (Q16.16)        | 4 bytes |
 | `fx64`  | Fixed-point (Q32.32)        | 8 bytes |
@@ -181,6 +188,20 @@ xunion union{
     }
 }
 xunion.r1 = 1
+```
+
+**Named-type nesting (implemented 2026-08-19)** — chained member access + whole-struct copy:
+
+```nihao
+Point struct { x i32 y i32 }
+Line struct { a Point b Point }
+
+l Line
+l.a.x = 1
+l.b.y = 2            // chained access (recursively expanded offsets)
+
+m Line
+m = l                // whole-struct copy (per-member, nested recursion; copies are independent)
 ```
 
 ## 4. Variable Declarations and Visibility
@@ -475,6 +496,17 @@ while var1 += 1 {
 ```nihao
 for i = 0; i < 10; i++ {
     // ...
+}
+```
+
+**goto and labels (2026-08-19):**
+
+```nihao
+i i32 = 0
+loop:
+i = i + 1
+if i < 3 {
+    goto loop        // jump to label (defined before or after, unique per function)
 }
 ```
 
@@ -823,6 +855,11 @@ nihao debug    # debug-mode build
 cooking {
     // code executed at compile time
     const BUILD_TIME = time.now()
+    // compile-time variables: const NAME [TYPE] = expr (shared across blocks, folded at runtime)
+    const BASE i32 = 10
+    // compile-time functions (macro expansion, 2026-08-19): const NAME(p1, p2) = expr
+    const sq(x) = x * x
+    static_assert(sq(5) == 25, "sq(5) != 25")   // nested sq(sq(2)) / compose sq(cube(2)) supported
 }
 ```
 
