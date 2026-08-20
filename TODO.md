@@ -77,7 +77,7 @@ ncc/
 - [x] **arch/ 多架构后端（2026-08-15 完成）**：四目标架构全齐——x86-64（ir_x86_64.c，Win64 ABI）、riscv64（RV64I+D）、arm64（AAPCS64）、**loongarch64（2026-08-15 新增，LA64 指令映射）**；均经 TargetBackend 抽象（ir_backend.c 注册表 + CLI -backend=ir-<arch>）。arch/ 空目录为历史遗留，实际后端在 ncc/ 下。
 - [x] **editors/sublime 语法高亮分支丢失（已于 2026-08-05 合并，ncc 提交 959c9f2）**：当前分支（feat/backend-ir）下 editors/ 为空；已从 main 分支（`bffabcd` 创建、`e208b7f` 修复 [[attr]]）提取合并 `editors/README.md`、`editors/sublime/nihaoc.sublime-syntax`（164 行）、`editors/sublime/demo.nc`，并同步至 NihaoC/ncc。
 - [ ] **CLI 完善**：`debug` 子命令实现、`init` 模板与当前语法对齐、错误信息带行列定位并中文化。
-- [ ] **文档与实现对齐**：docs/ 中 Chinese.md / English.md / BNF.md 描述的部分语法（cooking、link、多返回值等）与当前实现有差距，需产出一份"已实现 vs 规划"对照表；README 示例代码需用当前编译器实测。
+- [~] **文档与实现对齐（2026-08-20 增量更新）**：STAGE_SUMMARY 刷新 8/20；BNF 补 label/len/cooking 函数定义；README 后端表四架构+示例实测；Chinese/English 补 len/编译期函数/goto label/嵌套/f32 严格宽度；archive 备份已删（P3 卫生项闭环）。剩余：全量校对（逐节核对 BNF v2.0 差异，工作量大，选做）。
 - [ ] **跨平台验证**：`-run`（内存执行）注释为 Linux only；Windows 下 libtcc 动态链接（NIHAO_TCC_DIR 探测）需文档化。
 
 ### P3 — 代码卫生
@@ -85,7 +85,7 @@ ncc/
 - [ ] 清理 `test/` 下的生成二进制（f1b、f4 等），改为构建目录输出。
 - [ ] 评估 codegen.c（旧）与 cgen.c / ir_to_c.c 的重复度，逐步收敛。
 - [ ] linker.c 与后端的关系梳理（当前仅 default 后端使用）。
-- [ ] 根目录 `docs/archive/Chinese.md.bak` 确认无价值后删除。
+- [x] 根目录 `docs/archive/Chinese.md.bak`（2026-08-20 用户确认后删除）。
 
 ---
 
