@@ -112,6 +112,14 @@ static void x64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
   addq $16, %%rsp
 ");
             break;
+        case IR_FTRUNC:
+            /* f32 严格宽度：double → float 截断再回 double（x87 fstps/flds） */
+            nb_put(b, "  subq $8, %%rsp\n  fldl ");
+            x64_slot(b, in->a, tb);
+            nb_put(b, "\n  fstps 0(%%rsp)\n  flds 0(%%rsp)\n  fstpl ");
+            x64_slot(b, in->dst, tb);
+            nb_put(b, "\n  addq $8, %%rsp\n");
+            break;
         case IR_TRUNC:
             /* 窄整数截断 + 符号/零扩展：左移对齐高位 + 算术/逻辑右移回（imm 编码） */
             {

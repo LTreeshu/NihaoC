@@ -25,6 +25,7 @@ typedef enum {
     IR_FCMP,        /* dst = (a cmp b) double 比较；imm: 0=EQ 1=NE 2=LT 3=LE 4=GT 5=GE */
     IR_ITOD,        /* dst = (double)a（int64 → double 符号转换，混合类型提升） */
     IR_DTOI,        /* dst = (int64)a（double → int64 截断，配 ITOD 的反向转换） */
+    IR_FTRUNC,      /* dst = (float)a（f32 严格宽度：存储截断为单精度再回 double） */
     IR_TRUNC,       /* dst = (intN)a 截断+符号扩展；imm: 0=i8 1=i16 2=i32 3=u8 4=u16 5=u32 */
     IR_JMP,         /* goto label                     */
     IR_JZ,          /* if dst == 0 goto label         */

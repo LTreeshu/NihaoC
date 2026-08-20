@@ -175,6 +175,9 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                     cb_put(&b, "    t%d = (int64_t)t%d;
 ", in->dst, in->a);
                     break;
+                case IR_FTRUNC:
+                    cb_put(&b, "    t%d = (float)t%d;\n", in->dst, in->a);
+                    break;
                 case IR_TRUNC:
                     /* 窄整数截断 + 符号/零扩展（imm: 0=i8 1=i16 2=i32 3=u8 4=u16 5=u32） */
                     cb_put(&b, "    t%d = (%s)t%d;\n", in->dst,

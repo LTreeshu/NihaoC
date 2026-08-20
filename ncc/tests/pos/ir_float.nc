@@ -28,5 +28,12 @@ func main() {
     } else {
         puts("fcmp bad")
     }
+    /* f32 严格宽度（存储截断）：f32 0.1 截断后 != f64 0.1 */
+    fx2 f32 = 0.1
+    if fx2 != 0.1 {
+        puts("f32 strict ok")
+    } else {
+        puts("f32 strict bad")
+    }
     return
 }

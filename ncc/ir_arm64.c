@@ -115,6 +115,13 @@ static void a64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             nb_put(b, "  fcvtzs x0, d0\n");   /* 向零截断（与 C 一致） */
             a64_st_x0(b, in->dst, tb);
             break;
+        case IR_FTRUNC:
+            /* f32 严格宽度：double → float 截断再回 double（fcvt s/d） */
+            a64_ld_fp(b, "d0", in->a, tb);
+            nb_put(b, "  fcvt s0, d0\n  fcvt d0, s0\n");
+            a64_slot_addr(b, in->dst, tb);
+            nb_put(b, "  str d0, [x9]\n");
+            break;
         case IR_TRUNC:
             /* 窄整数截断 + 符号/零扩展（AArch64 原生 sxtb/sxth/sxtw/uxtb/uxth/uxtw） */
             a64_ld_x0(b, in->a, tb);

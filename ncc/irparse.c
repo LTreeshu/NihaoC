@@ -195,6 +195,14 @@ static int ir_coerce(int vr, int vtype_code)
         if (!ir_is_double(vr)) return ir_to_double(vr);
         return vr;
     }
+    if (vtype_code == 8) {
+        /* f32 严格宽度：先提升 double（int 源）再 FTRUNC 单精度截断 */
+        if (!ir_is_double(vr)) vr = ir_to_double(vr);
+        int nv = ir_new_vreg(F);
+        ir_emit(F, IR_FTRUNC, nv, vr, -1, 0);
+        ir_set_double(nv);
+        return nv;
+    }
     if (ir_is_double(vr)) {
         int nv = ir_new_vreg(F);
         ir_emit(F, IR_DTOI, nv, vr, -1, 0);
@@ -645,8 +653,8 @@ static int ir_primary(CompilerState *cs)
         int one = ir_new_vreg(F);
         ir_emit(F, IR_CONST, one, -1, -1, 1);
         int nv = ir_new_vreg(F);
-        if (vtype[pvi] == 1) {
-            /* 浮点变量：1 转 double 位模式 + FADD/FSUB */
+        if (vtype[pvi] == 1 || vtype[pvi] == 8) {
+            /* 浮点变量（f64/f32）：1 转 double 位模式 + FADD/FSUB */
             union { double d; int64_t i; } u;
             u.d = 1.0;
             one = ir_new_vreg(F);
@@ -1089,7 +1097,7 @@ static int ir_primary(CompilerState *cs)
         }
         int vr = ir_new_vreg(F);
         ir_emit(F, IR_MOV, vr, vt[vi], -1, 0);
-        if (vtype[vi] == 1) ir_set_double(vr);   /* 浮点变量读值标记 */
+        if (vtype[vi] == 1 || vtype[vi] == 8) ir_set_double(vr);   /* 浮点变量读值标记（f32 亦 double 槽） */
         return vr;
     }
     if (t == TOK_LPAREN) {
@@ -2277,8 +2285,9 @@ static void ir_stmt(CompilerState *cs)
         } else if (is_type_token(nt)) {
             /* 声明: name i32 [N] = expr | = {e0, e1, ...} | name 函数指针类型 = fn */
             int decl_float = (nt == TOK_F64 || nt == TOK_F32);
-            /* PB-1 窄整数类型编码（0=i64 1=float 2=i8 3=i16 4=i32 5=u8 6=u16 7=u32） */
-            int vt_code = decl_float ? 1 :
+            /* PB-1 窄整数类型编码（0=i64 1=float 2=i8 3=i16 4=i32 5=u8 6=u16 7=u32）；
+             * f32 严格宽度（2026-08-19）：F32 → 码 8（标记 f32，赋值时 FTRUNC） */
+            int vt_code = decl_float ? (nt == TOK_F32 ? 8 : 1) :
                           (nt == TOK_CHAR || nt == TOK_I8) ? 2 :
                           (nt == TOK_I16) ? 3 : (nt == TOK_I32) ? 4 :
                           (nt == TOK_U8)  ? 5 : (nt == TOK_U16) ? 6 :
@@ -2326,6 +2335,9 @@ static void ir_stmt(CompilerState *cs)
             } else if (vt_code == 1) {
                 vtype[vi] = 1;          /* f64/f32 变量 → double 槽 */
                 ir_set_double(vt[vi]);  /* 槽 vreg 类型同步（ir_to_c 声明 double） */
+            } else if (vt_code == 8) {
+                vtype[vi] = 8;          /* f32 严格宽度：槽 double + 赋值 FTRUNC */
+                ir_set_double(vt[vi]);
             } else {
                 vtype[vi] = vt_code;    /* 窄整数：赋值时截断（IR_TRUNC） */
             }

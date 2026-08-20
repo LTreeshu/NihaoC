@@ -89,6 +89,14 @@ static void la_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             nb_put(b, "\n  ftintrz.l.d $a0, $fa0\n");
             la_store_a0(b, in->dst, tb);
             break;
+        case IR_FTRUNC:
+            /* f32 严格宽度：double → float 截断再回 double（fcvt.s.d + fcvt.d.s） */
+            nb_put(b, "  fld.d $fa0, ");
+            la_slot(b, in->a, tb);
+            nb_put(b, "\n  fcvt.s.d $fa0, $fa0\n  fcvt.d.s $fa0, $fa0\n  fst.d $fa0, ");
+            la_slot(b, in->dst, tb);
+            nb_put(b, "\n");
+            break;
         case IR_TRUNC:
             /* 窄整数截断 + 符号/零扩展：slli.d 对齐高位 + srai.d/srli.d（imm 编码） */
             {
