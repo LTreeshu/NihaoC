@@ -333,6 +333,35 @@ static void ir_bf_store(int addr, int v, int bits)
     ir_emit(F, IR_STORE, -1, addr, r, 0);
 }
 
+/* 聚合初始化列表（嵌套递归）：{e0, e1, ...} 或 {{...}, {...}}
+ * ti=当前类型，base=当前类型在聚合变量中的槽起点；成员 k 的槽起点 =
+ * base + moff[k]（union 共享 base）。聚合成员遇 { 递归填充。 */
+static void ir_agg_init(CompilerState *cs, int vi, int ti, int base)
+{
+    IrAggType *a = &agg_types[ti];
+    int k = 0;
+    next_tok(cs);           /* { */
+    if (cur_tok(cs) != TOK_RBRACE) {
+        for (;;) {
+            if (k >= a->mcount) break;
+            int mt = a->mtype[k];
+            int off = base + ((a->kind == 1) ? 0 : a->moff[k]);
+            if (mt >= 0 && cur_tok(cs) == TOK_LBRACE) {
+                ir_agg_init(cs, vi, mt, off);
+            } else {
+                int v = ir_expr(cs);
+                int addr = ir_new_vreg(F);
+                ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
+                ir_emit(F, IR_STORE, -1, addr, v, 0);
+            }
+            k++;
+            if (cur_tok(cs) != TOK_COMMA) break;
+            next_tok(cs);
+        }
+    }
+    expect(cs, TOK_RBRACE);
+}
+
 /* 聚合类型声明：name Type [= {...}|= expr]
  * struct: elems=成员数（顺序槽）；union: 共享槽 0；enum: 单槽 */
 static void ir_agg_decl(CompilerState *cs, const char *name, int ti, int vis)
@@ -343,21 +372,7 @@ static void ir_agg_decl(CompilerState *cs, const char *name, int ti, int vis)
     if (cur_tok(cs) == TOK_ASSIGN) {
         next_tok(cs);
         if (cur_tok(cs) == TOK_LBRACE) {
-            next_tok(cs);
-            int k = 0;
-            if (cur_tok(cs) != TOK_RBRACE) {
-                for (;;) {
-                    int v = ir_expr(cs);
-                    int addr = ir_new_vreg(F);
-                    /* union 初始化全写槽 0；struct 按成员序 */
-                    ir_emit(F, IR_ADDR, addr, vt[vi], -1, (a->kind == 1) ? 0 : k);
-                    ir_emit(F, IR_STORE, -1, addr, v, 0);
-                    k++;
-                    if (cur_tok(cs) != TOK_COMMA) break;
-                    next_tok(cs);
-                }
-            }
-            expect(cs, TOK_RBRACE);
+            ir_agg_init(cs, vi, ti, 0);
         } else {
             int v = ir_expr(cs);
             /* sret 调用（struct 返回函数）：缓冲地址是"值"（last_mr_buf），

@@ -19,5 +19,12 @@ func main() {
     } else {
         puts("nested copy bad")
     }
+    /* 嵌套初始化列表（递归填充成员槽） */
+    n Line = {{5, 6}, {7, 8}}
+    if n.a.x == 5 && n.b.y == 8 {
+        puts("nested init ok")
+    } else {
+        puts("nested init bad")
+    }
     return
 }

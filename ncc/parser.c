@@ -494,6 +494,32 @@ static int is_expr_continuer(TokenType t)
     }
 }
 
+/* 初始化列表（嵌套递归）：已消费 {，元素逐项 parse_expression；遇 { 递归。
+ * 定义在使用处（parse_declaration）前 */
+static void parse_init_list(CompilerState *cs)
+{
+    cgen_raw("{");
+    next_tok(cs);
+    skip_newlines(cs);
+    int k = 0;
+    if (cur_tok(cs) != TOK_RBRACE) {
+        for (;;) {
+            if (k > 0) cgen_raw(", ");
+            if (cur_tok(cs) == TOK_LBRACE) {
+                parse_init_list(cs);
+            } else {
+                parse_expression(cs);
+            }
+            k++;
+            if (cur_tok(cs) != TOK_COMMA) break;
+            next_tok(cs);
+            skip_newlines(cs);
+        }
+    }
+    expect(cs, TOK_RBRACE);
+    cgen_raw("}");
+}
+
 /* Heuristic C type for a type-inferred variable initializer.
  * Returns 1 if the RHS first token gave a usable hint. */
 static int infer_init_type(CompilerState *cs, CType *out)
@@ -981,24 +1007,9 @@ void parse_declaration(CompilerState *cs)
                 }
             }
         }
-        /* 数组/聚合初始化列表：= {e0, e1, ...}（原样输出给 C） */
+        /* 数组/聚合初始化列表：= {e0, e1, ...}（原样输出给 C；嵌套 { } 递归） */
         if (cur_tok(cs) == TOK_LBRACE) {
-            cgen_raw("{");
-            next_tok(cs);
-            skip_newlines(cs);
-            int k = 0;
-            if (cur_tok(cs) != TOK_RBRACE) {
-                for (;;) {
-                    if (k > 0) cgen_raw(", ");
-                    parse_expression(cs);
-                    k++;
-                    if (cur_tok(cs) != TOK_COMMA) break;
-                    next_tok(cs);
-                    skip_newlines(cs);
-                }
-            }
-            expect(cs, TOK_RBRACE);
-            cgen_raw("}");
+            parse_init_list(cs);
         } else {
             parse_expression(cs);
         }
