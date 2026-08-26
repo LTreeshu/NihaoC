@@ -202,6 +202,8 @@ l.b.y = 2            // chained access (recursively expanded offsets)
 
 m Line
 m = l                // whole-struct copy (per-member, nested recursion; copies are independent)
+
+n Line = {{1, 2}, {3, 4}}   // nested initializer list (recursive fill, 2026-08-26)
 ```
 
 ## 4. Variable Declarations and Visibility
