@@ -204,6 +204,12 @@ m Line
 m = l                // whole-struct copy (per-member, nested recursion; copies are independent)
 
 n Line = {{1, 2}, {3, 4}}   // nested initializer list (recursive fill, 2026-08-26)
+
+// union nesting: aggregate members share slots (total slots = largest member, 2026-08-27)
+U union { a Point b Point }
+un U
+un.a.x = 1
+un.b.y = 5          // writing b.y overwrites the shared slot → un.a.y == 5
 ```
 
 ## 4. Variable Declarations and Visibility

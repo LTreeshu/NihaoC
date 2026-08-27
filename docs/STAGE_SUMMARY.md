@@ -35,7 +35,7 @@
 | PB-1 | 类型系统：窄整数宽度（IR_TRUNC）、数组元素宽度（vetyp）、双向转换（IR_DTOI/ITOD + ir_coerce）、char[]/字符串（IR_LOAD8/STORE8 字节读写） | ir_narrow/narray/conv/str.nc |
 | PB-2 | 一元/复合运算、++/--、前缀 | ir_expr.nc、ir_prefix.nc |
 | PB-3 | 数组、切片（读/写/长度语义）、动态数组；**len()（8/19）** | ir_array/slice.nc |
-| PB-4 | struct/union/enum、初始化列表、**嵌套 struct（8/19：链式访问+递归偏移 mslots）**、**整体赋值拷贝（8/19）**、**嵌套初始化列表（8/26：IR ir_agg_init 递归 + 全量 parse_init_list）** | ir_struct/nested.nc |
+| PB-4 | struct/union/enum、初始化列表、**嵌套 struct（8/19：链式访问+递归偏移 mslots）**、**整体赋值拷贝（8/19）**、**嵌套初始化列表（8/26：IR ir_agg_init 递归 + 全量 parse_init_list）**、**union 嵌套（8/27：mslots=最大成员槽数）** | ir_struct/nested.nc |
 | PB-5/6 | 存储期 visof、内置函数 sizeof/malloc 等 | ir_vis/builtin.nc |
 | PB-7/8 | 控制流 switch/is、多变量、函数指针（IR_CALLI）、struct 返回值（sret） | ir_switch/multi/fptr/mr.nc |
 | PB-9 | 编译期 cooking：static_assert + 编译期变量表 + **编译期函数 cooking-call（8/19：宏式展开，临时 lexer 求值）** | ir_cook.nc |
