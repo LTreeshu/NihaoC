@@ -240,13 +240,23 @@ typedef struct {
 static IrAggType agg_types[IR_MAX_AGG];
 static int agg_count;
 
-/* 递归计算成员起始槽偏移与总槽数（嵌套 struct；union/enum=1 槽；
+/* 递归计算成员起始槽偏移与总槽数（嵌套 struct；union=最大成员槽数，enum=1 槽；
  * mslots>0 表示已计算（memset 清零后首次计算）） */
 static int agg_compute_offsets(int ti)
 {
     IrAggType *a = &agg_types[ti];
     if (a->mslots > 0 || a->kind == 2) return a->kind == 2 ? 1 : a->mslots;
-    if (a->kind == 1) { a->mslots = 1; return 1; }
+    if (a->kind == 1) {
+        /* union：成员共享起始槽 0；总槽数 = 最大成员槽数（嵌套聚合成员，
+         * 如 union { a Point b Point } = 2 槽——防链式访问越界） */
+        int mx = 1;
+        for (int i = 0; i < a->mcount; i++) {
+            int ms = (a->mtype[i] >= 0) ? agg_compute_offsets(a->mtype[i]) : 1;
+            if (ms > mx) mx = ms;
+        }
+        a->mslots = mx;
+        return mx;
+    }
     int off = 0;
     for (int i = 0; i < a->mcount; i++) {
         a->moff[i] = off;
