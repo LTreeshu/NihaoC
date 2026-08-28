@@ -99,9 +99,9 @@ void nihao_error(CompilerState *cs, const char *fmt, ...)
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
 
-    fprintf(stderr, "\033[1;31mError\033[0m: %s\n", buf);
+    fprintf(stderr, "\033[1;31m错误\033[0m: %s\n", buf);
     if (cs->parser.lex) {
-        fprintf(stderr, "  at %s:%d:%d\n",
+        fprintf(stderr, "  位于 %s:%d:%d\n",
                 cs->parser.lex->filename,
                 cs->parser.lex->line_num,
                 cs->parser.lex->col_num);
@@ -700,7 +700,7 @@ static int cmd_init(int argc, char **argv)
         fclose(fp);
     }
 
-    /* src/main.nc */
+    /* src/main.nc：模板展示当前语法（变量/数组/struct/flow/指针 .()） */
     snprintf(path, sizeof(path), "%s/src/main.nc", dir);
     fp = fopen(path, "wb");
     if (fp) {
@@ -708,8 +708,36 @@ static int cmd_init(int argc, char **argv)
             "module main\n"
             "use stdio\n"
             "\n"
+            "/* 命名类型 struct */\n"
+            "Person struct {\n"
+            "    name char[]\n"
+            "    age u8\n"
+            "}\n"
+            "\n"
             "func main() {\n"
             "    puts(\"hello from %s!\")\n"
+            "\n"
+            "    /* 变量 + 数组 */\n"
+            "    n i32 = 3\n"
+            "    arr i32[3] = {10, 20, 30}\n"
+            "    if arr[n - 1] == 30 {\n"
+            "        puts(\"array ok\")\n"
+            "    }\n"
+            "\n"
+            "    /* struct 成员访问 */\n"
+            "    p Person = {\"ltree\", 25}\n"
+            "    if p.age == 25 {\n"
+            "        puts(\"struct ok\")\n"
+            "    }\n"
+            "\n"
+            "    /* 指针 .() 解引用（i64 槽宽 8 字节） */\n"
+            "    v i64 = 42\n"
+            "    q = &v\n"
+            "    q.() = 43\n"
+            "    if v == 43 {\n"
+            "        puts(\"ptr ok\")\n"
+            "    }\n"
+            "    return\n"
             "}\n",
             name);
         fclose(fp);
