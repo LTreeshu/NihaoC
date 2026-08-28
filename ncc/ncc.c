@@ -571,7 +571,17 @@ static int compile_file(CompilerState *cs, const char *filename)
             }
         } else {
             char cmd[1600];
-            snprintf(cmd, sizeof(cmd), "tcc \"%s\" -o \"%s\"", cpath, out);
+            int cmdlen = snprintf(cmd, sizeof(cmd), "tcc \"%s\" -o \"%s\"",
+                                  cpath, out);
+            /* link 库声明：link "lib" alias -> 外部 tcc 加 -l<name>（与 native 对齐） */
+            for (int i = 0; i < cs->link_lib_count; i++) {
+                LinkLib *ll = &cs->link_libs[i];
+                if (ll->name && ll->name[0] &&
+                    cmdlen > 0 && cmdlen < (int)sizeof(cmd) - 64) {
+                    cmdlen += snprintf(cmd + cmdlen, sizeof(cmd) - (size_t)cmdlen,
+                                       " -l%s", ll->name);
+                }
+            }
             if (cs->verbose) {
                 printf("Invoking: %s\n", cmd);
             }
