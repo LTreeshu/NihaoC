@@ -21,6 +21,10 @@ A new better C language for my fantasy， a better programing world for void !
 
 [中文](./docs/Chinese.md) | [English](./docs/English.md)
 
+开发约定|Development Conventions
+
+[Git 提交与推送约定](./docs/GIT_CONVENTIONS.md)
+
 Source code example demonstration:
 
 源码展示:
