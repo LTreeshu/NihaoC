@@ -1976,6 +1976,21 @@ static void ir_stmt(CompilerState *cs)
                 ir_emit(F, IR_JZ, -1, eq, -1, 0);
                 F->ins[F->ins_count - 1].label = l_done;
             }
+        } else if (pt == TOK__FLOW || pt == TOK__STATIC || pt == TOK__CONST ||
+                   pt == TOK__VAR || pt == TOK__UNDEF) {
+            /* 可见性模式：is _flow / is _static 等（BNF <visibility-enum>）——
+             * 匹配循环条件值 == 可见性常量（VIS_CONST=1 FLOW=2 STATIC=3 VAR=0 UNDEF=4） */
+            int visv = (pt == TOK__FLOW) ? VIS_FLOW :
+                       (pt == TOK__STATIC) ? VIS_STATIC :
+                       (pt == TOK__CONST) ? VIS_CONST :
+                       (pt == TOK__VAR) ? VIS_VAR : VIS_UNDEF;
+            next_tok(cs);
+            int k = ir_new_vreg(F);
+            ir_emit(F, IR_CONST, k, -1, -1, visv);
+            int eq = ir_new_vreg(F);
+            ir_emit(F, IR_CMP_EQ, eq, is_val_vreg, k, 0);
+            ir_emit(F, IR_JZ, -1, eq, -1, 0);
+            F->ins[F->ins_count - 1].label = l_done;
         } else if (pt == TOK_IDENTIFIER) {
             /* 普通标识符模式：比较 is_val == 标识符值（如枚举/变量） */
             const char *pat = cs->parser.lex->tok_str;
@@ -2373,7 +2388,7 @@ static void ir_stmt(CompilerState *cs)
                 if (cur_tok(cs) != TOK_RBRACE) {
                     for (;;) {
                         int v = ir_expr(cs);
-                        v = ir_coerce(v, vetyp[vi]);   /* PB-1：元素类型协调 */
+                        v = ir_coerce(v, vetyp[vi] == 8 ? 2 : vetyp[vi]);   /* PB-1：元素类型协调（vetyp 8=char 元素，与 vtype 8=f32 编码冲突→按 i8 截断） */
                         int addr = ir_new_vreg(F);
                         ir_emit(F, IR_ADDR, addr, vt[vi], -1, k);
                         ir_emit(F, IR_STORE, -1, addr, v, 0);
@@ -2435,7 +2450,7 @@ static void ir_stmt(CompilerState *cs)
                     if (cur_tok(cs) != TOK_RBRACE) {
                         for (;;) {
                             int v = ir_expr(cs);
-                            v = ir_coerce(v, vetyp[vi]);
+                            v = ir_coerce(v, vetyp[vi] == 8 ? 2 : vetyp[vi]);
                             int offk = ir_new_vreg(F);
                             ir_emit(F, IR_CONST, offk, -1, -1, k);
                             int ik = ir_new_vreg(F);
@@ -2459,7 +2474,7 @@ static void ir_stmt(CompilerState *cs)
             expect(cs, TOK_RBRACKET);
             expect(cs, TOK_ASSIGN);
             int v = ir_expr(cs);
-            v = ir_coerce(v, vetyp[vi]);   /* PB-1：元素类型协调 */
+            v = ir_coerce(v, vetyp[vi] == 8 ? 2 : vetyp[vi]);   /* PB-1：元素类型协调（vetyp 8=char 元素，与 vtype 8=f32 编码冲突→按 i8 截断） */
             int addr = ir_elem_addr(cs, vt[vi], idx, ir_elem_width(vetyp[vi]), vetyp[vi] == 8);
             if (vetyp[vi] == 8) ir_emit(F, IR_STORE8, -1, addr, v, 0);
             else ir_emit(F, IR_STORE, -1, addr, v, 0);
@@ -2834,7 +2849,7 @@ int ir_compile(CompilerState *cs, const char *filename, int backend, int verbose
             "SHL", "SHR", "AND", "OR", "NEG", "NOT",
             "CMP_EQ", "CMP_NE", "CMP_LT", "CMP_LE", "CMP_GT", "CMP_GE",
             "FADD", "FSUB", "FMUL", "FDIV", "FCMP", "ITOD", "DTOI",
-            "TRUNC", "JMP", "JZ", "JNZ", "CALL", "CALLI", "PARAM", "RET",
+            "FTRUNC", "TRUNC", "JMP", "JZ", "JNZ", "CALL", "CALLI", "PARAM", "RET",
             "LABEL", "ALLOCA", "ADDR", "ELEM_ADDR", "LOAD", "STORE",
             "LOAD8", "STORE8", "LD_ADDR", "END",
         };

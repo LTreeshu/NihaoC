@@ -116,8 +116,8 @@ end
 -- IR 子集白名单（与 tests 用例同步维护）
 -- IR_SUBSET: IR 双后端（ir-c/ir-native）可编译运行的通用用例（全量后端也可跑）
 -- IR_ONLY  : IR 专属用例——子集语法（如无类型指针声明），全量 parser 无法编译
-local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, ir_cook = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_goto = true, ir_nested = true}
-local IR_ONLY = {ir_builtin = true, ir_mr = true, ir_slice = true, ir_sparam = true}
+local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_goto = true, ir_nested = true, ir_is = true}
+local IR_ONLY = {ir_builtin = true, ir_mr = true, ir_slice = true, ir_sparam = true, ir_cook = true}
 
 task("test")
     on_run(function ()
