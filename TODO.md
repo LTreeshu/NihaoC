@@ -54,7 +54,7 @@ ncc/
 
 ### P0 — 核心功能缺口（影响"可用"）
 
-- [~] **IR 前端覆盖全量语法**：已完成大部分（截至 8/18：struct/union/enum、数组/位域、cooking 编译期、flow/visof、多返回值(sret)、switch、link、函数指针、类型别名、切片；IR_SUBSET 25 用例四后端一致）。剩余细项：命名空间、部分 is 模式（goto 已于 2026-08-19 完成：全量+IR，ir_goto.nc IR_SUBSET 四后端）。
+- [~] **IR 前端覆盖全量语法**：已完成大部分（截至 8/29：struct/union/enum（嵌套/整体赋值/嵌套初始化 8/19-8/27）、数组/位域、cooking 编译期（含函数 8/19）、flow/visof、多返回值(sret)、switch、link、函数指针、类型别名、切片（len 8/19）、goto 8/19、is 可见性模式 8/29；IR_SUBSET 用例四后端一致 + IR_ONLY（ir_cook 等））。剩余细项：命名空间（无语言定义，待议）。
 - [x] **IR 路径用户函数调用符号 bug（已于 2026-08-05 修复，ncc 提交 c3c91dc）**：`tests/pos/hello.nc`（含用户自定义函数 `add`）经 `-backend=ir-native` 编译报 `undefined symbol '__imp_add'`。根因与修复：
   - `ir_to_native.c`：Windows 下所有 CALL 都生成 `call *__imp_<sym>`，用户函数（程序内符号）无 `__imp_` 别名 → 区分用户函数（直接 `call sym`）与外部导入符号（`__imp_` 间接调用）；
   - `ir_to_native.c`：栈帧对齐逻辑取反（frame 应为 16 的倍数，原代码在已是 16 倍数时 +8 反而破坏对齐）；
@@ -156,7 +156,7 @@ ncc/
 ### 测试与集成待办
 - [x] **PB-21 IR 后端回归基线（已于 2026-08-05 完成）**：run_tests.py 加 --backend 全矩阵；IR 双后端用 IR_SUBSET 白名单（当前 hello/ir_demo），其余用例标 SKIP，语法扩展时同步扩充白名单
 - [x] **PB-22 IR 用例扩充（超额完成）**：IR_SUBSET 25 + IR_ONLY 5 共 30 用例，覆盖浮点/数组/位域/字符串/切片/编译期/goto/多返回值/函数指针/struct
-- [x] **PB-23 CLI（2026-08-18 完成）**：`nihao debug <file> --ir` 走 IR 管线 dump 三地址码 + 显示 IR->C；IR dump op 数字 → 44 条指令名表
+- [x] **PB-23 CLI（2026-08-18/28 完成）**：`nihao debug <file> --ir` dump 三地址码（8/29 补 FTRUNC 名表）+ init 模板对齐当前语法（struct/数组/.() 解引用）+ 错误信息中文化（错误/位于前缀）
 
 ### 架构决策
 - [~] **PB-24 统一管线（2026-08-28 决策：再观察）**：继续双管线（A 方案产品化、B 方案语义验证器），待 IR 覆盖全量语法后（goto/嵌套等已清，命名空间无语言定义）再决策最终走向
