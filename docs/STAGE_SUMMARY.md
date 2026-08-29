@@ -43,7 +43,7 @@
 | PB-16 | 调用约定：struct 参数按值展开、return p 聚合返回（sret） | ir_sparam.nc |
 | PB-17/18 | 嵌套调用（收集模式）、ir_to_c 类型化输出（0 warning） | — |
 | PB-20 | **arm64 / riscv64 / loongarch64 后端**（四架构收官） | 汇编验证 |
-| PB-23 | **CLI debug --ir（8/18：dump 三地址码 + 44 条指令名表）** | — |
+| PB-23 | **CLI debug --ir（8/18：dump 三地址码 + 指令名表）**、**CLI 完善（8/28：init 模板对齐当前语法 + 错误信息中文化）** | — |
 
 **回归扩容（2026-08-13/14/18/19）**：IR_SUBSET 9→25（批量对比发现法修复 3 个全量真 bug：跨行后缀 ++ 误吃 / multi-decl init 残留 / 动态字符串池寻址）。
 
@@ -67,16 +67,17 @@
 xmake -r ncc          # 构建（NIHAO_TCC_DIR 指向 tcc）
 xmake test --all      # 全矩阵：c/native 12P、IR 一致性 25P，0 FAIL
 ```
-- `tests/pos/*.nc` 全量用例（c/native）；`IR_ONLY` = IR 子集（ir 后端）；`IR_SUBSET` = 四后端通用（一致性检查）
+- `tests/pos/*.nc` 全量用例（c/native）；`IR_ONLY` = IR 子集（ir 后端，如 ir_cook/ir_slice）；`IR_SUBSET` = 四后端通用（一致性检查）；**当前 55 PASS / 0 FAIL**（8/29：vetyp 8 编码冲突根治后 ir_str 四后端一致）
 - 新用例须在 xmake.lua 注册 IR_ONLY 或 IR_SUBSET，否则自动当全量 target 编译失败
 - 指针解引用：A 方案与 IR 统一用 `.()` 语法（`p.() = 42` / `y i32 = p.()`）；riscv64/arm64/loongarch64 只验汇编生成
 
 ## 5. 下一步候选（见 TODO.md）
 
-- PB-3 剩余：动态数组增长、切片运行时边界长度
+- PB-3 剩余：动态数组增长（2026-08-28 用户决策：**暂缓留设计**——`[2...]` 按固定容量，堆结构 ptr+len+cap 待统一管线决策后设计）；切片运行时边界长度（同需切片二元组结构，一并暂缓）
 - 数据模型剩余：无（2026-08-27 union 嵌套完成，全部清零）
 - IR 语法覆盖剩余：命名空间、部分 is 模式
-- **PB-24 统一管线决策**（parser→IR 单管线 vs 双管线并存）
+- **PB-24 统一管线决策**（2026-08-28 决策：**再观察**——继续双管线，待 IR 覆盖全量语法后再定）
+- **A 方案 link 导入实际 -l 传递（2026-08-28 完成）**；**is 可见性模式（8/29 完成，ir_is.nc）**；命名空间无语言定义（TODO 待议）
 - A 方案：link 导入实际 -l 传递
 - PA-9：-run/Linux 实测（无环境）
 - 文档：Chinese.md/English.md 已核对 BNF v2.0；8/19-8/20 新语法（goto label/len/cooking 函数/嵌套/f32）待补
