@@ -1,7 +1,8 @@
 # NihaoC 项目进度与 TODO 清单
 
-> 更新日期：2026-08-19
-> 本文档反映 `ncc/` 活跃开发目录（git `28bfb3f`）的最新状态，源码已同步至本目录 `ncc/`。
+> 更新日期：2026-08-30
+> 本文档反映 `ncc/` 活跃开发目录（git `c80309d`）的最新状态，源码已同步至本目录 `ncc/`。
+> 2026-08-29 起仓库分支化：B 方案开发在 `PB` 分支（见 `docs/GIT_CONVENTIONS.md`）。
 
 ---
 
@@ -54,7 +55,7 @@ ncc/
 
 ### P0 — 核心功能缺口（影响"可用"）
 
-- [~] **IR 前端覆盖全量语法**：已完成大部分（截至 8/29：struct/union/enum（嵌套/整体赋值/嵌套初始化 8/19-8/27）、数组/位域、cooking 编译期（含函数 8/19）、flow/visof、多返回值(sret)、switch、link、函数指针、类型别名、切片（len 8/19）、goto 8/19、is 可见性模式 8/29；IR_SUBSET 用例四后端一致 + IR_ONLY（ir_cook 等））。剩余细项：命名空间（无语言定义，待议）。
+- [~] **IR 前端覆盖全量语法**：已完成大部分（截至 8/29：struct/union/enum（嵌套/整体赋值/嵌套初始化 8/19-8/27）、数组/位域、cooking 编译期（含函数 8/19）、flow/visof、多返回值(sret)、switch、link、函数指针、类型别名、切片（len 8/19）、goto 8/19、is 可见性模式 8/29、**vetyp 8/f32 编码冲突根治（8/29：char 元素 coerce 误走 f32→ir-native STORE8 写 0→ir_str inconsistent，3 处 coerce 按 i8 截断 + ir_dump 补 FTRUNC 名表）**；IR_SUBSET 用例四后端一致 + IR_ONLY（ir_cook 等））。剩余细项：命名空间（无语言定义，待议）。
 - [x] **IR 路径用户函数调用符号 bug（已于 2026-08-05 修复，ncc 提交 c3c91dc）**：`tests/pos/hello.nc`（含用户自定义函数 `add`）经 `-backend=ir-native` 编译报 `undefined symbol '__imp_add'`。根因与修复：
   - `ir_to_native.c`：Windows 下所有 CALL 都生成 `call *__imp_<sym>`，用户函数（程序内符号）无 `__imp_` 别名 → 区分用户函数（直接 `call sym`）与外部导入符号（`__imp_` 间接调用）；
   - `ir_to_native.c`：栈帧对齐逻辑取反（frame 应为 16 的倍数，原代码在已是 16 倍数时 +8 反而破坏对齐）；
@@ -129,7 +130,7 @@ ncc/
 - [x] **PB-5 存储期属性 + visof（2026-08-06 完成）**：变量声明前缀 `const/static/flow/var`（记录可见性到变量表 vvis）；`visof(x)` 编译期查询（visof 是关键字 TOK_VISOF，返回 NH_* 常量 0-4）；可见性枚举常量 `_undef/_const/_flow/_static/_var` 作表达式常量；`is _flow` 等可见性模式（比较 is_val == NH_*）+ 标识符/枚举模式。用例 ir_vis.nc（IR_ONLY）双后端通过。
 - [x] **P1 全量 parser 关键字内置函数缺口（2026-08-06 修复，A 方案可用）**：新增 `parse_builtin_kw()` 在 parse_primary 分派 TOK_SIZEOF/TOK_TYPEOF/TOK_ALIGNOF/TOK_OFFSETOF/TOK_VISOF（含 `_undef/_const/_flow/_static/_var` 可见性枚举常量 case、parse_is_stmt 可见性模式 token 分支）；cgen 补 `#include <stddef.h>`（offsetof 宏）。**顺带修复全量 parser 语句边界缺陷**：函数体内无 NEWLINE token，`f()\n*p = 1` 的 `*` 会被上句乘法循环吞掉 → 表达式 binop 链（multiplicative→assign 全部 12 层）传起始行号参数，换行即语句边界（与 IR 前端同方案）。新增 A 方案用例 malloc_demo.nc（malloc + `.()` 解引用）c/native 后端通过
 - [x] **PB-6 内置函数（2026-08-06 完成，核心 5 个）**：`sizeof(type/expr)`（类型大小表 i8=1..f64=8、聚合=成员数*8 槽模型、数组=size*N）、`typeof`（映射为 sizeof）、`alignof`（IR 槽模型返回 8）、`offsetof(Type,member)`（成员序*8，union 0）、`malloc(Type[ N ])`（编译期定大小 → 调用外部 malloc，动态分配 + 指针读写验证）。用例 ir_builtin.nc（IR_ONLY）双后端通过。剩余：structof/unionof/holdof/bitoffsetof（需真实内存布局，IR 8 字节槽模型不支持，报错）、`*p op= e` 复合赋值解引用。另发现：sizeof/typeof/alignof/offsetof 是关键字 token，**全量 parser（parser.c）的 identifier 字符串比较分支永远走不到**（与 TOK_VISOF 同问题，记 P1）
-- [x] **PB-7 控制流补齐（全部完成 2026-08-06）**：for（init;cond;step，step 记录重放）、break/continue（循环栈）、do（while 别名，前测循环）、is 模式匹配（匹配循环条件值，支持 `-1` / `0..50` 闭区间；配套新增**表达式级赋值** `x += 1` / `x++` 使 `while x += 1 { is -1 {...} }` 可用）、switch（C 风格 `switch(e){ case e: ... default: ... }`，延迟绑定 JZ 布局，break 跳出 switch / continue 非法）。用例 ir_switch.nc（IR_ONLY）双后端通过。剩余：is 的标识符模式（_flow/_static，需 visof）、`is pat => stmt` 单语句形式（lexer 无 `=>` token）
+- [x] **PB-7 控制流补齐（全部完成 2026-08-06）**：for（init;cond;step，step 记录重放）、break/continue（循环栈）、do（while 别名，前测循环）、is 模式匹配（匹配循环条件值，支持 `-1` / `0..50` 闭区间；配套新增**表达式级赋值** `x += 1` / `x++` 使 `while x += 1 { is -1 {...} }` 可用）、switch（C 风格 `switch(e){ case e: ... default: ... }`，延迟绑定 JZ 布局，break 跳出 switch / continue 非法）。用例 ir_switch.nc（IR_ONLY）双后端通过。**is 可见性模式（2026-08-29 完成）**：`is _flow` 等（TOK__FLOW/_STATIC 等，比较 is_val == NH_*）+ 标识符/枚举模式，ir_is.nc IR_SUBSET 四后端一致。剩余：`is pat => stmt` 单语句形式（lexer 无 `=>` token）
 - [x] **P1 全量 switch/case（2026-08-07 完成）**——parse_statement 加 TOK_SWITCH 分支，生成 C 原生 switch（case 表达式须编译期常量），每个 case 后自动 break（NihaoC 无 fallthrough 语义）；break 天然跳出。P0 综合用例 p0_case.nc（IR_SUBSET）四后端一致通过
 - [x] **PB-8 多返回值、函数指针、多变量声明（全部完成 2026-08-07）**：多变量声明 `var {a=0,b=1} i8`——ir_stmt 前缀后 `{` 走 ir_multi_decl（收集 name=init 对 → 类型/聚合/数组 → 逐个 var_declare+MOV），无前缀 `{` 仍是块语句（无冲突）；用例 ir_multi.nc。**顺带补齐 &&/|| 短路逻辑层**（ir_logical_and/or，JZ/JNZ 跳转跳过右侧求值）。**函数指针最小集**——新指令 `IR_CALLI`（dst=call *(a)）：ir_to_c 生成 `((int64_t (*)())tN)(args)`，ir_to_native 生成 `movq slot(a),%rax; call *%rax`；声明 `fp void(i32,i32) i32 = add2`（声明分支跳过函数指针类型参数列表+返回类型）；函数名引用 → IR_LD_ADDR sym（取函数地址）；变量后跟 `(` → 间接调用。用例 ir_fptr.nc。**多返回值（struct 返回 sret 机制）**——命名结构体返回：`func f() Result`（IrFn.is_mr，隐藏 out-param `_mr_ret` 注入 var 表头部第 0 槽）；`return {e0,e1,...}` 聚合返回（STORE 到 *_mr_ret+k*8 + bare RET）；调用 `v Result = f()`（malloc 连续缓冲 → PARAM 缓冲+参数 → CALL → 缓冲值偏移 LOAD → 拷贝到聚合槽，last_mr_buf 标记）；成员访问复用 struct 机制。⚠️ `multireturn` 关键字已于 2026-08-08 移除（设计澄清：多返回=命名 struct，非关键字），用例 ir_mr.nc 改用 `Result struct`。三用例均 IR_ONLY 双后端通过
 - [x] **PB-9 编译期（2026-08-19 收官）**：`static_assert(expr,"msg")` 编译期断言——`ir_const_expr` 常量折叠求值链（int 字面量/一元 -!~/四则取模/比较/&&/||/括号/enum 常量/sizeof(type)/visof(x)/可见性枚举/编译期变量），失败时报 `static_assert failed: msg`；`cooking { ... }` 编译期块（顶层+函数内）；**编译期变量表（完成）**：`const NAME [TYPE] = expr` 存 ct_vars（跨块共享、重复声明报错），static_assert/编译期表达式可用，**运行时引用折叠为常量**；`align N { ... }` 对齐块跳过。**编译期函数调用 cooking-call（2026-08-19 完成）**：`const NAME(p1,p2) = expr` 宏式展开——mark buf_ptr 截表达式源文本，调用 NAME(args) 时参数名词边界替换为实参字面量 → 临时 lexer（lexer_init+lexer_next）求值再恢复；支持嵌套/组合/ct 变量参与。用例 ir_cook.nc（IR_ONLY）双后端通过

@@ -1,6 +1,7 @@
-# NihaoC 阶段总结（2026-08-20）
+# NihaoC 阶段总结（2026-08-30）
 
 > 会话恢复入口：读本文件 + `TODO.md` + `docs/BNF.md`。最后提交见 `git log -1`。
+> 2026-08-29 起仓库分支化：`main` 产品主干 / `PA` A 方案 / `PB` B 方案（见 `docs/GIT_CONVENTIONS.md`）；B 方案开发在 `PB` 分支进行。
 
 ## 1. 双方案架构
 
