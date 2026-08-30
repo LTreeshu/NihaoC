@@ -2044,8 +2044,12 @@ static void ir_stmt(CompilerState *cs)
         }
         if (cur_tok(cs) == TOK_LBRACE) {
             ir_block(cs);
+        } else if (cur_tok(cs) == TOK_FAT_ARROW) {
+            /* 单语句形式：is pat => stmt（BNF <is-stmt>）——ir_stmt 自行收尾 */
+            next_tok(cs);
+            ir_stmt(cs);
         } else {
-            nihao_error(cs, "ir: 'is' pattern must be followed by a block");
+            nihao_error(cs, "ir: 'is' pattern must be followed by a block or '=>' statement");
         }
         ir_emit(F, IR_LABEL, -1, -1, -1, 0);
         F->ins[F->ins_count - 1].label = l_done;

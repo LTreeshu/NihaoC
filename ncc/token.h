@@ -108,6 +108,7 @@
     KeywordDef(".",        1, TOK_DOT)                /**< `.` structure/union member access operator  */   \
     KeywordDef(".(",       2, TOK_DOT_PAREN)          /**< `.(` NihaoC pointer dereference operator `.()`  */   \
     /* Other operators */ \
+    KeywordDef("=>",       2, TOK_FAT_ARROW)          /**< `=>` fat arrow: `is <pattern> => <statement>` single-statement form  */   \
     KeywordDef("?=",       2, TOK_SAFE_ASSIGN)        /**< `?=` NihaoC safe assignment operator (with pointer checking)  */   \
     KeywordDef("?",        1, TOK_QUESTION)           /**< `?` question mark part of conditional (ternary) operator  */   \
     KeywordDef(":",        1, TOK_COLON)              /**< `:` colon part of conditional (ternary) operator or label suffix  */   \

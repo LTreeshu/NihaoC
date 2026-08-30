@@ -1126,11 +1126,10 @@ static void parse_is_stmt(CompilerState *cs)
 
     if (cur_tok(cs) == TOK_LBRACE) {
         parse_statement(cs);
-    } else if (cur_tok(cs) == TOK_ARROW) {
+    } else if (cur_tok(cs) == TOK_FAT_ARROW) {
+        /* 单语句形式：is pat => stmt（BNF <is-stmt>）——生成 C 无花括号单语句 */
         next_tok(cs);
-        cgen_raw(" { ");
-        parse_expression(cs);
-        cgen_line("; }");
+        parse_statement(cs);
     } else {
         nihao_error(cs, "expected block or '=>' after 'is' pattern");
     }

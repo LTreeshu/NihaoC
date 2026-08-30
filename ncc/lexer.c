@@ -561,7 +561,10 @@ void lexer_next(LexerState *lex)
             break;
             
         case '=':
-            if (lex_peek_char(lex) == '=') {
+            if (lex_peek_char(lex) == '>') {
+                lex_char(lex);
+                lex->tok = TOK_FAT_ARROW;
+            } else if (lex_peek_char(lex) == '=') {
                 lex_char(lex);
                 lex->tok = TOK_EQ;
             } else {

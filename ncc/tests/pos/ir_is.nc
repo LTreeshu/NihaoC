@@ -24,5 +24,17 @@ func main() {
             break
         }
     }
+    /* 单语句形式：is pat => stmt（BNF <is-stmt>）——负数模式 */
+    c i32 = 0
+    while c -= 1 {
+        is -1 => puts("is arrow ok")
+        break
+    }
+    /* 单语句形式：区间模式 */
+    d i32 = 2
+    while d -= 1 {
+        is 0..2 => puts("is arrow range ok")
+        break
+    }
     return
 }
