@@ -7,19 +7,25 @@
 
 ## 一、分支策略 | Branch Strategy
 
-仓库维护三条长期分支，各司其职：
+仓库维护三条长期分支，各司其职（版本语义见 `docs/VERSIONING_ROADMAP.md`）：
 
 | 分支 | 职责 |
 | ---- | ---- |
-| `main` | 主分支 / 产品化主干。稳定可用的累积成果，始终可构建、可测试、可发布 |
-| `PA`  | 方案 A：`parser → C 文本` → 外部 tcc / libtcc（native）后端的产品化路径 |
-| `PB`  | 方案 B：`irparse → IR（三地址码）` → C / 多架构汇编（x86-64、riscv64、arm64、loongarch64）的语义验证与后端路径 |
+| `main` | 主分支 / **稳定发布线**。1.x 累积成果，始终可构建、可测试、可发布；仅接受 `PA` 合入（2.0 就绪前 `PB` 不合入） |
+| `PA`  | 方案 A：`parser → C 文本` → 外部 tcc / libtcc（native）后端的**产品化路径（1.0）**。特性冻结，只修 bug / 文档 / 发布准备 |
+| `PB`  | 方案 B：`irparse → IR（三地址码）` → C / 多架构汇编（x86-64、riscv64、arm64、loongarch64）的**下一代演进线（2.0）**，持续开发 |
 
 ### 分支规则
 - 三条分支均从同一稳定点分出（当前基于 `main` 的 `04f1435`）。
 - 功能/修复先落在对应的 `PA` 或 `PB` 分支，验证通过后再视需要合回 `main`。
 - 新增命名分支时遵循 `feature/<name>`、`fix/<name>`、`docs/<name>` 命名；以 `PA`/`PB` 为主分支的工作，直接提交到对应分支即可。
 - 分支与 `origin` 保持一致：新建分支后执行 `git push -u origin <branch>` 建立上游跟踪（`--set-upstream-to`）。
+
+### 版本化与发布
+- `v1.0.0`：`PA` 通过发布门禁（c/native 全量 0 FAIL + examples 全跑通）→ 合入 `main` → tag `v<major>.<minor>.<patch>`（`release:` 前缀）。
+- `v1.0.x`：hotfix 走 `PA` 分支修复 → 合 `main` → tag。
+- `v2.0.0`：`PB` 阶段 2（能力平移）达标、全矩阵 0 FAIL → 合入 `main` → tag。
+- 共享文件（lexer/token/sym/type/vis/stdlib/module/linker 等）改动：语法演进**先 `PB` 验证 → 再 `PA` 移植**；bug 修复**先 `PA` → 再同步 `PB`**；双仓库（NihaoC ↔ ncc 活跃）必须成对提交防基线漂移。
 
 ---
 
