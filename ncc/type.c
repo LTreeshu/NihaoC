@@ -86,7 +86,6 @@ CType *type_new(CompilerState *cs, TypeKind kind)
     type->next = NULL;
     type->params = NULL;
     type->param_count = 0;
-    type->is_multireturn = 0;
     type->return_count = 0;
 
     return type;

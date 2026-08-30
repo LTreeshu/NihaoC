@@ -81,7 +81,6 @@ struct CType {
     CType *next;                /* for function: return type */
     CType *params;              /* for function: parameter types */
     int param_count;
-    int is_multireturn;         /* multiple return values flag */
     CType *return_types[MAX_MULTIRETURN];
     int return_count;
 };

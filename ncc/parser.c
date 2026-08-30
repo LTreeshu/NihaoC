@@ -2442,9 +2442,6 @@ void parse_function_full(CompilerState *cs, Symbol *func_sym) {
     Symbol *prev_func = cs->parser.cur_func;
     cs->parser.cur_func = func_sym;
 
-    // /* Check for multireturn type */
-    // infer_multireturn_type(cs, func_sym);
-
     expect(cs, TOK_LBRACE);
     skip_newlines(cs);
 
