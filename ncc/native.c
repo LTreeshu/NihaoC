@@ -92,11 +92,40 @@ static TCCState *native_state(const char *csrc, int output_type, int verbose, in
 
     tcc_set_error_func(s, NULL, nihao_tcc_error);
 
-    const char *dir = tcc_install_dir();
     char libpath[1024];
     char incpath[1024];
+#ifdef _WIN32
+    const char *dir = tcc_install_dir();
     snprintf(libpath, sizeof(libpath), "%s/lib", dir);
     snprintf(incpath, sizeof(incpath), "%s/include", dir);
+#else
+    /* Linux 源码构建的 libtcc.so 未导出 tcc_install_dir
+     * （2026-08-31 实测：隐式声明→ int 截断指针→ segfault）。
+     * CONFIG_TCCDIR 由 install: /usr/local/lib/tcc
+include:
+  /usr/local/lib/tcc/include
+  /usr/local/include/x86_64-linux-gnu
+  /usr/local/include
+  /usr/include/x86_64-linux-gnu
+  /usr/include
+libraries:
+  /usr/lib/x86_64-linux-gnu
+  /usr/lib
+  /lib/x86_64-linux-gnu
+  /lib
+  /usr/local/lib/x86_64-linux-gnu
+  /usr/local/lib
+libtcc1:
+  /usr/local/lib/tcc/libtcc1.a
+crt:
+  /usr/lib/x86_64-linux-gnu
+elfinterp:
+  /lib64/ld-linux-x86-64.so.2 确认 = /usr/local/lib/tcc：
+     * libtcc1.a 在其根目录，自带头在 include/ 子目录。 */
+    const char *dir = "/usr/local/lib/tcc";
+    snprintf(libpath, sizeof(libpath), "%s", dir);
+    snprintf(incpath, sizeof(incpath), "%s/include", dir);
+#endif
 
     tcc_set_lib_path(s, libpath);
     tcc_add_include_path(s, incpath);
@@ -154,11 +183,12 @@ int native_run_string(const char *csrc, int argc, char **argv, int verbose, int 
 {
     TCCState *s = native_state(csrc, TCC_OUTPUT_MEMORY, verbose, debug);
     if (!s) return -1;
-    if (tcc_relocate(s, NULL) != 0) {
-        fprintf(stderr, "native: relocation failed\n");
-        tcc_delete(s);
-        return -1;
-    }
+    /* ⚠️ 不要先调用 tcc_relocate(s, NULL)：
+     * NULL 语义是"返回所需内存大小"（>0 为成功，仅 -1 为错误），
+     * 且 libtcc.h 明确 tcc_run 之前 DO NOT call tcc_relocate。
+     * 直接 tcc_run——其内部自行 relocate（TCC_RELOCATE_AUTO）后进入 main。
+     * （2026-08-31 WSL 实测：tcc_relocate(NULL) 返回 223 被误判失败，
+     *   Linux 上 -run 全部报 relocation failed） */
     int rc = tcc_run(s, argc, argv);
     tcc_delete(s);
     return rc;

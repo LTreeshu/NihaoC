@@ -83,12 +83,9 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             /* double → int64 截断（D 扩展 fcvt.l.d，向零舍入） */
             nb_put(b, "  fld fa0, ");
             rv_slot(b, in->a, tb);
-            nb_put(b, "
-  fcvt.l.d a0, fa0
-  sd a0, ");
+            nb_put(b, "\n  fcvt.l.d a0, fa0\n  sd a0, ");
             rv_slot(b, in->dst, tb);
-            nb_put(b, "
-");
+            nb_put(b, "\n");
             break;
         case IR_TRUNC:
             /* 窄整数截断 + 符号/零扩展：slli 对齐高位 + srai/srli（imm 编码） */

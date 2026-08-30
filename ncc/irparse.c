@@ -3101,8 +3101,7 @@ int ir_compile(CompilerState *cs, const char *filename, int backend, int verbose
         /* riscv64/arm64/loongarch64：只生成汇编（本机 tcc 是 x86-64，交叉汇编留外部工具） */
         const char *bn = (backend == 4) ? "riscv64" : (backend == 5) ? "arm64" : "loongarch64";
         if (irgen_backend_emit(P, out, bn) != 0) return -1;
-        if (cs->verbose) printf("%s asm written to %s (cross, not assembled)
-", bn, out);
+        if (cs->verbose) printf("%s asm written to %s (cross, not assembled)\n", bn, out);
         return 0;
     } else {
         if (irgen_native_emit(P, out) != 0) return -1;

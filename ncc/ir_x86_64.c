@@ -91,26 +91,14 @@ static void x64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             /* double → int64 截断（向零，与 C (int64_t) 一致）。
              * x87 fistpq 用 FPU 舍入模式（默认最近：3.7→4），需临时切 RC=向零（0x0C00）；
              * 用 rsp 动态让出 16 字节临时区（slot 是 rbp 相对，不受影响） */
-            nb_put(b, "  subq $16, %%rsp
-");
-            nb_put(b, "  fstcw 8(%%rsp)
-  movw 8(%%rsp), %%ax
-  orw $0x0C00, %%ax
-");
-            nb_put(b, "  movw %%ax, 0(%%rsp)
-  fldcw 0(%%rsp)
-  fldl ");
+            nb_put(b, "  subq $16, %%rsp\n");
+            nb_put(b, "  fstcw 8(%%rsp)\n  movw 8(%%rsp), %%ax\n  orw $0x0C00, %%ax\n");
+            nb_put(b, "  movw %%ax, 0(%%rsp)\n  fldcw 0(%%rsp)\n  fldl ");
             x64_slot(b, in->a, tb);
-            nb_put(b, "
-  fistpq 0(%%rsp)
-  fldcw 8(%%rsp)
-");
-            nb_put(b, "  movq 0(%%rsp), %%rax
-  movq %%rax, ");
+            nb_put(b, "\n  fistpq 0(%%rsp)\n  fldcw 8(%%rsp)\n");
+            nb_put(b, "  movq 0(%%rsp), %%rax\n  movq %%rax, ");
             x64_slot(b, in->dst, tb);
-            nb_put(b, "
-  addq $16, %%rsp
-");
+            nb_put(b, "\n  addq $16, %%rsp\n");
             break;
         case IR_FTRUNC:
             /* f32 严格宽度：double → float 截断再回 double（x87 fstps/flds） */

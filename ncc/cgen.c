@@ -191,15 +191,23 @@ const char *c_type_name(CType *t)
             return "void";
         case TYPE_POINTER:
             /* 具名指针：Point* -> "Point*"；通用 void* -> "void*"；
-             * 多层：Point** -> "Point**"（递归 ref 名 + 星号） */
+             * 多层：Point** -> "Point**"（递归 ref 名 + 星号）
+             * ⚠️ 递归 c_type_name 返回同一 static buf，直接作 snprintf 源会 src==dst
+             * 重叠写（UB）：Windows CRT 恰好容忍，Linux glibc 实测损坏（ir_arrow
+             * 生成 "* p = &pt" 而非 "Point* p = &pt"，2026-08-31 WSL 复现）。
+             * 先拷贝到本地数组再格式化。 */
             if (t->ref && t->ref->kind != TYPE_VOID) {
-                snprintf(buf, sizeof(buf), "%s*", c_type_name(t->ref));
+                char tmp[256];
+                snprintf(tmp, sizeof(tmp), "%s", c_type_name(t->ref));
+                snprintf(buf, sizeof(buf), "%s*", tmp);
                 return buf;
             }
             return "void*";
         case TYPE_ARRAY:
             if (t->ref) {
-                const char *et = c_type_name(t->ref);
+                char tmp[256];
+                snprintf(tmp, sizeof(tmp), "%s", c_type_name(t->ref));
+                const char *et = tmp;
                 if (t->param_count > 0) {
                     /* Fixed-size array: name goes AFTER the array suffix in C,
                      * so return the element type here; use c_type_suffix() for
@@ -218,10 +226,12 @@ const char *c_type_name(CType *t)
              * 参数类型存在 params 链表（头插存储 → 先收集到本地数组再反转输出；
              * ⚠️ c_type_name 返回 static buf，须立即拷贝到本地槽） */
             {
+                char tmp[256];
                 const char *rt = t->next ? c_type_name(t->next) : "void";
+                snprintf(tmp, sizeof(tmp), "%s", rt);   /* 独立拷贝，防 static buf 重叠 */
                 char pstr[512];
                 c_type_params(t, pstr, sizeof(pstr));
-                snprintf(buf, sizeof(buf), "%s(*)(%s)", rt,
+                snprintf(buf, sizeof(buf), "%s(*)(%s)", tmp,
                          pstr[0] ? pstr : "void");
                 (void)elem;
                 return buf;

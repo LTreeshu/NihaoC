@@ -2,7 +2,12 @@
 #define NCC_H 
 
 #ifdef __TINYC__
+/* Windows tcc 的 libc 提供 _strtoi64 而非 strtoll；
+ * Linux/macOS tcc 同样定义 __TINYC__ 但标准库有 strtoll，
+ * 必须限定 _WIN32 否则 Linux tcc 会错误映射（undefined _strtoi64，2026-08-31 实测） */
+#if defined(_WIN32)
 #define strtoll _strtoi64
+#endif
 #endif
 #include <stdlib.h>
 #include <stdio.h>

@@ -106,10 +106,10 @@ ncc/
 - [x] **PA-6 `-run` argv 透传（已于 2026-08-06 完成）**：CompilerState 加 run_argc/run_argv，`-run` 之后参数透传 main；Windows 不可用（PA-1）
 - [x] **PA-7 link 库声明（已于 2026-08-06 完成）**：native_state 遍历 cs->link_libs 调 tcc_add_library
 - [x] **PA-8 错误信息包装（已于 2026-08-06 完成）**：tcc_set_error_func 回调统一输出 `native: <msg>`
-- [ ] **PA-9 Linux 路径未实测**：-run、libtcc.so、SysV 调用约定无验证环境
+- [x] **PA-9 Linux 路径实测（2026-08-31 WSL Ubuntu-24.04 完成）**：c/native 各 12P/0F/6S（0 FAIL）；examples 6/6 双后端；`-run` 内存执行修复（tcc_relocate(NULL) 语义误判 → 直接 tcc_run）；实测修复 4 个平台 bug：① xmake os.exec Linux 不走 shell（`|| true` 被当参数）→ `/bin/sh -c` 包装；② c_type_name static buf 重叠写（递归调用 src==dst，Linux glibc 损坏）→ 独立 tmp 拷贝；③ 源码构建 libtcc.so 未导出 tcc_install_dir → 非 Windows 硬编码 /usr/local/lib/tcc；④ libtcc.so 内部符号（sym_push 等）与 ncc 重名被 ELF 符号插值劫持 → `make libtcc.so LDFLAGS="-fPIC -Wl,-Bsymbolic"` 重建。ir-native 在 Linux ELF 运行时崩溃（2.0 预览），测试框架非 Windows 跳过（类比 p0_link）
 - [x] **PA-10 可用性语义（已于 2026-08-06 完成）**：新增 native_memory_available()（Windows 0 / 其他 1），run_mode 分支改用它替代 #ifdef
 - [x] **PA-11 tcc 目录探测重复**：native.c 与 xmake.lua 各一套，易漂移（已记录；建议后续以 NIHAO_TCC_DIR 为唯一来源）
-- [x] **PA-12 A 方案 1.0 发布（2026-08-31 完成主体）**：门禁验证 ✅（c/native 各 12P/0F/5S + examples 6/6）；README 更新 ✅（安装/CLI/后端表 1.0/2.0 范围）；BNF v2.0 终校 ✅（`=>`/`->`/`T*` 补全，中英文档同步）；CHANGELOG.md 建立 ✅；本地 `v1.0.0` tag ✅（commit 0aebcb7，push/合 main 由 ltree 决定）。剩余：Linux 实测（PA-9，环境就绪时）；发布后 PA 分支进入冻结维护态
+- [x] **PA-12 A 方案 1.0 发布（2026-08-31 完成）**：门禁验证 ✅（c/native 各 12P/0F/5S + examples 6/6，Windows）；Linux 实测 ✅（PA-9，c/native 各 12P/0F/6S + examples 6/6 + `-run` 修复）；README 更新 ✅（安装/CLI/后端表 1.0/2.0 范围）；BNF v2.0 终校 ✅（`=>`/`->`/`T*` 补全，中英文档同步）；CHANGELOG.md 建立 ✅；本地 `v1.0.0` tag ✅（commit 0aebcb7，合 main + push 由 ltree 决定，2026-08-31 已授权执行）。发布后 PA 分支进入冻结维护态
 
 ---
 

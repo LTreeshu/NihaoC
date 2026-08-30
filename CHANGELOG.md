@@ -21,12 +21,21 @@
 - 构建统一 xmake（Makefile 标 legacy）；错误信息"外壳中文 + 正文英文"
 - examples/ 示例集 7 例（6 例 1.0 可编译运行，06_cooking 为 2.0 预览）
 - 语言规格冻结：BNF v2.0 终校（`=>`/`->`/`T*` 补全）+ 中英语法元素表核对
+- **双平台验证（Windows + Linux/WSL Ubuntu-24.04）**：c/native 全量回归 0 FAIL（12P/0F）+ examples 6/6 双后端一致；`-run` 内存执行 Linux 实测通过
+
+### Linux 平台修复（2026-08-31 WSL 实测）
+
+- `xmake.lua`：os.exec 在 Linux 不走 shell（`|| true` 被当作程序参数）→ Linux 分支显式 `/bin/sh -c` 包装；非 Windows 跳过 p0_link target 与 ir-native 测试
+- `cgen.c`：c_type_name 三处 static buf 重叠写（递归调用 src==dst，Linux glibc 损坏输出）→ 独立 `char tmp[256]` 拷贝
+- `native.c`：源码构建 libtcc.so 未导出 `tcc_install_dir`（隐式声明 int 截断指针）→ 非 Windows 硬编码 `/usr/local/lib/tcc`
+- `native.c`：`-run` 内存执行误判 `tcc_relocate(s, NULL)` 返回值（NULL 语义为"返回所需内存大小"，>0 即成功）→ 改为直接 `tcc_run`（内部自动 relocate）
+- 构建依赖：libtcc.so 内部符号（sym_push 等）与 ncc 重名被 ELF 符号插值劫持 → 以 `make libtcc.so LDFLAGS="-fPIC -Wl,-Bsymbolic"` 重新构建安装
 
 ### 明确留给 2.0
 
 - 动态数组增长、切片运行时边界、命名空间
 - IR 一切（ir-c/ir-native/ir-riscv64/ir-arm64/ir-loongarch64，当前为 2.0 预览）
-- native 寄存器分配（性能项）、Linux 实测补充（-run/libc.so/SysV）
+- native 寄存器分配（性能项）；ir-native 在 Linux ELF 运行时崩溃（2.0 预览，Windows PE 正常）
 
 ## [M4] — CLI 工具链
 

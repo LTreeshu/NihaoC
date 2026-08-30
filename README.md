@@ -137,7 +137,10 @@ nihao <command> [options]
 | `ir-arm64` | 2.0 预览 | IR → AArch64 汇编（AAPCS64，验汇编生成） |
 | `ir-loongarch64` | 2.0 预览 | IR → LoongArch64 汇编（LA64 基础指令集，验汇编生成） |
 
-> **1.0 范围**：`c` / `native` 两后端为对外可用产品线（路线图 A 方案），全量语法回归 12P/0F。
+> **1.0 范围**：`c` / `native` 两后端为对外可用产品线（路线图 A 方案），全量语法回归 12P/0F，examples 6/6 通过。
+> **双平台验证（2026-08-31）**：Windows 与 Linux（WSL Ubuntu-24.04）均通过 c/native 全量回归 0 FAIL +
+> examples 6/6（c/native 双后端）；`-run` 内存执行在 Linux 实测通过（WSL 期间修复 4 个平台 bug，
+> 详见 CHANGELOG v1.0.0 记录）。
 > **2.0 预览**：`ir-*` 四架构后端（x86-64/riscv64/arm64/loongarch64）为下一代演进线（路线图 B 方案），
 > 其中 riscv64/arm64/loongarch64 生成标准 GAS 汇编（`-backend=ir-riscv64 -o out.s`），本机无交叉
 > 汇编器，仅验证汇编生成正确性。版本规划详见 [`docs/VERSIONING_ROADMAP.md`](./docs/VERSIONING_ROADMAP.md)。

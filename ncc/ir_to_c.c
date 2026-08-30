@@ -172,8 +172,7 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                     cb_put(&b, "    t%d = (double)t%d;\n", in->dst, in->a);
                     break;
                 case IR_DTOI:
-                    cb_put(&b, "    t%d = (int64_t)t%d;
-", in->dst, in->a);
+                    cb_put(&b, "    t%d = (int64_t)t%d;\n", in->dst, in->a);
                     break;
                 case IR_FTRUNC:
                     cb_put(&b, "    t%d = (float)t%d;\n", in->dst, in->a);
