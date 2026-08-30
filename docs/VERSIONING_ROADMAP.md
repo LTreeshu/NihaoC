@@ -37,10 +37,10 @@
 ### 1.3 发布准备
 
 - [x] **examples/ 示例集**（8/30）：7 例已建（hello/fib/struct/pointer/string/cooking/multiret）+ README 对照表；**6 例 1.0 可编译验证通过**（c/native 编译+运行）；期间暴露并修复 A 方案 `p.()` 解引用类型 bug（此前硬编码 `(*(void**)p)` → 现按符号指针 ref 输出 `(*(int32_t*)p)`）；06_cooking 标注 2.0 预览（IR_ONLY 子集语法）
-- [ ] **README 更新**：安装/构建（xmake + tcc 依赖探测）、CLI 用法、后端表（c/native 为 1.0 范围；ir-* 标注"2.0 预览"）、-run Linux only 说明
-- [ ] **语言规格冻结**：BNF v2.0 终校（含 8/19-8/30 新语法：goto label/len/cooking 函数/嵌套/f32/`=>`/`->`/三元）+ 中英语法元素表核对
-- [ ] **版本与发布**：CHANGELOG.md 建立（M0→M4→1.0 里程碑条目）；`v1.0.0` tag 流程（见 §3）
-- [ ] **Linux 实测（PA-9，环境就绪时）**：-run、libtcc.so、SysV——无环境则文档标注"Windows 已验证"
+- [x] **README 更新**（8/31）：安装小节（xmake + tcc 依赖探测与获取）、CLI 命令一览表、后端表标注 1.0/2.0 范围（c/native = 1.0 正式支持；ir-* = 2.0 预览）、-run Linux only 说明
+- [x] **语言规格冻结**（8/31）：BNF v2.0 终校完成——补 `=>`（TOK_FAT_ARROW）词法、`->` 指针成员访问 postfix 规则、`T*` 具名指针 pointer-type 规则；Chinese/English 补指针声明双支持（隐式推断 + 显式声明）；语法元素表核对通过（`=>`/`->` 已含）；multireturn 无残留
+- [x] **版本与发布**（8/31）：CHANGELOG.md 建立（M0→M4→1.0 里程碑条目）；`v1.0.0` tag 已本地创建（未推送，见 §3.2）
+- [ ] **Linux 实测（PA-9，环境就绪时）**：-run、libtcc.so、SysV——无环境则文档标注"Windows 已验证"（1.0 范围默认 Windows 已验证）
 
 ### 1.4 明确留给 2.0（1.0 不做）
 

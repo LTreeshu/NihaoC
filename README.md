@@ -23,7 +23,7 @@ A new better C language for my fantasy， a better programing world for void !
 
 开发约定|Development Conventions
 
-[Git 提交与推送约定](./docs/GIT_CONVENTIONS.md) · [版本路线图（1.0/2.0）](./docs/VERSIONING_ROADMAP.md) · [进度总结](./docs/STAGE_SUMMARY.md) · [TODO](./TODO.md)
+[Git 提交与推送约定](./docs/GIT_CONVENTIONS.md) · [版本路线图（1.0/2.0）](./docs/VERSIONING_ROADMAP.md) · [进度总结](./docs/STAGE_SUMMARY.md) · [TODO](./TODO.md) · [变更日志](./CHANGELOG.md)
 
 Source code example demonstration:
 
@@ -75,32 +75,72 @@ func main()
 >
 > 语言设计规范（完整 BNF）：[`docs/BNF.md`](./docs/BNF.md)。
 
+## 安装 | Installation
+
+### 1. 安装 xmake
+
+构建依赖 [xmake](https://xmake.io)（唯一构建入口，Makefile 已标为 legacy）：
+
+```bash
+# Windows（powershell）
+winget install xmake
+
+# Linux / macOS
+curl -fsSL https://xmake.io/shget.text | bash
+```
+
+### 2. 安装 tcc（编译器后端依赖）
+
+NihaoC 1.0 的 `c` / `native` 后端依赖 [TinyCC](https://bellard.org/tcc/)（tcc 负责把生成的 C 编译为机器码）：
+
+- **Windows**：将 tcc 解压到任意目录（如 `C:\dev\tcc`），设置环境变量 `NIHAO_TCC_DIR=C:\dev\tcc`；未设置时从 `PATH` 探测。MSYS 路径（`/d/devtools/tcc`）会自动归一化
+- **Linux**：`sudo apt install tcc`（或 `pacman -S tcc`），`-run` 内存执行与 `libtcc.so` 均可用
+- 验证：`tcc -v` 能看到版本号即可
+
 ## 构建与运行 | Build & Run
 
-编译器源码位于 `ncc/`，构建统一使用 [xmake](https://xmake.io)（Makefile 已标为 legacy）：
+编译器源码位于 `ncc/`，构建统一使用 [xmake](https://xmake.io)：
 
 ```bash
 cd ncc
-xmake                          # 构建 ncc.exe（需预先安装 tcc，见下方 TCC 说明）
+xmake                          # 构建 nihao 可执行文件
 xmake test                     # 默认 c 后端回归测试
+xmake test -b native           # native 后端回归测试
 xmake test --all               # 四后端全矩阵（c / native / ir-c / ir-native）
-xmake test -b ir-c             # 指定后端
 ```
+
+### CLI 命令 | Commands
+
+```bash
+nihao <command> [options]
+```
+
+| 命令 | 作用 |
+| ---- | ---- |
+| `init [name]` | 创建新项目（`nihao.toml` + `src/main.nc`） |
+| `build <file>` | 编译为可执行文件（保留 `<out>.c` 中间产物） |
+| `run <file>` | 编译并运行；`--` 之后的参数透传给 `main(argc, argv)` |
+| `debug <file>` | 编译并输出详细信息后运行；`--ir` 打印 IR 三地址码（2.0 预览） |
+| `test` | 运行回归测试套件（`tests/`） |
+| `lex <file>` | 打印源文件的 token 流 |
+
+常用选项：`-o <file>` 输出名 · `-backend c|native` 选择后端 · `-run`（Linux only）内存执行 · `-g` 调试信息 · `-I/-L/-l` 头文件/库路径与链接 · `--link <lib> as <alias>` 链接别名。
 
 ### 后端 | Backends
 
-| 后端 | 说明 |
-| ---- | ---- |
-| `c`（默认） | 生成 C 文本，调用外部 tcc 编译为可执行文件 |
-| `native`（方案 A） | libtcc 进程内编译生成的 C 为机器码（无需外部 tcc） |
-| `ir-c` / `ir-native`（方案 B） | IR 中间层：→C 文本 / →x86-64 汇编（Windows x64 ABI） |
-| `ir-riscv64`（方案 B） | IR → RISC-V 64 汇编（RV64I + D 浮点扩展，AAPCS 类约定，验汇编生成） |
-| `ir-arm64`（方案 B） | IR → AArch64 汇编（AAPCS64，验汇编生成） |
-| `ir-loongarch64`（方案 B） | IR → LoongArch64 汇编（LA64 基础指令集，验汇编生成，2026-08-15） |
+| 后端 | 范围 | 说明 |
+| ---- | ---- | ---- |
+| `c`（默认） | **1.0 正式支持** | 生成 C 文本，调用外部 tcc 编译为可执行文件 |
+| `native` | **1.0 正式支持** | libtcc 进程内编译生成的 C 为机器码（无需外部 tcc） |
+| `ir-c` / `ir-native` | 2.0 预览 | IR 中间层：→C 文本 / →x86-64 汇编（Windows x64 ABI） |
+| `ir-riscv64` | 2.0 预览 | IR → RISC-V 64 汇编（RV64I + D 浮点扩展，验汇编生成） |
+| `ir-arm64` | 2.0 预览 | IR → AArch64 汇编（AAPCS64，验汇编生成） |
+| `ir-loongarch64` | 2.0 预览 | IR → LoongArch64 汇编（LA64 基础指令集，验汇编生成） |
 
-> **四架构后端全齐**：x86-64（Win64）、riscv64（RV64）、arm64（AAPCS64）、loongarch64（LA64）；
-> 后三者生成标准 GAS 汇编（`-backend=ir-riscv64 -o out.s`），本机无交叉汇编器，
-> 仅验证汇编生成正确性（`ncc build xx.nc -backend=ir-riscv64 -o rv.s`）。
+> **1.0 范围**：`c` / `native` 两后端为对外可用产品线（路线图 A 方案），全量语法回归 12P/0F。
+> **2.0 预览**：`ir-*` 四架构后端（x86-64/riscv64/arm64/loongarch64）为下一代演进线（路线图 B 方案），
+> 其中 riscv64/arm64/loongarch64 生成标准 GAS 汇编（`-backend=ir-riscv64 -o out.s`），本机无交叉
+> 汇编器，仅验证汇编生成正确性。版本规划详见 [`docs/VERSIONING_ROADMAP.md`](./docs/VERSIONING_ROADMAP.md)。
 
 TCC 安装目录通过 `NIHAO_TCC_DIR` 环境变量指定（如 `/d/devtools/tcc`，MSYS 路径自动归一化），否则从 PATH 探测。
 

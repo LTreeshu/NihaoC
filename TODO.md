@@ -109,6 +109,7 @@ ncc/
 - [ ] **PA-9 Linux 路径未实测**：-run、libtcc.so、SysV 调用约定无验证环境
 - [x] **PA-10 可用性语义（已于 2026-08-06 完成）**：新增 native_memory_available()（Windows 0 / 其他 1），run_mode 分支改用它替代 #ifdef
 - [x] **PA-11 tcc 目录探测重复**：native.c 与 xmake.lua 各一套，易漂移（已记录；建议后续以 NIHAO_TCC_DIR 为唯一来源）
+- [~] **PA-12 A 方案 1.0 发布（2026-08-31 启动）**：按 `docs/VERSIONING_ROADMAP.md` §1.3 发布清单推进——门禁验证（c/native 0 FAIL + examples 跑通）→ README 更新 → BNF v2.0 终校 + 语法元素表核对 → CHANGELOG.md 建立 → 本地 v1.0.0 tag（push 由 ltree 决定）。发布后 PA 分支进入冻结维护态
 
 ---
 
