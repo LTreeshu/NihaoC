@@ -23,15 +23,15 @@
 ### 1.1 功能闭环（编译正确性）
 
 - [x] **指针声明语法决策 + 实现**（8/19 PA 分支定案并落地）：**隐式推断 + 显式声明双支持**——`p = &x` 自动推断为指向 x 的指针类型；`p T* = &x` 显式声明亦合法（parse_type 原有 `*` 支持 + cgen TYPE_POINTER 输出具名指针 `T*`）。同时修复 infer_init_type 契约（`Name = expr` 推断此前被 `=` 卡住恒落 int32，`s = "hello"` 曾误推 int）与 IR 层 `->` 成员偏移缺 ×8 的隐藏 bug。A 方案 `->` 链式/复合赋值全部可用
-- [ ] **全量语法回归盘点**：38 个 pos 用例中 A 方案可编译数核对（当前 c/native 12P，其余为 IR 白名单用例——确认 A 方案对 IR_SUBSET 24 例全部可编译，仅 IR_ONLY 6 例因子集语法不可编译）
-- [ ] **A 方案已知 bug 清零**：跑 `xmake test -b c` / `-b native` 全量，修复任何 FAIL
-- [ ] **动态数组暂缓确认**：`[2...]` 固定容量语义文档化（增长留 2.0）
+- [x] **全量语法回归盘点**（8/30）：38 个 pos 用例 A 方案可编译 **32/38**——IR_SUBSET 24 例全部可编译，不可编译 6 例均为因子集语法（切片/多返回/编译期等 IR-only 特性）
+- [x] **A 方案已知 bug 清零**（8/30）：c/native 全量回归 **12P / 0F / 5S**（ir_arrow 转正后 6S→5S）；交叉验证期间暴露并修复 IR 层 `->` 成员偏移缺 ×8 的隐藏 bug（四后端输出 md5 一致）
+- [x] **动态数组暂缓确认**（8/30）：`[N...]` 固定容量不自动增长、`[...]` 仅声明/索引语义已写入 BNF.md/Chinese.md/English.md；增长留 2.0
 
 ### 1.2 工程质量
 
-- [ ] **CLI 完善收尾**：`debug` 子命令 A 方案视角核查（PB-23 已对齐 init 模板 + 错误中文化）；`-run` Windows 报错文案确认
-- [ ] **构建单一入口确认**：xmake 唯一（Makefile 已标 LEGACY）；`make test` 旧语法用例清理或删除
-- [ ] **P3 卫生**：test/ 生成二进制清理；codegen.c（旧）与 cgen.c 重复度评估（1.0 不重构，只记录）
+- [x] **CLI 完善收尾**（8/30）：`debug` 子命令 A 方案视角核查通过（`--ir` 正常输出 IR 视图）；`-run` Windows 报错文案明确；错误消息"外壳中文 + 正文英文"符合 1.0 定位
+- [x] **构建单一入口确认**（8/30）：xmake 唯一构建入口；Makefile 标 LEGACY 且 test 目标已删除，21 个旧语法用例（`const main()` 等）随 test/ 目录清理（git rm）
+- [x] **P3 卫生**（8/30）：test/ 生成二进制（a.out / a.out.c）清理；codegen.c（507 行）死代码面评估——`parse_function_full`/`parse_statement_full`/`gen_function_prologue_full`/`gen_if_statement`/`gen_while_loop` 无外部调用，`type_check_statement` 仅被 `parse_function_full` 引用，全文件无对外入口（现役路径为 main → cgen.c/native.c）；与 cgen.c 职责边界：codegen=遗留全量生成器、cgen=现役生成器，**1.0 不重构，仅记录**
 - [ ] **linker.c 职责注释**（当前仅 default 后端使用，1.0 文档化即可）
 
 ### 1.3 发布准备

@@ -45,11 +45,7 @@ $(BUILD_DIR):
 # 包含自动生成的依赖文件
 -include $(DEPS)
 
-test: $(BUILD_DIR)/$(TARGET)
-	@echo "Running tests..."
-	@echo 'module main use stdio const main() { puts("Hello, NihaoC!") }' > test.nh
-	./$(BUILD_DIR)/$(TARGET) test.nh -o test
-	@echo "Test complete."
+# 注：test 目标已删除（旧语法用例已清理，测试统一走 `xmake test`）
 
 # Development targets
 debug: CFLAGS += -DDEBUG -O0

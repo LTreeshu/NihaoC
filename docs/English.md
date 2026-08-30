@@ -100,8 +100,8 @@ General declaration form: `[attribute] [name] [type]`
 
 ```nihao
 static fixedArray char[3]       // fixed-size array; char[3] is the type
-flow dynamicArray i8[...]   // dynamic array without initial size
-var initArray u16[6...]   // dynamic array with an initial size
+flow dynamicArray i8[...]   // dynamic array (1.0 semantics: declare/index only, no auto-grow; growth deferred to 2.0)
+var initArray u16[6...]   // array with initial capacity (1.0 semantics: fixed capacity 6, no auto-grow)
 
 // indexed access & assignment
 fixedArry[0] = 0

@@ -89,8 +89,8 @@ NiHao 是一种新型静态编译语言，专为系统级编程和高性能应�
 
 ```nihao
 static fixedArray char[3]       // 固定大小数组 char[3] 为类型
-flow dynamicArray i8[...]   // 无初始值动态数组
-var initArray u16[6...]   // 有初始大小的动态数组
+flow dynamicArray i8[...]   // 动态数组（1.0 语义：仅声明/索引，不自动增长；扩容留 2.0）
+var initArray u16[6...]   // 有初始容量的数组（1.0 语义：固定容量 6，不自动增长）
 
 // 数组索引访问赋值
 fixedArry[0] = 0
