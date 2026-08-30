@@ -36,7 +36,7 @@
 
 ### 1.3 发布准备
 
-- [ ] **examples/ 示例集**（当前为空）：hello、fib、struct 嵌套、指针/解引用、字符串/char[]、编译期（cooking/static_assert）、多返回值——每例标注 1.0 可编译验证
+- [x] **examples/ 示例集**（8/30）：7 例已建（hello/fib/struct/pointer/string/cooking/multiret）+ README 对照表；**6 例 1.0 可编译验证通过**（c/native 编译+运行）；期间暴露并修复 A 方案 `p.()` 解引用类型 bug（此前硬编码 `(*(void**)p)` → 现按符号指针 ref 输出 `(*(int32_t*)p)`）；06_cooking 标注 2.0 预览（IR_ONLY 子集语法）
 - [ ] **README 更新**：安装/构建（xmake + tcc 依赖探测）、CLI 用法、后端表（c/native 为 1.0 范围；ir-* 标注"2.0 预览"）、-run Linux only 说明
 - [ ] **语言规格冻结**：BNF v2.0 终校（含 8/19-8/30 新语法：goto label/len/cooking 函数/嵌套/f32/`=>`/`->`/三元）+ 中英语法元素表核对
 - [ ] **版本与发布**：CHANGELOG.md 建立（M0→M4→1.0 里程碑条目）；`v1.0.0` tag 流程（见 §3）

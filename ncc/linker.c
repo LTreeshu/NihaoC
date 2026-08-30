@@ -1,6 +1,23 @@
 #include "ncc.h"
 
 /* ============================================================
+ * Linker — 模块/库管理 + 对象/可执行文件生成（1.0 文档化保留）
+ *
+ * 职责：
+ *   - linker_init：初始化链接状态（link_lib_count）
+ *   - link_add_library：记录 `link` 指令声明的链接库（name/alias/path）
+ *   - linker_generate_object / linker_generate_executable_full：
+ *     按 cs->output_type 生成对象/可执行文件
+ *
+ * 现状（1.0 定位）：
+ *   A 方案产品路径为 parser → C 文本 → tcc（cgen.c），本模块仅被
+ *   "直接 native 代码生成"遗留路径（default 后端，parser.c 编译主流程）
+ *   使用；产物为 text/data/rodata section 的 raw binary 占位，
+ *   非标准 ELF/PE 格式。1.0 不扩展，保持文档化即可；完整链接
+ *   能力留待后续（系统链接器或 ELF/PE 实现）。
+ * ============================================================ */
+
+/* ============================================================
  * Linker Initialization
  * ============================================================ */
 

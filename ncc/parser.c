@@ -2044,9 +2044,17 @@ static void parse_deref_chain(CompilerState *cs, int line)
     next_tok(cs);                       /* consume .( */
 
     if (cur_tok(cs) == TOK_RPAREN) {
-        /* .() : dereference a void* one level -> yields void* */
+        /* .() : dereference pointer one level
+         * 类型取自符号实际指针 ref（隐式推断/显式声明均记录在 sym->type）；
+         * 无类型信息或指向 void（NihaoC 通用指针）时回退 void** */
         next_tok(cs);                   /* consume ) */
-        cgen_raw("(*(void**)%s)", name);
+        CType *pt = (sym && sym->kind == SYM_VARIABLE) ? sym->type : NULL;
+        if (pt && pt->kind == TYPE_POINTER && pt->ref &&
+            pt->ref->kind != TYPE_VOID) {
+            cgen_raw("(*(%s*)%s)", c_type_name(pt->ref), name);
+        } else {
+            cgen_raw("(*(void**)%s)", name);
+        }
     } else {
         CType tmp;
         parse_type(cs, &tmp);
