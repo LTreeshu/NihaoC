@@ -17,7 +17,15 @@
 static IrProg *P;
 static IrFn *F;
 static int *vt;             /* 局部变量: name 序号 -> vreg（ALLOCA 槽） */
-static int *pt;             /* 变量指向的聚合类型索引（-1=非指针；`p = &agg` 时记录，供 -> 用） */
+static int *pt;             /* 变量指向类型（阶段 1 类型化指针，2026-08-31）：
+                             *   -1    = 非指针
+                             *   >= 0  = 指向聚合类型（agg_types 索引，供 -> 用）
+                             *   < -1  = 指向标量（PT_SCALAR 编码，-2-code） */
+/* 标量指针编码：code 与 vtype 同编码（0=i64 1=f64 2=i8 3=i16 4=i32 5=u8 6=u16 7=u32 8=f32）。
+ * pt[] 用负值区与聚合索引（>=0）区分；-1 保留给"非指针"。 */
+#define PT_SCALAR(code)   (-2 - (code))
+#define PT_IS_SCALAR(p)   ((p) < -1)
+#define PT_SCALAR_CODE(p) (-2 - (p))
 static const char **vn;
 static int *ve;             /* 数组元素数（0=标量）；数组元素槽 vreg = vt[i]+k */
 static int *vetyp;          /* 数组元素类型编码（与 vtype 同编码；0=未记录）——元素截断/浮点标记 */
@@ -638,7 +646,30 @@ static int ir_primary(CompilerState *cs)
         return vr;
     }
     if (t == TOK_STAR) {
-        /* 一元解引用 *p -> LOAD */
+        /* 一元解引用 *p -> LOAD
+         * 阶段 1 类型化：peek 预判 `*` 后是记录过指向类型的变量标识符——
+         * 指向标量时 LOAD 后按指向类型标记（double/f32 → 浮点 vreg）。
+         * 非变量/未记录指针（如 *(&x)、聚合指针）走通用 LOAD（原行为）。 */
+        LexerState *lx = cs->parser.lex;
+        lx->peek_valid = 0;
+        lexer_peek(lx);
+        int pvi = -1;
+        if (lx->peek_tok == TOK_IDENTIFIER) {
+            int tv = var_find(lx->peek_str);
+            if (tv >= 0 && PT_IS_SCALAR(pt[tv])) pvi = tv;
+        }
+        lx->peek_valid = 0;
+        if (pvi >= 0) {
+            int sc = PT_SCALAR_CODE(pt[pvi]);
+            next_tok(cs);                       /* * */
+            next_tok(cs);                       /* p */
+            int addr = ir_new_vreg(F);
+            ir_emit(F, IR_MOV, addr, vt[pvi], -1, 0);  /* p 槽值 = 目标地址 */
+            int vr = ir_new_vreg(F);
+            ir_emit(F, IR_LOAD, vr, addr, -1, 0);
+            if (sc == 1 || sc == 8) ir_set_double(vr); /* 指向 f64/f32 → 浮点值 */
+            return vr;
+        }
         next_tok(cs);
         int a = ir_primary(cs);
         int vr = ir_new_vreg(F);
@@ -1238,6 +1269,21 @@ static int ir_mul(CompilerState *cs, int line)
 
 static int ir_add(CompilerState *cs, int line)
 {
+    /* 阶段 1 指针算术：peek 预判左操作数是指向标量的指针变量（pt 记录），
+     * 加法右操作数缩放 ×8（IR 槽模型：一个槽 = 8 字节，p+1 = 下一个槽，
+     * 与数组寻址 &arr[k]=base+k*8 一致；指向宽度不缩放——槽统一 8 字节）。
+     * 例：p = &x; q = p + 2  →  q = p + 16 字节 */
+    int pvi = -1;
+    {
+        LexerState *lx = cs->parser.lex;
+        lx->peek_valid = 0;
+        lexer_peek(lx);
+        if (lx->peek_tok == TOK_IDENTIFIER) {
+            int tv = var_find(lx->peek_str);
+            if (tv >= 0 && PT_IS_SCALAR(pt[tv])) pvi = tv;
+        }
+        lx->peek_valid = 0;
+    }
     int a = ir_mul(cs, line);
     for (;;) {
         TokenType t = cur_tok(cs);
@@ -1248,6 +1294,16 @@ static int ir_add(CompilerState *cs, int line)
         else break;
         next_tok(cs);
         int b = ir_mul(cs, line);
+        if (pvi >= 0 && op == IR_ADD && !ir_is_double(a) && !ir_is_double(b)) {
+            /* 指针 + k：k × 8（槽宽）。只对首个加法项生效（p+k 后不再是"指针语义"，
+             * 链式 p+k+1 保持字节语义——文档化，与 C 的连续指针算术不同） */
+            int wv = ir_new_vreg(F);
+            ir_emit(F, IR_CONST, wv, -1, -1, 8);
+            int off = ir_new_vreg(F);
+            ir_emit(F, IR_MUL, off, b, wv, 0);
+            b = off;
+            pvi = -1;   /* 只缩放一次 */
+        }
         int vr = ir_new_vreg(F);
         /* PB-13：任一侧为 double → 浮点运算；混合类型先提升 int 侧 */
         if (ir_is_double(a) || ir_is_double(b)) {
@@ -2205,6 +2261,81 @@ static void ir_stmt(CompilerState *cs)
             ir_emit(F, IR_RET, -1, vr, -1, 0);
         }
         skip_newlines(cs);
+    } else if (t == TOK_STAR) {
+        /* *p = e（阶段 1 类型化解引用写）：STORE 到 *p。
+         * p 须为记录过指向类型的变量；指向标量时 rhs 按指向类型 coerce
+         * （窄型 TRUNC 截断 / double ITOD / f32 FTRUNC），防槽污染。 */
+        next_tok(cs);
+        if (cur_tok(cs) != TOK_IDENTIFIER) {
+            nihao_error(cs, "ir: '*<var> = expr' requires a variable after '*'");
+            next_tok(cs);
+            skip_newlines(cs);
+            return;
+        }
+        const char *pname = cs->parser.lex->tok_str;
+        int pvi = var_find(pname);
+        next_tok(cs);
+        if (pvi < 0) {
+            nihao_error(cs, "ir: undeclared variable '%s'", pname);
+            skip_newlines(cs);
+            return;
+        }
+        if (pt[pvi] >= 0) {
+            nihao_error(cs, "ir: '*%s' is an aggregate pointer (use -> member access)", pname);
+            skip_newlines(cs);
+            return;
+        }
+        int at = cur_tok(cs);
+        int is_compound = 0;
+        IrOp op = IR_NOP;
+        if (at == TOK_PLUS_ASSIGN) { op = IR_ADD; is_compound = 1; }
+        else if (at == TOK_MINUS_ASSIGN) { op = IR_SUB; is_compound = 1; }
+        else if (at == TOK_STAR_ASSIGN) { op = IR_MUL; is_compound = 1; }
+        else if (at == TOK_SLASH_ASSIGN) { op = IR_DIV; is_compound = 1; }
+        else if (at == TOK_PERCENT_ASSIGN) { op = IR_MOD; is_compound = 1; }
+        if (at != TOK_ASSIGN && !is_compound) {
+            nihao_error(cs, "ir: expected '=' after '*%s'", pname);
+            skip_newlines(cs);
+            return;
+        }
+        next_tok(cs);
+        int v = ir_expr(cs);
+        if (is_compound) {
+            int addr0 = ir_new_vreg(F);
+            ir_emit(F, IR_MOV, addr0, vt[pvi], -1, 0);
+            int cur = ir_new_vreg(F);
+            ir_emit(F, IR_LOAD, cur, addr0, -1, 0);
+            if (PT_IS_SCALAR(pt[pvi])) {
+                int sc = PT_SCALAR_CODE(pt[pvi]);
+                if ((sc == 1 || sc == 8) && !ir_is_double(cur)) cur = ir_to_double(cur);
+                if (ir_is_double(cur) && !(sc == 1 || sc == 8)) {
+                    int nv = ir_new_vreg(F);
+                    ir_emit(F, IR_DTOI, nv, cur, -1, 0);
+                    cur = nv;
+                }
+                if (!ir_is_double(v) && ir_is_double(cur)) v = ir_to_double(v);
+                if (ir_is_double(v) && !ir_is_double(cur)) {
+                    int nv = ir_new_vreg(F);
+                    ir_emit(F, IR_DTOI, nv, v, -1, 0);
+                    v = nv;
+                }
+            }
+            int nv = ir_new_vreg(F);
+            ir_emit(F, op, nv, cur, v, 0);
+            if (PT_IS_SCALAR(pt[pvi])) {
+                int sc = PT_SCALAR_CODE(pt[pvi]);
+                if (ir_is_double(nv)) { if (!(sc == 1 || sc == 8)) { int t = ir_new_vreg(F); ir_emit(F, IR_DTOI, t, nv, -1, 0); nv = t; } }
+                else if (sc == 1 || sc == 8) nv = ir_to_double(nv);
+            }
+            v = nv;
+        }
+        int addr = ir_new_vreg(F);
+        ir_emit(F, IR_MOV, addr, vt[pvi], -1, 0);      /* 目标地址 = p 槽值 */
+        if (PT_IS_SCALAR(pt[pvi])) {
+            v = ir_coerce(v, PT_SCALAR_CODE(pt[pvi])); /* 按指向类型截断/提升 */
+        }
+        ir_emit(F, IR_STORE, -1, addr, v, 0);
+        skip_newlines(cs);
     } else if (t == TOK_IDENTIFIER) {
         const char *name = cs->parser.lex->tok_str;
         /* peek 下一个 token 分派：赋值 / 声明(name i32 = expr) / 表达式 */
@@ -2269,27 +2400,37 @@ static void ir_stmt(CompilerState *cs)
                 lx2->peek_valid = 0;
             }
             if (cur_tok(cs) == TOK_BITWISE_AND) {
-                /* p = &agg（指针指向聚合）：记录 pt[vi]，供 -> 成员访问。
+                /* p = &x（指针记录，阶段 1 类型化指针）：
+                 *   &聚合 → pt[vi] = 聚合索引（供 -> 成员访问）
+                 *   &标量 → pt[vi] = PT_SCALAR(code)（供 *p 类型化解引用/算术）
                  * peek 预判目标变量（peek_str 是 strdup 永久拷贝）——
-                 * 非聚合/未声明时不消费 &，回退通用 ir_expr 解析。 */
+                 * 未声明/枚举时不消费 &，回退通用 ir_expr 解析。 */
                 LexerState *lx2 = cs->parser.lex;
                 lx2->peek_valid = 0;
                 lexer_peek(lx2);
                 if (lx2->peek_tok == TOK_IDENTIFIER) {
                     int avi = var_find(lx2->peek_str);
-                    if (avi >= 0 && vty[avi] >= 0 && agg_types[vty[avi]].kind != 2) {
-                        pt[vi] = vty[avi];
-                        next_tok(cs);   /* & */
-                        next_tok(cs);   /* name */
-                        int addr = ir_new_vreg(F);
-                        ir_emit(F, IR_ADDR, addr, vt[avi], -1, 0);
-                        ir_emit(F, IR_MOV, vt[vi], addr, -1, 0);
-                        skip_newlines(cs);
-                        return;
+                    if (avi >= 0) {
+                        if (vty[avi] >= 0 && agg_types[vty[avi]].kind != 2) {
+                            pt[vi] = vty[avi];              /* 聚合指针 */
+                        } else if (vty[avi] < 0) {
+                            pt[vi] = PT_SCALAR(vtype[avi]); /* 标量指针（新） */
+                        } else {
+                            avi = -1;   /* 枚举：不记录，回退通用 */
+                        }
+                        if (avi >= 0) {
+                            next_tok(cs);   /* & */
+                            next_tok(cs);   /* name */
+                            int addr = ir_new_vreg(F);
+                            ir_emit(F, IR_ADDR, addr, vt[avi], -1, 0);
+                            ir_emit(F, IR_MOV, vt[vi], addr, -1, 0);
+                            skip_newlines(cs);
+                            return;
+                        }
                     }
                 }
                 lx2->peek_valid = 0;
-                /* 非聚合目标：& 未消费，回退通用 ir_expr 解析 */
+                /* 非标量/聚合目标：& 未消费，回退通用 ir_expr 解析 */
             }
             int vr = ir_expr(cs);
             ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);

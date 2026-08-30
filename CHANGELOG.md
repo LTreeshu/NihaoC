@@ -37,6 +37,11 @@
 - IR 一切（ir-c/ir-native/ir-riscv64/ir-arm64/ir-loongarch64，当前为 2.0 预览）
 - native 寄存器分配（性能项）；ir-native 在 Linux ELF 运行时崩溃（2.0 预览，Windows PE 正常）
 
+## [2.0-dev] — 未发布（B 方案 IR 演进线）
+
+- **阶段 1 类型化指针模型（2026-08-31）**：`p = &标量` 记录指向类型（pt[] 表 PT_SCALAR 编码，聚合/标量/枚举三分支）；`*p` 解引用读按指向类型标记浮点；`*p = e` 写按指向类型 coerce（窄型 TRUNC 截断 / double ITOD）；复合赋值 `*p += e` RMW；指针算术 `p + k` ×8 槽宽缩放（与数组寻址一致）
+- 新用例 ir_ptr2.nc（IR_SUBSET）：读/写/narrow 截断/double/复合+算术 5 组断言，四后端一致 0 FAIL；WSL Linux ir-c 实测输出一致
+
 ## [M4] — CLI 工具链
 
 - `nihao init/build/run/debug/lex` 子命令；`debug <file> --ir` 三地址码 dump

@@ -29,7 +29,7 @@
 
 ## 3. B 方案（IR）现状
 
-**IR 用例 30 个（IR_SUBSET 25 + IR_ONLY 5），全矩阵 0 FAIL**。已完成的 PB：
+**IR 用例 31 个（IR_SUBSET 26 + IR_ONLY 5），全矩阵 0 FAIL**。已完成的 PB：
 
 | PB | 功能 | 用例 |
 | -- | ---- | ---- |
@@ -40,13 +40,13 @@
 | PB-5/6 | 存储期 visof、内置函数 sizeof/malloc 等 | ir_vis/builtin.nc |
 | PB-7/8 | 控制流 switch/is、多变量、函数指针（IR_CALLI）、struct 返回值（sret） | ir_switch/multi/fptr/mr.nc |
 | PB-9 | 编译期 cooking：static_assert + 编译期变量表 + **编译期函数 cooking-call（8/19：宏式展开，临时 lexer 求值）** | ir_cook.nc |
-| PB-12/13 | 指针 IR_ADDR/LOAD/STORE、**`.()` 解引用（8/18）**、浮点（x87 f64 + 调用 ABI）、**f32 严格宽度（8/20：IR_FTRUNC 存储截断）** | ir_ptr/float/fcall/conv.nc |
+| PB-12/13 | 指针 IR_ADDR/LOAD/STORE、**`.()` 解引用（8/18）**、浮点（x87 f64 + 调用 ABI）、**f32 严格宽度（8/20：IR_FTRUNC 存储截断）**、**类型化指针（8/31 阶段 1：`p=&标量` 记录 PT_SCALAR、`*p` 读 double 标记、`*p=e` 写 coerce/TRUNC、`*p+=e` RMW、`p+k` ×8 槽宽缩放）** | ir_ptr/ptr2/float/fcall/conv.nc |
 | PB-16 | 调用约定：struct 参数按值展开、return p 聚合返回（sret） | ir_sparam.nc |
 | PB-17/18 | 嵌套调用（收集模式）、ir_to_c 类型化输出（0 warning） | — |
 | PB-20 | **arm64 / riscv64 / loongarch64 后端**（四架构收官） | 汇编验证 |
 | PB-23 | **CLI debug --ir（8/18：dump 三地址码 + 指令名表）**、**CLI 完善（8/28：init 模板对齐当前语法 + 错误信息中文化）** | — |
 
-**回归扩容（2026-08-13/14/18/19）**：IR_SUBSET 9→25（批量对比发现法修复 3 个全量真 bug：跨行后缀 ++ 误吃 / multi-decl init 残留 / 动态字符串池寻址）。
+**回归扩容（2026-08-13/14/18/19）**：IR_SUBSET 9→25（批量对比发现法修复 3 个全量真 bug：跨行后缀 ++ 误吃 / multi-decl init 残留 / 动态字符串池寻址）。**2.0 阶段 1（2026-08-31）**：IR_SUBSET 26（+ir_ptr2 类型化指针），Windows 全矩阵 31 用例一致性全 PASS + WSL Linux ir-c 实测一致。
 
 **IR 数据模型**：8 字节槽（vreg），vreg_type 标记 double；变量 vtype 编码（0=i64 1=double 2=i8 3=i16 4=i32 5=u8 6=u16 7=u32 8=f32）；聚合=成员槽（嵌套递归 mslots）；ir_coerce 统一目标类型协调（ITOD/DTOI/TRUNC/FTRUNC）。
 
