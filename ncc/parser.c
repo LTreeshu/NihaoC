@@ -522,6 +522,9 @@ static void parse_init_list(CompilerState *cs)
 
 /* Heuristic C type for a type-inferred variable initializer.
  * Returns 1 if the RHS first token gave a usable hint. */
+/* 推断初始化表达式的类型。
+ * 契约：调用时 '=' 已被消费，cur_tok 指向 RHS 首 token
+ * （parse_declaration 主路径与 for 循环 init 两处调用点保持一致）。 */
 static int infer_init_type(CompilerState *cs, CType *out)
 {
     memset(out, 0, sizeof(CType));
@@ -556,6 +559,30 @@ static int infer_init_type(CompilerState *cs, CType *out)
                 return 1;
             }
             out->kind = TYPE_POINTER;
+            out->size = 8;
+            return 1;
+        }
+        case TOK_BITWISE_AND: {
+            /* &x → 指向 x 的指针（peek 预判，不消费 &；
+             * 与 IR 层 pt[] 模型语义对齐：& 表达式的类型 = 指向 x 的指针） */
+            LexerState *lx = cs->parser.lex;
+            lx->peek_valid = 0;
+            lexer_peek(lx);
+            if (lx->peek_tok == TOK_IDENTIFIER) {
+                Symbol *s = sym_find(cs, lx->peek_str);
+                if (s && s->type) {
+                    out->kind = TYPE_POINTER;
+                    out->size = 8;
+                    CType *ref = type_new(cs, s->type->kind);
+                    memcpy(ref, s->type, sizeof(CType));
+                    ref->sym = s->type->sym;
+                    out->ref = ref;
+                    lx->peek_valid = 0;
+                    return 1;
+                }
+            }
+            lx->peek_valid = 0;
+            out->kind = TYPE_POINTER;   /* 通用指针（无符号信息） */
             out->size = 8;
             return 1;
         }
@@ -946,17 +973,19 @@ void parse_declaration(CompilerState *cs)
     CType vtype;
     int is_const = (vis == VIS_CONST);
     int is_static = (vis == VIS_STATIC);
+    int inferred_eq = 0;   /* Name = expr：'=' 已被 infer 路径消费 */
 
     if (is_type_begin(cur_tok(cs)) || is_user_type_name(cs) || cur_tok(cs) == TOK_VOID) {
         parse_type(cs, &vtype);
     } else {
-        /* type-inferred variable */
+        /* type-inferred variable: Name = expr */
         if (cur_tok(cs) != TOK_ASSIGN) {
             nihao_error(cs, "expected type or '=' for variable '%s'", name);
             return;
         }
+        next_tok(cs);               /* 消费 '='：infer 直接看 RHS 首 token */
+        inferred_eq = 1;
         infer_init_type(cs, &vtype);
-        /* skip the '=' so init below handles it */
     }
 
     Symbol *var_sym;
@@ -989,9 +1018,11 @@ void parse_declaration(CompilerState *cs)
         }
     }
 
-    /* initializer */
-    if (cur_tok(cs) == TOK_ASSIGN) {
-        next_tok(cs);
+    /* initializer（inferred_eq：'=' 已消费，cur_tok 已是 RHS；否则 '=' 待消费） */
+    if (inferred_eq || cur_tok(cs) == TOK_ASSIGN) {
+        if (!inferred_eq) {
+            next_tok(cs);
+        }
         cgen_raw(" = ");
         /* Ownership/lifetime check: single-identifier initializer */
         if (cur_tok(cs) == TOK_IDENTIFIER) {

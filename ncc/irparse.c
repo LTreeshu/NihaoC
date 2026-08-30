@@ -1080,8 +1080,9 @@ static int ir_primary(CompilerState *cs)
             if (off == 0) {
                 addr = base;
             } else {
+                /* off 为槽偏移，IR_ADD 是字节加法 → 乘 8（与 IR_ADDR 槽语义区分） */
                 int ov = ir_new_vreg(F);
-                ir_emit(F, IR_CONST, ov, -1, -1, off);
+                ir_emit(F, IR_CONST, ov, -1, -1, off * 8);
                 addr = ir_new_vreg(F);
                 ir_emit(F, IR_ADD, addr, base, ov, 0);
             }
@@ -2414,14 +2415,14 @@ static void ir_stmt(CompilerState *cs)
                         ir_emit(F, IR_MOV, caddr, vt[vi], -1, 0);
                         if (off > 0) {
                             int ov = ir_new_vreg(F);
-                            ir_emit(F, IR_CONST, ov, -1, -1, off);
+                            ir_emit(F, IR_CONST, ov, -1, -1, off * 8);
                             int a2 = ir_new_vreg(F);
                             ir_emit(F, IR_ADD, a2, caddr, ov, 0);
                             caddr = a2;
                         }
                         cur = ir_bf_load(caddr, bfbits);
                     } else {
-                        /* 普通成员当前值：LOAD(p 值 + off) */
+                        /* 普通成员当前值：LOAD(p 值 + off*8) */
                         int base = ir_new_vreg(F);
                         ir_emit(F, IR_MOV, base, vt[vi], -1, 0);
                         int caddr;
@@ -2429,7 +2430,7 @@ static void ir_stmt(CompilerState *cs)
                             caddr = base;
                         } else {
                             int ov = ir_new_vreg(F);
-                            ir_emit(F, IR_CONST, ov, -1, -1, off);
+                            ir_emit(F, IR_CONST, ov, -1, -1, off * 8);
                             caddr = ir_new_vreg(F);
                             ir_emit(F, IR_ADD, caddr, base, ov, 0);
                         }
@@ -2439,7 +2440,7 @@ static void ir_stmt(CompilerState *cs)
                     nv = ir_new_vreg(F);
                     ir_emit(F, aop, nv, cur, b, 0);
                 }
-                /* STORE 到 p 值 + off */
+                /* STORE 到 p 值 + off*8 */
                 int base = ir_new_vreg(F);
                 ir_emit(F, IR_MOV, base, vt[vi], -1, 0);
                 int addr;
@@ -2447,7 +2448,7 @@ static void ir_stmt(CompilerState *cs)
                     addr = base;
                 } else {
                     int ov = ir_new_vreg(F);
-                    ir_emit(F, IR_CONST, ov, -1, -1, off);
+                    ir_emit(F, IR_CONST, ov, -1, -1, off * 8);
                     addr = ir_new_vreg(F);
                     ir_emit(F, IR_ADD, addr, base, ov, 0);
                 }

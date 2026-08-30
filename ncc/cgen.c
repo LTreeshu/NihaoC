@@ -190,8 +190,9 @@ const char *c_type_name(CType *t)
             if (t->ref) return c_type_name(t->ref);
             return "void";
         case TYPE_POINTER:
-            /* Multi-level void pointer: void[] -> void**, void[][] -> void*** */
-            if (t->ref && t->ref->kind == TYPE_POINTER) {
+            /* 具名指针：Point* -> "Point*"；通用 void* -> "void*"；
+             * 多层：Point** -> "Point**"（递归 ref 名 + 星号） */
+            if (t->ref && t->ref->kind != TYPE_VOID) {
                 snprintf(buf, sizeof(buf), "%s*", c_type_name(t->ref));
                 return buf;
             }
