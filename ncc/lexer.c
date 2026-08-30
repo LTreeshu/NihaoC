@@ -403,6 +403,7 @@ void lexer_init(CompilerState *cs, const char *filename, const char *source)
     
     lex->peek_tok = TOK_UNKNOWN;
     lex->peek_valid = 0;
+    lex->peek_str = NULL;
     
     lex->paren_depth = 0;
     lex->brace_depth = 0;
@@ -675,6 +676,7 @@ void lexer_peek(LexerState *lex)
         lexer_next(lex);
         
         lex->peek_tok = lex->tok;
+        lex->peek_str = lex->tok_str;   /* strdup 永久拷贝，restore 后仍有效 */
         lex->peek_valid = 1;
         
         /* Restore */

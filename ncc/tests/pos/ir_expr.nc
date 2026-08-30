@@ -42,5 +42,18 @@ func main() {
     } else {
         puts("bitnot bad")
     }
+    m i32 = 5
+    t i32 = (m > 3) ? 100 : 200
+    if t == 100 {
+        puts("tern ok")
+    } else {
+        puts("tern bad")
+    }
+    u i32 = (m > 10) ? 1 : ((m > 3) ? 2 : 3)
+    if u == 2 {
+        puts("tern2 ok")
+    } else {
+        puts("tern2 bad")
+    }
     return
 }

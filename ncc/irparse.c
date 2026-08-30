@@ -17,6 +17,7 @@
 static IrProg *P;
 static IrFn *F;
 static int *vt;             /* 局部变量: name 序号 -> vreg（ALLOCA 槽） */
+static int *pt;             /* 变量指向的聚合类型索引（-1=非指针；`p = &agg` 时记录，供 -> 用） */
 static const char **vn;
 static int *ve;             /* 数组元素数（0=标量）；数组元素槽 vreg = vt[i]+k */
 static int *vetyp;          /* 数组元素类型编码（与 vtype 同编码；0=未记录）——元素截断/浮点标记 */
@@ -423,6 +424,7 @@ static void var_reset(void)
     if (vn_cap == 0) {
         vn_cap = 32;
         vt = nihao_malloc(g_cs, vn_cap * sizeof(int));
+        pt = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vn = nihao_malloc(g_cs, vn_cap * sizeof(char *));
         ve = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vetyp = nihao_malloc(g_cs, vn_cap * sizeof(int));
@@ -460,6 +462,7 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
     if (vn_count >= vn_cap) {
         vn_cap *= 2;
         vt = nihao_realloc(g_cs, vt, vn_cap * sizeof(int));
+        pt = nihao_realloc(g_cs, pt, vn_cap * sizeof(int));
         vn = nihao_realloc(g_cs, vn, vn_cap * sizeof(char *));
         ve = nihao_realloc(g_cs, ve, vn_cap * sizeof(int));
         vetyp = nihao_realloc(g_cs, vetyp, vn_cap * sizeof(int));
@@ -468,6 +471,7 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
         vtype = nihao_realloc(g_cs, vtype, vn_cap * sizeof(int));
     }
     vn[vn_count] = name;
+    pt[vn_count] = -1;
     ve[vn_count] = elems > 0 ? elems : 0;
     vetyp[vn_count] = 0;
     vty[vn_count] = type_idx;
@@ -1037,6 +1041,61 @@ static int ir_primary(CompilerState *cs)
             ir_emit(F, IR_LOAD, vr, addr, -1, 0);       /* 读目标内容 */
             return vr;
         }
+        if (cur_tok(cs) == TOK_ARROW) {
+            /* 指针成员访问 p->field：地址 = p 槽值（目标地址）+ off*8。
+             * pt[vi] 记录指向的聚合类型（`p = &agg` 时写入） */
+            next_tok(cs);
+            const char *fname = cs->parser.lex->tok_str;
+            next_tok(cs);
+            if (pt[vi] < 0) {
+                nihao_error(cs, "ir: '%s' is not a pointer to aggregate (assign &var first)", name);
+                return ir_new_vreg(F);
+            }
+            int ti = pt[vi];
+            int off = 0;
+            int last_fi = -1;
+            for (;;) {
+                int fi = agg_member_find(ti, fname);
+                if (fi < 0) {
+                    nihao_error(cs, "ir: no member '%s' in type '%s'", fname,
+                                agg_types[ti].name);
+                    return ir_new_vreg(F);
+                }
+                last_fi = fi;
+                off += (agg_types[ti].kind == 1) ? 0 : agg_types[ti].moff[fi];
+                int mt = agg_types[ti].mtype[fi];
+                if (mt >= 0 && (cur_tok(cs) == TOK_DOT || cur_tok(cs) == TOK_ARROW)) {
+                    /* 聚合成员：继续链（嵌套 struct） */
+                    ti = mt;
+                    next_tok(cs);
+                    fname = cs->parser.lex->tok_str;
+                    next_tok(cs);
+                    continue;
+                }
+                break;
+            }
+            int base = ir_new_vreg(F);
+            ir_emit(F, IR_MOV, base, vt[vi], -1, 0);    /* p 槽值 = 目标地址（MOV 勿 LOAD） */
+            int addr;
+            if (off == 0) {
+                addr = base;
+            } else {
+                int ov = ir_new_vreg(F);
+                ir_emit(F, IR_CONST, ov, -1, -1, off);
+                addr = ir_new_vreg(F);
+                ir_emit(F, IR_ADD, addr, base, ov, 0);
+            }
+            int vr = ir_new_vreg(F);
+            ir_emit(F, IR_LOAD, vr, addr, -1, 0);
+            /* 位域成员：AND 掩码取低 N 位 */
+            if (agg_types[ti].mbits[last_fi] > 0) {
+                int mv = ir_bitmask(agg_types[ti].mbits[last_fi]);
+                int r2 = ir_new_vreg(F);
+                ir_emit(F, IR_AND, r2, vr, mv, 0);
+                vr = r2;
+            }
+            return vr;
+        }
         if (cur_tok(cs) == TOK_DOT) {
             /* 成员访问 s.field / s.a.x 链式（嵌套）→ LOAD(&s + off*8) */
             next_tok(cs);
@@ -1303,7 +1362,38 @@ static int ir_logical_or(CompilerState *cs, int line)
 static int ir_expr(CompilerState *cs)
 {
     /* 表达式首 token 的行号 = 语句起始行，用于块内换行边界判定 */
-    return ir_logical_or(cs, cs->parser.lex->last_line_num);
+    int line = cs->parser.lex->last_line_num;
+    int a = ir_logical_or(cs, line);
+    if (cur_tok(cs) != TOK_QUESTION) return a;
+    /* 三元条件 c ? a : b：
+     *   JZ c, L_else → a → MOV r, a → JMP L_end → L_else: b → MOV r, b → L_end
+     * 类型：两分支任一 double → r 标 double 且另一分支 ITOD 提升；
+     *      真分支 int / 假分支 double（不匹配方向）→ 报错（语义验证器不静默错值） */
+    next_tok(cs);
+    int l_else = ir_new_label(F);
+    int l_end = ir_new_label(F);
+    ir_emit(F, IR_JZ, -1, a, -1, 0);
+    F->ins[F->ins_count - 1].label = l_else;
+    int tv = ir_expr(cs);           /* 真分支（支持嵌套三元/完整表达式） */
+    int r = ir_new_vreg(F);
+    if (ir_is_double(tv)) ir_set_double(r);
+    ir_emit(F, IR_MOV, r, tv, -1, 0);
+    ir_emit(F, IR_JMP, -1, -1, -1, 0);
+    F->ins[F->ins_count - 1].label = l_end;
+    ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+    F->ins[F->ins_count - 1].label = l_else;
+    expect(cs, TOK_COLON);
+    int fv = ir_expr(cs);           /* 假分支 */
+    if (ir_is_double(fv) && !ir_is_double(tv)) {
+        nihao_error(cs, "ir: ternary branch type mismatch (true=int, false=double)");
+        return r;
+    }
+    if (ir_is_double(fv)) ir_set_double(r);   /* tv 也是 double（上面已排除不匹配） */
+    if (!ir_is_double(fv) && ir_is_double(r)) fv = ir_to_double(fv);
+    ir_emit(F, IR_MOV, r, fv, -1, 0);
+    ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+    F->ins[F->ins_count - 1].label = l_end;
+    return r;
 }
 
 /* ---- 语句 ---- */
@@ -2177,6 +2267,29 @@ static void ir_stmt(CompilerState *cs)
                 }
                 lx2->peek_valid = 0;
             }
+            if (cur_tok(cs) == TOK_BITWISE_AND) {
+                /* p = &agg（指针指向聚合）：记录 pt[vi]，供 -> 成员访问。
+                 * peek 预判目标变量（peek_str 是 strdup 永久拷贝）——
+                 * 非聚合/未声明时不消费 &，回退通用 ir_expr 解析。 */
+                LexerState *lx2 = cs->parser.lex;
+                lx2->peek_valid = 0;
+                lexer_peek(lx2);
+                if (lx2->peek_tok == TOK_IDENTIFIER) {
+                    int avi = var_find(lx2->peek_str);
+                    if (avi >= 0 && vty[avi] >= 0 && agg_types[vty[avi]].kind != 2) {
+                        pt[vi] = vty[avi];
+                        next_tok(cs);   /* & */
+                        next_tok(cs);   /* name */
+                        int addr = ir_new_vreg(F);
+                        ir_emit(F, IR_ADDR, addr, vt[avi], -1, 0);
+                        ir_emit(F, IR_MOV, vt[vi], addr, -1, 0);
+                        skip_newlines(cs);
+                        return;
+                    }
+                }
+                lx2->peek_valid = 0;
+                /* 非聚合目标：& 未消费，回退通用 ir_expr 解析 */
+            }
             int vr = ir_expr(cs);
             ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             skip_newlines(cs);
@@ -2240,6 +2353,110 @@ static void ir_stmt(CompilerState *cs)
             ir_emit(F, IR_MOV, addr, vt[vi], -1, 0);    /* p 槽值 = 目标地址（MOV 勿 LOAD） */
             ir_emit(F, IR_STORE, -1, addr, v, 0);
             skip_newlines(cs);
+        } else if (nt == TOK_ARROW) {
+            /* 指针成员赋值 p->field = e / p->field op= e（地址 = p 值 + off*8） */
+            next_tok(cs);           /* name */
+            int vi = var_find(name);
+            if (vi < 0) {
+                nihao_error(cs, "ir: undeclared variable '%s'", name);
+                skip_newlines(cs);
+                return;
+            }
+            if (pt[vi] < 0) {
+                nihao_error(cs, "ir: '%s' is not a pointer to aggregate (assign &var first)", name);
+                skip_newlines(cs);
+                return;
+            }
+            next_tok(cs);           /* -> */
+            const char *fname = cs->parser.lex->tok_str;
+            int ti = pt[vi];
+            int off = 0;
+            int fi = -1;
+            for (;;) {
+                fi = agg_member_find(ti, fname);
+                if (fi < 0) {
+                    nihao_error(cs, "ir: no member '%s' in type '%s'", fname,
+                                agg_types[ti].name);
+                    skip_newlines(cs);
+                    return;
+                }
+                off += (agg_types[ti].kind == 1) ? 0 : agg_types[ti].moff[fi];
+                int mt = agg_types[ti].mtype[fi];
+                next_tok(cs);           /* field */
+                if (mt >= 0 && (cur_tok(cs) == TOK_DOT || cur_tok(cs) == TOK_ARROW)) {
+                    ti = mt;            /* 嵌套：继续链 */
+                    next_tok(cs);       /* . / -> */
+                    fname = cs->parser.lex->tok_str;
+                    continue;
+                }
+                break;
+            }
+            TokenType at = cur_tok(cs);
+            int is_compound = 0;
+            IrOp aop = IR_NOP;
+            if (at == TOK_PLUS_ASSIGN) { aop = IR_ADD; is_compound = 1; }
+            else if (at == TOK_MINUS_ASSIGN) { aop = IR_SUB; is_compound = 1; }
+            else if (at == TOK_STAR_ASSIGN) { aop = IR_MUL; is_compound = 1; }
+            else if (at == TOK_SLASH_ASSIGN) { aop = IR_DIV; is_compound = 1; }
+            else if (at == TOK_PERCENT_ASSIGN) { aop = IR_MOD; is_compound = 1; }
+            if (at == TOK_ASSIGN || is_compound) {
+                next_tok(cs);
+                int b = ir_expr(cs);
+                int nv;
+                int bfbits = agg_types[ti].mbits[fi];
+                if (!is_compound) {
+                    nv = b;
+                } else {
+                    int cur;
+                    if (bfbits > 0) {
+                        /* 位域复合赋值：基于位域值运算（LOAD+AND 取低 N 位） */
+                        int caddr = ir_new_vreg(F);
+                        ir_emit(F, IR_MOV, caddr, vt[vi], -1, 0);
+                        if (off > 0) {
+                            int ov = ir_new_vreg(F);
+                            ir_emit(F, IR_CONST, ov, -1, -1, off);
+                            int a2 = ir_new_vreg(F);
+                            ir_emit(F, IR_ADD, a2, caddr, ov, 0);
+                            caddr = a2;
+                        }
+                        cur = ir_bf_load(caddr, bfbits);
+                    } else {
+                        /* 普通成员当前值：LOAD(p 值 + off) */
+                        int base = ir_new_vreg(F);
+                        ir_emit(F, IR_MOV, base, vt[vi], -1, 0);
+                        int caddr;
+                        if (off == 0) {
+                            caddr = base;
+                        } else {
+                            int ov = ir_new_vreg(F);
+                            ir_emit(F, IR_CONST, ov, -1, -1, off);
+                            caddr = ir_new_vreg(F);
+                            ir_emit(F, IR_ADD, caddr, base, ov, 0);
+                        }
+                        cur = ir_new_vreg(F);
+                        ir_emit(F, IR_LOAD, cur, caddr, -1, 0);
+                    }
+                    nv = ir_new_vreg(F);
+                    ir_emit(F, aop, nv, cur, b, 0);
+                }
+                /* STORE 到 p 值 + off */
+                int base = ir_new_vreg(F);
+                ir_emit(F, IR_MOV, base, vt[vi], -1, 0);
+                int addr;
+                if (off == 0) {
+                    addr = base;
+                } else {
+                    int ov = ir_new_vreg(F);
+                    ir_emit(F, IR_CONST, ov, -1, -1, off);
+                    addr = ir_new_vreg(F);
+                    ir_emit(F, IR_ADD, addr, base, ov, 0);
+                }
+                ir_bf_store(addr, nv, bfbits);
+                skip_newlines(cs);
+            } else {
+                nihao_error(cs, "ir: expected '=' after '->' member access");
+                skip_newlines(cs);
+            }
         } else if (nt == TOK_DOT) {
             /* 成员赋值 s.field = e / s.field op= e */
             next_tok(cs);           /* name */

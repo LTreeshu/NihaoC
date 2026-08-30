@@ -107,7 +107,7 @@ for _, src in ipairs(os.files("tests/pos/*.nc")) do
         add_deps("ncc")
         -- IR 专属用例（子集语法，如 ir_demo/ir_ptr）仅在 IR 后端下编译，
         -- 默认后端无法构建，设为非默认 target（xmake build 不会自动构建）
-        if name == "ir_ptr" or name == "ir_demo" or name == "ir_prefix" or name == "ir_array" or name == "ir_switch" or name == "ir_struct" or name == "ir_vis" or name == "ir_builtin" or name == "ir_multi" or name == "ir_fptr" or name == "ir_mr" or name == "ir_cook" or name == "ir_float" or name == "ir_slice" or name == "ir_fcall" or name == "ir_narrow" or name == "ir_narray" or name == "ir_conv" or name == "ir_str" or name == "ir_sparam" or name == "ir_bitfield" then
+        if name == "ir_ptr" or name == "ir_demo" or name == "ir_prefix" or name == "ir_array" or name == "ir_switch" or name == "ir_struct" or name == "ir_vis" or name == "ir_builtin" or name == "ir_multi" or name == "ir_fptr" or name == "ir_mr" or name == "ir_cook" or name == "ir_float" or name == "ir_slice" or name == "ir_fcall" or name == "ir_narrow" or name == "ir_narray" or name == "ir_conv" or name == "ir_str" or name == "ir_sparam" or name == "ir_bitfield" or name == "ir_arrow" then
             set_default(false)
         end
     target_end()
@@ -117,7 +117,7 @@ end
 -- IR_SUBSET: IR 双后端（ir-c/ir-native）可编译运行的通用用例（全量后端也可跑）
 -- IR_ONLY  : IR 专属用例——子集语法（如无类型指针声明），全量 parser 无法编译
 local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_goto = true, ir_nested = true, ir_is = true}
-local IR_ONLY = {ir_builtin = true, ir_mr = true, ir_slice = true, ir_sparam = true, ir_cook = true}
+local IR_ONLY = {ir_builtin = true, ir_mr = true, ir_slice = true, ir_sparam = true, ir_cook = true, ir_arrow = true}
 
 task("test")
     on_run(function ()

@@ -55,7 +55,7 @@ ncc/
 
 ### P0 — 核心功能缺口（影响"可用"）
 
-- [~] **IR 前端覆盖全量语法**：已完成大部分（截至 8/29：struct/union/enum（嵌套/整体赋值/嵌套初始化 8/19-8/27）、数组/位域、cooking 编译期（含函数 8/19）、flow/visof、多返回值(sret)、switch、link、函数指针、类型别名、切片（len 8/19）、goto 8/19、is 可见性模式 8/29、**vetyp 8/f32 编码冲突根治（8/29：char 元素 coerce 误走 f32→ir-native STORE8 写 0→ir_str inconsistent，3 处 coerce 按 i8 截断 + ir_dump 补 FTRUNC 名表）**；IR_SUBSET 用例四后端一致 + IR_ONLY（ir_cook 等））。剩余细项：命名空间（无语言定义，待议）。
+- [~] **IR 前端覆盖全量语法**：已完成大部分（截至 8/29：struct/union/enum（嵌套/整体赋值/嵌套初始化 8/19-8/27）、数组/位域、cooking 编译期（含函数 8/19）、flow/visof、多返回值(sret)、switch、link、函数指针、类型别名、切片（len 8/19）、goto 8/19、is 可见性模式 8/29、**vetyp 8/f32 编码冲突根治（8/29：char 元素 coerce 误走 f32→ir-native STORE8 写 0→ir_str inconsistent，3 处 coerce 按 i8 截断 + ir_dump 补 FTRUNC 名表）**；IR_SUBSET 用例四后端一致 + IR_ONLY（ir_cook 等））。**语法全覆盖达成（2026-08-30）**：最后 2 个表达式级缺口 `->` 指针成员访问（pt[] 表记录 `p=&agg` 指向类型 + ir_primary 读/ir_stmt 写，含链式/复合赋值/位域 RMW，ir_arrow.nc IR_ONLY 双后端一致）+ `?:` 三元（JZ→真→MOV→JMP→假短路布局，double 协调，ir_expr.nc 四后端一致）——全矩阵 56 PASS 0 FAIL。剩余细项：命名空间（无语言定义，待议）。
 - [x] **IR 路径用户函数调用符号 bug（已于 2026-08-05 修复，ncc 提交 c3c91dc）**：`tests/pos/hello.nc`（含用户自定义函数 `add`）经 `-backend=ir-native` 编译报 `undefined symbol '__imp_add'`。根因与修复：
   - `ir_to_native.c`：Windows 下所有 CALL 都生成 `call *__imp_<sym>`，用户函数（程序内符号）无 `__imp_` 别名 → 区分用户函数（直接 `call sym`）与外部导入符号（`__imp_` 间接调用）；
   - `ir_to_native.c`：栈帧对齐逻辑取反（frame 应为 16 的倍数，原代码在已是 16 倍数时 +8 反而破坏对齐）；
@@ -160,7 +160,7 @@ ncc/
 - [x] **PB-23 CLI（2026-08-18/28 完成）**：`nihao debug <file> --ir` dump 三地址码（8/29 补 FTRUNC 名表）+ init 模板对齐当前语法（struct/数组/.() 解引用）+ 错误信息中文化（错误/位于前缀）
 
 ### 架构决策
-- [~] **PB-24 统一管线（2026-08-28 决策：再观察）**：继续双管线（A 方案产品化、B 方案语义验证器），待 IR 覆盖全量语法后（goto/嵌套等已清，命名空间无语言定义）再决策最终走向。**2026-08-30 盘点（STAGE_SUMMARY §3.1）**：IR 前端差距收敛至 2 个表达式级特性（`->` 指针成员访问、`?:` 三元，各约 30 行），补齐即"语法全覆盖"，决策条件基本满足。
+- [~] **PB-24 统一管线（2026-08-28 决策：再观察）**：继续双管线（A 方案产品化、B 方案语义验证器），待 IR 覆盖全量语法后（goto/嵌套等已清，命名空间无语言定义）再决策最终走向。**2026-08-30 达成**：`->` 指针成员访问 + `?:` 三元补齐（ir_arrow.nc/ir_expr.nc 一致性 PASS），IR 前端**语法全覆盖**，STAGE_SUMMARY §3.1 对照差距清零——决策条件已满足，待用户定夺最终走向。
 
 ---
 

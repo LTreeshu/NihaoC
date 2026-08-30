@@ -186,6 +186,7 @@ typedef struct {
     /* Lookahead */
     int peek_tok;
     int peek_valid;
+    char *peek_str;             /* string value of peeked token (strdup, permanent) */
     
     /* Preprocessor state */
     int in_comment;
