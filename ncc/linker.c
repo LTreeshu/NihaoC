@@ -1,20 +1,18 @@
 #include "ncc.h"
 
 /* ============================================================
- * Linker — 模块/库管理 + 对象/可执行文件生成（1.0 文档化保留）
+ * Linker — 模块/库管理（1.0 文档化保留）
  *
  * 职责：
  *   - linker_init：初始化链接状态（link_lib_count）
  *   - link_add_library：记录 `link` 指令声明的链接库（name/alias/path）
- *   - linker_generate_object / linker_generate_executable_full：
- *     按 cs->output_type 生成对象/可执行文件
  *
  * 现状（1.0 定位）：
- *   A 方案产品路径为 parser → C 文本 → tcc（cgen.c），本模块仅被
- *   "直接 native 代码生成"遗留路径（default 后端，parser.c 编译主流程）
- *   使用；产物为 text/data/rodata section 的 raw binary 占位，
- *   非标准 ELF/PE 格式。1.0 不扩展，保持文档化即可；完整链接
- *   能力留待后续（系统链接器或 ELF/PE 实现）。
+ *   A 方案产品路径为 parser → C 文本 → tcc（cgen.c），本模块仅承担
+ *   `link` 指令的库声明收集（stdlib_resolve_link_libraries 消费）；
+ *   实际链接由 tcc 完成。早期"直接 native 代码生成"遗留路径
+ *   （codegen.c 字节发射 + linker_generate_* raw binary 输出）已于
+ *   2026-09-01 删除（见 docs/LEGACY_CODEGEN.md）。
  * ============================================================ */
 
 /* ============================================================
@@ -63,110 +61,5 @@ void link_add_library(CompilerState *cs, char *path, char *alias, char *lib_path
         printf("Linked library: %s (alias: %s)\n",
                lib->name ? lib->name : "(null)",
                lib->alias ? lib->alias : "(none)");
-    }
-}
-
-/* ============================================================
- * Object File Generation
- * ============================================================ */
-
-void linker_generate_object(CompilerState *cs, char *output_file)
-{
-    FILE *fp;
-    Section *sec;
-
-    if (!output_file) return;
-
-    if (cs->verbose) {
-        printf("Generating object file: %s\n", output_file);
-    }
-
-    fp = fopen(output_file, "wb");
-    if (!fp) {
-        nihao_error(cs, "cannot open output file '%s'", output_file);
-        return;
-    }
-
-    /* Write a minimal object file.
-     * A full implementation would generate proper ELF .o or COFF .obj files
-     * with section headers, symbol tables, and relocation entries.
-     *
-     * For now, we write the raw .text section data as a simple binary blob.
-     * This is sufficient for testing the code generation pipeline.
-     */
-
-    sec = cs->codegen.text_section;
-    if (sec && sec->data && sec->data_size > 0) {
-        fwrite(sec->data, 1, sec->data_size, fp);
-    }
-
-    fclose(fp);
-
-    if (cs->verbose) {
-        printf("Object file generated: %d bytes of code\n",
-               sec ? sec->data_size : 0);
-    }
-}
-
-/* ============================================================
- * Executable Generation (Full Link)
- * ============================================================ */
-
-void linker_generate_executable_full(CompilerState *cs, char *output_file)
-{
-    FILE *fp;
-
-    if (!output_file) return;
-
-    if (cs->verbose) {
-        printf("Linking executable: %s\n", output_file);
-        printf("  Modules: %d\n", cs->module_count);
-        printf("  Linked libraries: %d\n", cs->link_lib_count);
-    }
-
-    /* Full executable generation would:
-     * 1. Collect all object files and modules
-     * 2. Resolve external symbols between modules
-     * 3. Process relocations
-     * 4. Lay out sections at final virtual addresses
-     * 5. Generate program headers (ELF) or PE headers
-     * 6. Write the final executable
-     * 7. Set executable permissions
-     *
-     * For now, we generate a raw binary output as a placeholder.
-     * A proper implementation would use system linker (ld) or
-     * implement full ELF/PE format output.
-     */
-
-    fp = fopen(output_file, "wb");
-    if (!fp) {
-        nihao_error(cs, "cannot open output file '%s'", output_file);
-        return;
-    }
-
-    /* Write combined text + data sections */
-    Section *text = cs->codegen.text_section;
-    Section *data = cs->codegen.data_section;
-    Section *rodata = cs->codegen.rodata_section;
-
-    if (text && text->data) {
-        fwrite(text->data, 1, text->data_size, fp);
-    }
-    if (rodata && rodata->data) {
-        fwrite(rodata->data, 1, rodata->data_size, fp);
-    }
-    if (data && data->data) {
-        fwrite(data->data, 1, data->data_size, fp);
-    }
-
-    fclose(fp);
-
-    if (cs->verbose) {
-        int total = (text ? text->data_size : 0)
-                  + (data ? data->data_size : 0)
-                  + (rodata ? rodata->data_size : 0);
-        printf("Executable generated: %d bytes total (raw binary)\n", total);
-        printf("Note: This is a raw binary output, not a proper executable format.\n");
-        printf("      Full ELF/PE support is not yet implemented.\n");
     }
 }

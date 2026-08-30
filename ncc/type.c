@@ -122,28 +122,3 @@ CType *type_array(CompilerState *cs, void *elem_type, int size)
 
     return arr_type;
 }
-
-/* ============================================================
- * Type Checking (Placeholder)
- * ============================================================ */
-
-CType *type_check_statement(CompilerState *cs)
-{
-    /* Placeholder for statement type checking.
-     * A full implementation would:
-     * - Verify expression types match expected types
-     * - Check assignment compatibility
-     * - Validate function call arguments
-     * - Detect type errors before code generation
-     *
-     * For now, we return NULL indicating no type error detected
-     * at this stage (parsing-level type checking is sufficient).
-     */
-
-    /* The actual type check is done during parsing in parse_type,
-     * parse_expression, etc. This function serves as a hook for
-     * deeper semantic analysis passes. */
-    (void)cs;
-
-    return NULL;
-}

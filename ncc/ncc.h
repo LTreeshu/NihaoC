@@ -233,68 +233,6 @@ typedef struct {
 } ParserState;
 
 /* ============================================================
- * Code Generator State
- * ============================================================ */
-
-/* Value on the virtual stack */
-typedef struct {
-    CType *type;
-    unsigned short r;           /* register or VT_CONST */
-    union {
-        int64_t i;
-        double f;
-        void *ptr;
-    } val;
-    int sym;                    /* symbol index */
-} SValue;
-
-/* Code section */
-typedef struct {
-    unsigned char *data;
-    int data_allocated;
-    int data_size;
-    int sh_num;                 /* section number */
-    char name[32];
-    int sh_type;
-    int sh_flags;
-    int sh_addr;
-    int sh_addralign;
-} Section;
-
-typedef struct {
-    CompilerState *cs;
-    
-    /* Output sections */
-    Section *text_section;
-    Section *data_section;
-    Section *bss_section;
-    Section *rodata_section;
-    
-    /* Current code generation state */
-    int ind;                    /* output code index */
-    int loc;                    /* local variable index */
-    Section *cur_text_section;
-    
-    /* Value stack */
-    SValue *vstack;
-    int vstack_size;
-    int vtop;                   /* top of value stack */
-    
-    /* Register allocation */
-    int reg_count;
-    int reg_alloc[8];           /* simple register allocator */
-    
-    /* Relocations */
-    int *relocs;
-    int reloc_count;
-    int reloc_capacity;
-    
-    /* Debug info */
-    int last_line_num;
-    int last_ind;
-} CodeGenState;
-
-/* ============================================================
  * Module System
  * ============================================================ */
 
@@ -344,9 +282,6 @@ struct CompilerState {
     
     /* Parser state */
     ParserState parser;
-    
-    /* Code generator state */
-    CodeGenState codegen;
     
     /* Symbol tables */
     TokenSym **table_ident;
@@ -428,34 +363,13 @@ void parse_declaration(CompilerState *cs);
 void parse_function(CompilerState *cs, Symbol *func_sym);
 void parse_statement(CompilerState *cs);
 void parse_expression(CompilerState *cs);
-void parse_function_full(CompilerState *cs, Symbol *func_sym);
 
 /* irparse.c / ir.c / ir_to_c.c / ir_to_native.c - IR middle layer (backend=ir-*) */
 int ir_compile(CompilerState *cs, const char *filename, int backend, int verbose);
-void parse_statement_full(CompilerState *cs);
-
-/* codegen.c */
-void codegen_init(CompilerState *cs);
-void codegen_optimize(CompilerState *cs);
-void gen_function_prologue(Symbol *sym);
-void gen_function_epilogue(Symbol *sym);
-void gen_function_prologue_full(Symbol *func_sym);
-void gen_function_epilogue_full(Symbol *func_sym);
-void gen_if(void);
-void gen_if_statement(CompilerState *cs);
-void gen_while(void);
-void gen_while_loop(CompilerState *cs);
-void gen_for(void);
-void gen_for_loop(CompilerState *cs);
-void gen_do_while_loop(CompilerState *cs);
-void gen_return(void);
-void gen_return_statement(CompilerState *cs);
 
 /* linker.c */
 void linker_init(CompilerState *cs);
 void link_add_library(CompilerState *cs, char *path, char *alias, char *lib_path);
-void linker_generate_object(CompilerState *cs, char *output_file);
-void linker_generate_executable_full(CompilerState *cs, char *output_file);
 
 /* sym.c */
 Symbol *sym_find(CompilerState *cs, const char *tok_str);
@@ -468,13 +382,11 @@ Symbol *sym_register_builtins(CompilerState *cs);
 /* type.c */
 CType *type_new(CompilerState *cs, TypeKind kind);
 CType *type_array(CompilerState *cs, void *elem_type, int size);
-CType *type_check_statement(CompilerState *cs);
 
 /* vis.c */
 void visibility_init(CompilerState *cs);
 void vis_scope_enter(CompilerState *cs);
 void vis_scope_exit(CompilerState *cs);
-void verify_types(CompilerState *cs);
 int vis_is_pointer_type(CType *t);
 int vis_check_transfer(Visibility src, Visibility dst);
 void vis_update_source(Visibility src, Visibility dst, Symbol *src_sym);

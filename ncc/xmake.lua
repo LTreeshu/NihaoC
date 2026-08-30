@@ -62,7 +62,7 @@ end
 target("ncc")
     set_kind("binary")
     set_targetdir("$(builddir)")
-    add_files("ncc.c", "lexer.c", "parser.c", "codegen.c", "linker.c",
+    add_files("ncc.c", "lexer.c", "parser.c", "linker.c",
               "module.c", "stdlib.c", "sym.c", "type.c", "vis.c", "cgen.c",
               "native.c", "ir.c", "irparse.c", "ir_to_c.c",
               "ir_backend.c", "ir_x86_64.c", "ir_riscv64.c", "ir_arm64.c", "ir_loongarch64.c")

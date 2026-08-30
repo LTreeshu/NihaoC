@@ -159,9 +159,6 @@ static CompilerState *nihao_new(void)
     cs->parser.cs = cs;
     cs->parser.lex = NULL;
 
-    /* Setup code generator state pointer */
-    cs->codegen.cs = cs;
-
     return cs;
 }
 
@@ -496,7 +493,6 @@ static int compile_file(CompilerState *cs, const char *filename)
 
     /* Initialize subsystems */
     parser_init(cs);
-    codegen_init(cs);
     visibility_init(cs);
     linker_init(cs);
     stdlib_register_all(cs);
