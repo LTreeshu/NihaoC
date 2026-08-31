@@ -1,4 +1,4 @@
-# NihaoC 阶段总结（2026-08-30）
+# NihaoC 阶段总结（2026-08-30 / 更新至 2026-09-01）
 
 > 会话恢复入口：读本文件 + `TODO.md` + `docs/BNF.md`。最后提交见 `git log -1`。
 > 2026-08-29 起仓库分支化：`main` 产品主干 / `PA` A 方案 / `PB` B 方案（见 `docs/GIT_CONVENTIONS.md`）；B 方案开发在 `PB` 分支进行。
@@ -46,7 +46,7 @@
 | PB-20 | **arm64 / riscv64 / loongarch64 后端**（四架构收官） | 汇编验证 |
 | PB-23 | **CLI debug --ir（8/18：dump 三地址码 + 指令名表）**、**CLI 完善（8/28：init 模板对齐当前语法 + 错误信息中文化）** | — |
 
-**回归扩容（2026-08-13/14/18/19）**：IR_SUBSET 9→25（批量对比发现法修复 3 个全量真 bug：跨行后缀 ++ 误吃 / multi-decl init 残留 / 动态字符串池寻址）。**2.0 阶段 1（2026-08-31）**：IR_SUBSET 26（+ir_ptr2 类型化指针），Windows 全矩阵 31 用例一致性全 PASS + WSL Linux ir-c 实测一致。
+**回归扩容（2026-08-13/14/18/19）**：IR_SUBSET 9→25（批量对比发现法修复 3 个全量真 bug：跨行后缀 ++ 误吃 / multi-decl init 残留 / 动态字符串池寻址）。**2.0 阶段 1（2026-08-31）**：IR_SUBSET 26（+ir_ptr2 类型化指针），Windows 全矩阵 31 用例一致性全 PASS + WSL Linux ir-c 实测一致。**代码卫生（2026-09-01）**：早期直通后端 codegen.c 全链删除（-980 行，parser→字节发射→linker raw binary 的遗留死代码；归档 docs/LEGACY_CODEGEN.md），四后端回归 0 FAIL 基线不变。
 
 **IR 数据模型**：8 字节槽（vreg），vreg_type 标记 double；变量 vtype 编码（0=i64 1=double 2=i8 3=i16 4=i32 5=u8 6=u16 7=u32 8=f32）；聚合=成员槽（嵌套递归 mslots）；ir_coerce 统一目标类型协调（ITOD/DTOI/TRUNC/FTRUNC）。
 

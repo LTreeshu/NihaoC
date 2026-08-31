@@ -14,7 +14,7 @@
 | **2.0** | B（irparse.c → IR → 多后端） | 下一代：平台中立 IR、多架构汇编、可优化 | 持续演进 → 就绪后接管 |
 
 两条线**共享**：lexer.c / token.h / ncc.h / sym.c / type.c / vis.c / stdlib.c / linker.c / module.c 与测试框架（xmake.lua）。
-两条线**独占**：A=parser.c/codegen.c/cgen.c/native.c；B=irparse.c/ir.c/ir_to_c.c/ir_backend.c/ir_x86_64.c/ir_riscv64.c/ir_arm64.c/ir_loongarch64.c。
+两条线**独占**：A=parser.c/cgen.c/native.c；B=irparse.c/ir.c/ir_to_c.c/ir_backend.c/ir_x86_64.c/ir_riscv64.c/ir_arm64.c/ir_loongarch64.c。
 
 ---
 
@@ -32,7 +32,8 @@
 - [x] **CLI 完善收尾**（8/30）：`debug` 子命令 A 方案视角核查通过（`--ir` 正常输出 IR 视图）；`-run` Windows 报错文案明确；错误消息"外壳中文 + 正文英文"符合 1.0 定位
 - [x] **构建单一入口确认**（8/30）：xmake 唯一构建入口；Makefile 标 LEGACY 且 test 目标已删除，21 个旧语法用例（`const main()` 等）随 test/ 目录清理（git rm）
 - [x] **P3 卫生**（8/30）：test/ 生成二进制（a.out / a.out.c）清理；codegen.c（507 行）死代码面评估——`parse_function_full`/`parse_statement_full`/`gen_function_prologue_full`/`gen_if_statement`/`gen_while_loop` 无外部调用，`type_check_statement` 仅被 `parse_function_full` 引用，全文件无对外入口（现役路径为 main → cgen.c/native.c）；与 cgen.c 职责边界：codegen=遗留全量生成器、cgen=现役生成器，**1.0 不重构，仅记录**
-- [ ] **linker.c 职责注释**（当前仅 default 后端使用，1.0 文档化即可）
+- [x] **P3 卫生落实**（9/1）：上述 codegen.c 死代码面已落地清理（-980 行，见 docs/LEGACY_CODEGEN.md）；A 方案独占 = parser.c/cgen.c/native.c
+- [x] **linker.c 职责注释**（9/1）：现仅承担 `link` 库声明收集（linker_init/link_add_library），generate_* 已随 codegen 链删除，头部注释更新
 
 ### 1.3 发布准备
 

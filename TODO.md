@@ -34,7 +34,7 @@ ncc/
 │   ├── sym.c / type.c / vis.c  符号表 / 类型 / 可见性(存储期)分析
 │   └── stdlib.c                 内置库
 ├── 后端（4 种可切换，-backend=）
-│   ├── codegen.c / cgen.c       C 文本生成（默认后端，外部 tcc 编译）
+│   ├── cgen.c                     C 文本生成（默认后端，外部 tcc 编译）
 │   ├── native.c                 libtcc 进程内编译并执行/生成可执行文件
 │   └── ir.c / ir.h / ir_to_c.c / ir_to_native.c
 │                               IR 中间层（三地址码）：IR→C、IR→x86-64 汇编
@@ -62,7 +62,7 @@ ncc/
   - `ir_to_native.c`：函数无显式 `return`（如 main 隐式返回）时 IR 无 IR_RET，生成代码缺 `leave; ret` 导致执行流坠落 → 函数尾补隐式返回；
   - `ir_to_c.c`：为用户函数生成前置原型，消除"调用先于定义"的隐式声明。
   - 验证：hello.nc 四后端（c/native/ir-c/ir-native）输出一致；13/13 回归通过；调用先于定义场景双后端通过。
-- [ ] **统一后端管线**：当前存在"parser→C 文本"与"irparse→IR→C/asm"两条并行管线，需决策最终走向——若以 IR 为长期架构，则 parser.c 逐步替换为 irparse.c 的全量版本，避免三套 C 生成（codegen.c / cgen.c / ir_to_c.c）长期并存。
+- [ ] **统一后端管线**：当前存在"parser→C 文本"与"irparse→IR→C/asm"两条并行管线，需决策最终走向——若以 IR 为长期架构，则 parser.c 逐步替换为 irparse.c 的全量版本，避免两套 C 生成（cgen.c / ir_to_c.c）长期并存。（早期第三套 codegen.c 直通后端已于 2026-09-01 删除，见 docs/LEGACY_CODEGEN.md）
 - [~] **IR 层数据模型扩展**：浮点(f64/x87+riscv D)、64 位整型、struct(含 sret 返回/参数展开)、数组下标、指针运算、位运算、字节读写(LOAD8/STORE8)、.() 解引用均已覆盖（PB-1/3/4/13/14/16/18 + 位域 + 动态字符串）。struct 整体赋值拷贝（2026-08-19 完成：b = a 逐成员 MOV，union 1 槽）。**嵌套 struct（2026-08-19 完成）**：IrAggType 加 mtype/moff/mslots——成员类型递归解析、agg_compute_offsets 递归算偏移（union=1 槽）、链式成员访问 l.a.x（读/写/复合/位域）、整体赋值按 mslots 展开——ir_nested.nc IR_SUBSET 四后端一致。**嵌套初始化列表（2026-08-26 完成）**：IR ir_agg_init 递归（base+moff[k] 槽起点）+ 全量 parse_init_list 递归。**f32 严格宽度（2026-08-20 完成）**：IR_FTRUNC 存储截断（x86 fstps/flds、riscv/loongarch fcvt.s.d、arm64 fcvt s0,d0）。**union 嵌套（2026-08-27 完成）**：mslots=最大成员槽数（防嵌套链式访问越界）。**✅ 数据模型余项全部清零**。
 - [ ] **IR native 后端寄存器分配**：`ir_to_native.c` 目前虚拟寄存器全部映射为 rbp 栈槽（无寄存器分配），性能与调用约定（Windows x64 shadow space / SysV）需完善，并支持浮点调用。
 
@@ -84,7 +84,7 @@ ncc/
 ### P3 — 代码卫生
 
 - [ ] 清理 `test/` 下的生成二进制（f1b、f4 等），改为构建目录输出。
-- [ ] 评估 codegen.c（旧）与 cgen.c / ir_to_c.c 的重复度，逐步收敛。
+- [x] **收敛后端生成器（2026-09-01 完成）**：codegen.c（旧直通后端）已删除，仅存 cgen.c（parser→C）与 ir_to_c.c（IR→C）双生成器；设计归档见 docs/LEGACY_CODEGEN.md。
 - [ ] linker.c 与后端的关系梳理（当前仅 default 后端使用）。
 - [x] 根目录 `docs/archive/Chinese.md.bak`（2026-08-20 用户确认后删除）。
 
