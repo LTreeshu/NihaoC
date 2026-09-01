@@ -492,7 +492,9 @@ while var1 += 1 {
     is 0..50 {
         continue
     }
-    break
+    is _ {
+        break
+    }
 }
 ```
 
@@ -512,6 +514,112 @@ loop:
 i = i + 1
 if i < 3 {
     goto loop        // 跳转到标签（先定义或后定义均可，函数内唯一）
+}
+```
+
+### 6.1 模式匹配（`is` 子句）
+
+`is` 子句配合 `while` 循环使用，对循环条件表达式的值（隐式存储于 `__is_val`）进行模式匹配。`do` 不支持 `is`，因为 `do` 先执行块再判断条件，`__is_val` 的语义容易产生混乱。
+
+#### 语法
+
+```bnf
+<is-clause>      ::= "is" <pattern> <block-stmt>
+
+<pattern>        ::= "_"                                (* 通配符 *)
+                   | <int-literal>                      (* 整数字面量 *)
+                   | "-" <int-literal>                  (* 负整数字面量 *)
+                   | <int-literal> ".." <int-literal>   (* 闭区间范围 *)
+                   | <enum-variant>                     (* 枚举变体 *)
+                   | <visibility-enum>                  (* 可见性枚举 *)
+                   | <struct-destructure>               (* 结构体解构 — 预留 *)
+                   | <adt-destructure>                  (* ADT 变体解构 — 预留 *)
+                   | <identifier>                       (* 变量绑定 *)
+```
+
+#### 模式语义
+
+| 模式 | 匹配条件 | 绑定 | 示例 |
+|------|----------|------|------|
+| `_` | 总是匹配 | 无 | `is _ { break }` |
+| `<int>` | `__is_val == N` | 无 | `is 0 { break }` |
+| `-<int>` | `__is_val == -N` | 无 | `is -1 { break }` |
+| `lo..hi` | `__is_val >= lo && __is_val <= hi` | 无 | `is 0..50 { continue }` |
+| `<enum-variant>` | `__is_val == VARIANT_VAL` | 无 | `is RED { ... }` |
+| `<vis-enum>` | `visof == NH_*` | 无 | `is _flow { ... }` |
+| `<identifier>` | 总是匹配 | 绑定值到新变量 | `is x { printf(x) }` |
+| `Struct(f1, f2)` | 类型匹配 + 字段解构 | 绑定各字段 | `is Point(x, y) { ... }` |
+| `Variant(pat)` | ADT tag 匹配 + 子模式 | 绑定载荷 | `is Some(v) { ... }` |
+
+#### 语义规则
+
+- **R1 — `__is_val` 类型**：等于 `while` 条件表达式的类型。
+- **R2 — 变量绑定作用域**：限于 `is-clause` 的 `block-stmt` 内部。
+- **R3 — 结构体解构字段匹配**：支持按位置、具名（`.field`）、忽略（`_`）、混合嵌套。
+- **R4 — ADT 变体匹配（未来）**：tag 检查 + 载荷绑定。
+
+#### 标识符消歧
+
+裸标识符若为已知枚举变体（编译器符号表可查）则按值匹配，否则视为变量绑定。
+
+#### 匹配顺序
+
+多个 `is-clause` 按源码顺序求值，首个匹配者执行（无 fallthrough）。
+
+#### 示例
+
+**枚举匹配：**
+
+```nihao
+Color enum { RED, GREEN, BLUE }
+
+c Color = RED
+while c {
+    is RED {
+        puts("red")
+    }
+    is GREEN {
+        puts("green")
+    }
+    is _ {
+        break
+    }
+}
+```
+
+**结构体解构（`__is_val` 为结构体值）：**
+
+```nihao
+Point struct { x i32; y i32 }
+
+// while 条件返回 Point，__is_val 即为该结构体
+while get_next_point() {
+    is Point(x, y) {
+        // x = __is_val.x, y = __is_val.y（隐式解构绑定）
+        printf("x=%d y=%d\n", x, y)
+    }
+    is _ {
+        break
+    }
+}
+```
+
+**ADT 变体解构（未来语法，需语言先支持带载荷枚举）：**
+
+```nihao
+(* 未来语法 — Option 为带载荷的枚举，当前不存在 *)
+Option enum { Some(i32), None }
+
+opt Option = Some(42)
+while opt {
+    is Some(v) {
+        // 匹配 Some 变体，将载荷绑定到 v
+        printf("got %d\n", v)
+        opt = None
+    }
+    is None {
+        break
+    }
 }
 ```
 
@@ -1186,10 +1294,18 @@ func invalid() {
 ```nihao
 func debug_vis(ptr void) {
     while visof(ptr) {
-        is _flow => puts("动态指针")
-        is _static => puts("静态指针")
-        is _var => puts("可变借用")
-        is _const => puts("只读借用")
+        is _flow {
+            puts("动态指针")
+        }
+        is _static {
+            puts("静态指针")
+        }
+        is _var {
+            puts("可变借用")
+        }
+        is _const {
+            puts("只读借用")
+        }
         break
     }
 }

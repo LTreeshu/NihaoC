@@ -81,7 +81,6 @@
 - `&` – address‑of operator
 - `=` – assignment operator
 - `?=` – safe assignment operator (with pointer checking)
-- `=>` – fat arrow: single‑statement form of `is <pattern> => <statement>`
 - `.` – struct/union member access
 - `.()` – void pointer dereference
 - `.(type)` – typed dereference (with built‑in out‑of‑bounds check)

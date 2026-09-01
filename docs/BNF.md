@@ -78,7 +78,6 @@
 > 说明：
 > - `.()`：指针解引用操作（`.()` 内可写目标类型，也可省略）。
 > - `->`：指针成员访问（`p->field`，等价 `(*p).field`；8/19 起 A 方案与 IR 层双线支持）。
-> - `=>`：胖箭头，`is <pattern> => <statement>` 单语句模式匹配（8/30 新增，TOK_FAT_ARROW）。
 > - `?.` / `?(`：安全成员访问 / 安全解引用（带可见性/边界检查）。
 > - `?=`：安全赋值。
 > - `..`：数组/切片范围 `[start..end]`。
@@ -267,7 +266,6 @@
 <statement>      ::= <var-decl> | <assign-stmt> | <if-stmt> | <switch-stmt>
                    | <loop-stmt> | <return-stmt> | <break-stmt> | <continue-stmt>
                    | <goto-stmt> | <block-stmt> | <expr-stmt> | <empty-stmt>
-                   | <is-stmt>
 
 <assign-stmt>    ::= <unary-expr> <assign-op> <expr>
 
@@ -288,12 +286,26 @@
 <while-stmt>     ::= "while" <expr> <block-stmt>
                    | "while" <expr> <block-stmt> { <is-clause> }    (* 带模式匹配 *)
 
-<do-stmt>        ::= "do" <expr> <block-stmt> { <is-clause> }
+<do-stmt>        ::= "do" <expr> <block-stmt>
 
 <is-clause>      ::= "is" <pattern> <block-stmt>
-<pattern>        ::= <expr> | <int-literal> ".." <int-literal> | <visibility-enum>
 
-<is-stmt>        ::= "is" <pattern> "=>" <statement>      (* 单语句模式匹配（如 while 内） *)
+<pattern>        ::= "_"                                (* 通配符 *)
+                   | <int-literal>                      (* 整数字面量 *)
+                   | "-" <int-literal>                  (* 负整数字面量 *)
+                   | <int-literal> ".." <int-literal>   (* 闭区间范围 *)
+                   | <enum-variant>                     (* 枚举变体 *)
+                   | <visibility-enum>                  (* 可见性枚举 *)
+                   | <struct-destructure>               (* 结构体解构 *)
+                   | <adt-destructure>                  (* ADT 变体解构 — 预留 *)
+                   | <identifier>                       (* 变量绑定 *)
+
+<struct-destructure> ::= <struct-name> "(" <field-pattern> { "," <field-pattern> } ")"
+<field-pattern>    ::= <identifier>                    (* 按位置绑定字段 *)
+                     | "." <identifier>                (* 具名字段绑定 *)
+                     | "_"                             (* 忽略字段 *)
+
+<adt-destructure>  ::= <variant-name> [ "(" <pattern> { "," <pattern> } ")" ]
 
 <return-stmt>    ::= "return" [ <expr> ]
 <break-stmt>     ::= "break"
@@ -306,7 +318,11 @@
 ```
 
 > 说明：
-> - `is` 模式匹配用于 `while` / `do` 循环体内，如 `is -1 { break }`、`is 0..50 { continue }`。
+> - `is` 模式匹配**仅**用于 `while` 循环体内，不可独立使用。循环条件表达式的值赋给隐式变量 `__is_val`，`is` 对其进行匹配。`do` 不支持 `is`，因为 `do` 先执行块再判断条件，`__is_val` 的语义容易产生混乱。
+> - 合法模式：通配符 `_`、整数字面量（含负整数）、闭区间范围 `lo..hi`、枚举变体、可见性枚举（`_flow` 等）、结构体解构（预留）、ADT 变体解构（预留）、标识符变量绑定。
+> - 标识符消歧：裸标识符若为已知枚举变体（编译器符号表可查）则按值匹配，否则视为变量绑定。
+> - 匹配顺序：多个 `is-clause` 按源码顺序求值，首个匹配者执行（无 fallthrough）。
+> - 结构体解构和 ADT 变体解构为预留语法，待类型系统支持后实现。
 > - `while var1 += 1 { ... }`：循环条件允许赋值表达式。
 > - `do <expr> { ... }`：条件在块外（求值后执行块），区别于 C 的 do-while。
 > - 标签 `name:` 与 goto 配套：函数内先定义或后定义均可（跳转目标延迟解析）；IR 与全量实现一致（2026-08-19）。
@@ -405,7 +421,6 @@
 | 指针成员访问 `p->field` | §5 postfix |
 | 安全赋值 `?=` | §5 assign |
 | 范围 `..` | §5 postfix |
-| `is pat => stmt` 单语句匹配（`=>`） | §1.4 / §6 |
 | 多变量声明 `var {a=0,b=1} i8` | §4 |
 | 复合赋值 `+=` 等 | §5 |
 | 三元 `?:`、逻辑/位运算 | §5 |

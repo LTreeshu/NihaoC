@@ -501,7 +501,9 @@ while var1 += 1 {
     is 0..50 {
         continue
     }
-    break
+    is _ {
+        break
+    }
 }
 ```
 
@@ -521,6 +523,112 @@ loop:
 i = i + 1
 if i < 3 {
     goto loop        // jump to label (defined before or after, unique per function)
+}
+```
+
+### 6.1 Pattern Matching (`is` Clauses)
+
+`is` clauses are used with `while` loops to pattern-match against the loop condition expression's value (implicitly stored in `__is_val`). `do` loops do not support `is` — `do` executes the body before evaluating the condition, so `__is_val` semantics would be confusing.
+
+#### Syntax
+
+```bnf
+<is-clause>      ::= "is" <pattern> <block-stmt>
+
+<pattern>        ::= "_"                                (* wildcard *)
+                   | <int-literal>                      (* integer literal *)
+                   | "-" <int-literal>                  (* negative integer literal *)
+                   | <int-literal> ".." <int-literal>   (* closed range *)
+                   | <enum-variant>                     (* enum variant *)
+                   | <visibility-enum>                  (* visibility enum *)
+                   | <struct-destructure>               (* struct destructuring — reserved *)
+                   | <adt-destructure>                  (* ADT variant destructuring — reserved *)
+                   | <identifier>                       (* variable binding *)
+```
+
+#### Pattern Semantics
+
+| Pattern | Match condition | Binding | Example |
+|---------|----------------|---------|---------|
+| `_` | always matches | none | `is _ { break }` |
+| `<int>` | `__is_val == N` | none | `is 0 { break }` |
+| `-<int>` | `__is_val == -N` | none | `is -1 { break }` |
+| `lo..hi` | `__is_val >= lo && __is_val <= hi` | none | `is 0..50 { continue }` |
+| `<enum-variant>` | `__is_val == VARIANT_VAL` | none | `is RED { ... }` |
+| `<vis-enum>` | `visof == NH_*` | none | `is _flow { ... }` |
+| `<identifier>` | always matches | binds value to new variable | `is x { printf(x) }` |
+| `Struct(f1, f2)` | type match + field destructuring | binds each field | `is Point(x, y) { ... }` |
+| `Variant(pat)` | ADT tag match + sub-pattern | binds payload | `is Some(v) { ... }` |
+
+#### Semantic Rules
+
+- **R1 — `__is_val` type**: equals the type of the `while` condition expression.
+- **R2 — Variable binding scope**: limited to the `is-clause`'s `block-stmt`.
+- **R3 — Struct destructuring field matching**: supports positional, named (`.field`), wildcard (`_`), and mixed/nested.
+- **R4 — ADT variant matching (future)**: tag check + payload binding.
+
+#### Identifier Disambiguation
+
+A bare identifier that is a known enum variant (findable in the compiler symbol table) is matched by value; otherwise it is treated as a variable binding.
+
+#### Match Order
+
+Multiple `is-clause`s are evaluated in source order; the first match executes (no fallthrough).
+
+#### Examples
+
+**Enum matching:**
+
+```nihao
+Color enum { RED, GREEN, BLUE }
+
+c Color = RED
+while c {
+    is RED {
+        puts("red")
+    }
+    is GREEN {
+        puts("green")
+    }
+    is _ {
+        break
+    }
+}
+```
+
+**Struct destructuring (`__is_val` is the struct value):**
+
+```nihao
+Point struct { x i32; y i32 }
+
+// while condition returns Point; __is_val is the struct itself
+while get_next_point() {
+    is Point(x, y) {
+        // x = __is_val.x, y = __is_val.y (implicit destructuring binding)
+        printf("x=%d y=%d\n", x, y)
+    }
+    is _ {
+        break
+    }
+}
+```
+
+**ADT variant destructuring (future syntax — requires language support for payload-carrying enums):**
+
+```nihao
+(* Future syntax — Option is an enum with payload; does not exist yet *)
+Option enum { Some(i32), None }
+
+opt Option = Some(42)
+while opt {
+    is Some(v) {
+        // match Some variant, bind payload to v
+        printf("got %d\n", v)
+        opt = None
+    }
+    is None {
+        break
+    }
 }
 ```
 
@@ -1195,10 +1303,18 @@ Runtime visibility checks (in debug mode) can be queried via `visof`:
 ```nihao
 func debug_vis(ptr void) {
     while visof(ptr) {
-        is _flow => puts("dynamic pointer")
-        is _static => puts("static pointer")
-        is _var => puts("mutable borrow")
-        is _const => puts("read-only borrow")
+        is _flow {
+            puts("dynamic pointer")
+        }
+        is _static {
+            puts("static pointer")
+        }
+        is _var {
+            puts("mutable borrow")
+        }
+        is _const {
+            puts("read-only borrow")
+        }
         break
     }
 }
@@ -1442,10 +1558,10 @@ All of it is enforced statically — no runtime garbage collector, no runtime co
 | ------------- | ------ |
 | Types         | `void` `char` `string` `bool` `i8` `i16` `i32` `i64` `u8` `u16` `u32` `u64` `f32` `f64` `fx32` `fx64` `short` `int` `long` `float` `double` |
 | Storage/visibility | `const` `flow` `static` `var` `_undef` `_const` `_flow` `_static` `_var` |
-| Functions     | `func` `is` `return` `break` `continue` `goto` |
+| Functions     | `func` `return` `break` `continue` `goto` |
 | Aggregates    | `struct` `union` `enum` `alias` |
 | Modules       | `module` `use` `link` `linkas` `as` |
-| Control       | `if` `else` `switch` `case` `default` `for` `do` `while` |
+| Control       | `if` `else` `switch` `case` `default` `for` `do` `while` `is` |
 | Compile-time  | `cooking` `align` `static_assert` |
 | Introspection | `sizeof` `typeof` `alignof` `offsetof` `bitoffsetof` `holdof` `structof` `unionof` `visof` `malloc` |
 | Literals      | `true` `false` |
