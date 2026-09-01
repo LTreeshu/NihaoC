@@ -952,35 +952,33 @@ Every variable declaration must specify exactly one of the four storage-duration
 
 | Attribute | Storage | Mutability | Scope         | Typical use               |
 | --------- | ------- | ---------- | ------------- | ------------------------- |
-| `const`   | static  | immutable  | global/module | constants, read-only config |
+| `const`   | module-level static / block-level automatic ¹ | immutable  | module or enclosing block | constants, read-only borrows |
 | `static`  | static  | mutable    | module-level  | module-shared state       |
 | `flow`    | dynamic | mutable    | function/block | dynamic allocation (owns memory) |
 | `var`     | automatic | mutable  | block-level   | local variables (automatic storage) |
 
 ```nihao
-const MAX_SIZE i32 = 1024     // static storage, globally read-only
+const MAX_SIZE i32 = 1024     // module-level static storage, globally read-only
 static counter i32 = 0        // static storage, module-mutable
 flow dynamic_data i32 = 42    // dynamic storage, function-mutable
 var local_temp i32 = 100      // automatic storage, block-mutable
 ```
 
+> ¹ `const`'s storage duration depends on where it is declared: module-level declarations have static storage duration (live for the program's lifetime); block-level declarations have automatic storage duration (live only while the block is active). The read-only semantics are identical in both cases.
+
 ---
 
-### 11.2 Storage-Duration Compatibility Matrix
+### 11.2 Storage Duration and Assignment Safety Principle
 
-On assignment, **the target's storage duration must be no shorter than the source's** (target lifetime ≥ source lifetime); otherwise a dangling pointer may result. The compiler performs static checks according to the following matrix:
+The storage durations of the four attributes, from longest to shortest:
 
-| Source \ Target | `const` | `static` | `flow` | `var` |
-| --------------- | ------- | -------- | ------ | ----- |
-| `const`         | safe    | error    | error  | error |
-| `static`        | safe    | safe     | error  | error |
-| `flow`          | safe    | error    | safe   | error |
-| `var`           | safe    | error    | error  | safe  |
+    static (program lifetime) > flow (dynamic) > const = var (automatic/block-level)
 
-- **safe**: assignment allowed; the compiler's lifetime check passes.
-- **error**: the target lifetime may be shorter than the source; assignment is forbidden (compile error).
+When `const` is declared at module level it has static storage duration (same tier as `static`); when declared at block level it has automatic storage duration (same tier as `var`).
 
-For example, a `flow` pointer cannot be assigned to a `static` pointer, because `flow` may be destroyed at function exit while `static` needs to hold it long-term. `static` may be assigned to `const` (read-only borrow) but not to `var` or `flow` (avoiding mutable borrows or transfers that mismatch lifetimes).
+On assignment, **the target's storage duration must be no shorter than the source's** (target lifetime ≥ source lifetime); otherwise a dangling pointer may result.
+
+For the complete compatibility rules (including ownership and borrowing semantics), see the Combined Transfer Matrix in §12.2.
 
 ---
 
@@ -991,34 +989,11 @@ Pointer transfer is governed not only by storage duration but also by **ownershi
 - **Owning pointers**: `flow` (dynamic) and `static` (static) — they manage the pointed-to data (freeing or persisting it).
 - **Borrowing pointers**: `var` (mutable borrow) and `const` (read-only borrow) — they do not own the data; their lifetime is bounded by the source pointer.
 
-### 12.1 Core Transfer Rules (for `void` pointers)
+### 12.1 Combined Transfer Matrix
 
-For an owning `flow` pointer, transfers to other attributes follow these rules (source-state changes):
+All pointer assignment/transfer compatibility is governed by the following 4×4 matrix. Each cell reads: `allowed/forbidden (source-state change)`.
 
-| Source → Target (both `void`) | Semantics    | Source state |
-| ----------------------------- | ------------ | ------------ |
-| `flow` → `var`                | mutable borrow | frozen      |
-| `flow` → `const`              | read-only borrow | frozen    |
-| `flow` → `flow`               | ownership transfer | invalidated |
-| `flow` → `static`             | **forbidden** | —            |
-| `var` → `var`                 | mutable borrow | frozen      |
-| `var` → `const`               | read-only borrow | frozen    |
-| `var` → `flow`                | **forbidden** | —            |
-| `const` → `const`             | read-only borrow | stays valid |
-| `const` → `var`               | **forbidden** | —            |
-| `const` → `flow`              | **forbidden** | —            |
-| `static` → `const`            | read-only borrow | stays valid |
-| `static` → `static`           | shared reference | stays valid |
-| `static` → `var`              | **forbidden** | —            |
-| `static` → `flow`             | **forbidden** | —            |
-
-> **frozen**: the source pointer may not be read or written while borrowed (like Rust's immutable borrow).
-> **invalidated**: the source pointer may no longer be used (ownership has transferred).
-> **stays valid**: the source remains usable, unchanged.
-
-### 12.2 Combined Transfer Matrix (storage duration + ownership/borrowing)
-
-Merging the storage-duration compatibility matrix with the rules above yields the complete pointer-transfer table. Each cell reads: `allowed/forbidden (source-state change)`.
+#### Combined Transfer Matrix
 
 | Source \ Target | `const`             | `static`           | `flow`              | `var`            |
 | --------------- | ------------------- | ------------------ | ------------------- | ---------------- |
@@ -1029,9 +1004,74 @@ Merging the storage-duration compatibility matrix with the rules above yields th
 
 This table is the basis for the compiler's static analysis, ensuring every pointer operation satisfies both lifetime requirements and ownership/borrowing semantics.
 
+#### Complete Enumeration of Allowed Transfers
+
+The 16 transfer rules derived from the matrix (8 allowed, 8 forbidden), for linear reference:
+
+| Source → Target (both `void`) | Semantics    | Source state |
+| ----------------------------- | ------------ | ------------ |
+| `const` → `const`             | read-only borrow | stays valid |
+| `static` → `const`            | read-only borrow | stays valid |
+| `static` → `static`           | shared reference | stays valid |
+| `flow` → `const`              | read-only borrow | frozen      |
+| `flow` → `flow`               | ownership transfer | invalidated |
+| `flow` → `var`                | mutable borrow | frozen      |
+| `var` → `const`               | read-only borrow | frozen      |
+| `var` → `var`                 | mutable borrow | frozen      |
+| `const` → `var`               | **forbidden** | —           |
+| `const` → `flow`              | **forbidden** | —           |
+| `const` → `static`            | **forbidden** | —           |
+| `flow` → `static`             | **forbidden** | —           |
+| `var` → `flow`                | **forbidden** | —           |
+| `var` → `static`              | **forbidden** | —           |
+| `static` → `var`              | **forbidden** | —           |
+| `static` → `flow`             | **forbidden** | —           |
+
+#### State Legend
+
+> **frozen**: the source pointer may not be read or written while borrowed (like Rust's immutable borrow).
+> **invalidated**: the source pointer may no longer be used (ownership has transferred).
+> **stays valid**: the source remains usable, unchanged.
+
+#### Design Rationale
+
+Each cell in the matrix is determined by two dimensions: storage duration and ownership/borrowing semantics.
+
+**Allowed transfers (8 cells)**:
+
+| Transfer | Semantics | Why allowed |
+|----------|-----------|-------------|
+| `const` → `const` | re-borrow of read-only borrow | read-only promises can chain; source data is never modified |
+| `static` → `const` | read-only borrow of static data | read-only borrow does not modify data; safe; source stays valid |
+| `static` → `static` | shared reference of static data | multiple static pointers can safely point to the same static data |
+| `flow` → `const` | read-only borrow of dynamic data | source frozen during borrow; const does not promise long-term holding; borrow ends within flow's lifetime |
+| `flow` → `flow` | ownership transfer | new owner takes over memory management; source invalidated |
+| `flow` → `var` | mutable borrow of dynamic data | source frozen during borrow; var's scope ends within flow's lifetime |
+| `var` → `const` | read-only re-borrow of mutable borrow | read-only chain does not modify underlying data; source frozen |
+| `var` → `var` | re-borrow of mutable borrow | source frozen; new var gains mutable access but is bound by the original borrow chain |
+
+**Forbidden transfers (8 cells)**:
+
+| Transfer | Why forbidden |
+|----------|--------------|
+| `const` → `var` | const is immutable semantics; var implies mutable borrow, contradicting the read-only promise |
+| `const` → `flow` | const does not own data; flow requires ownership and responsibility for freeing; const cannot transfer ownership it does not have |
+| `const` → `static` | same as above; const cannot transfer ownership to static which requires long-term holding |
+| `flow` → `static` | static promises program-lifetime holding, but flow may be freed on function return, leaving static pointing to freed memory |
+| `var` → `flow` | var is a borrower, not an owner; flow requires ownership; var cannot transfer what it does not own |
+| `var` → `static` | var is a borrower and does not own data; static promises program-lifetime holding; var can neither transfer ownership nor guarantee long-term validity |
+| `static` → `var` | static is module-level data; var's mutable borrow may escape the module scope, creating cross-module mutable aliasing |
+| `static` → `flow` | static is static data; flow will attempt to free on destruction; static data should not be dynamically freed |
+
+#### `func` attribute
+
+`func` is a function return attribute (§7.1.2), not a variable storage duration, and does not participate in this matrix. See §7.3 for the rules governing function return values.
+
+> For the detailed correspondence between the specification and the compiler implementation, see [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md).
+
 ---
 
-## 12.3 Transfer Rules for Function Parameters and Return Values
+## 12.2 Transfer Rules for Function Parameters and Return Values
 
 ### Parameters
 
@@ -1058,6 +1098,10 @@ flow q void = malloc(i32)
 modify(q)    // q frozen (mutable borrow)
 inspect(q)   // q frozen (read-only borrow)
 ```
+
+> **Implementation status**: The current compiler (ncc) parses parameter attribute prefixes but does not enforce the corresponding borrow semantics (parser.c:870–874).
+> All parameters are internally treated as `var` (VIS_DEFAULT). Parameter ownership/borrow checking will be completed in a future release.
+> See [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md) for details.
 
 ### Return values
 
@@ -1288,10 +1332,10 @@ func main() {
 
 #### Compile-time Static Analysis Process
 
-The compiler performs multi-phase static checks on the example to ensure every pointer transfer satisfies the storage-duration compatibility matrix and the ownership/borrowing rules. The analysis flow:
+The compiler performs multi-phase static checks on the example to ensure every pointer transfer satisfies the §12.1 transfer matrix and the ownership/borrowing rules. The analysis flow:
 
 1. **Attribute inference**: annotate every variable and parameter with a storage-duration attribute (`const`/`static`/`flow`/`var`) and an ownership state (owning / borrowing).
-2. **Visibility compatibility check**: per the §11.2 matrix, verify the target's lifetime is not shorter than the source's.
+2. **Visibility compatibility check**: per the §12.1 transfer matrix, verify pointer transfer compatibility.
 3. **Ownership/borrowing rule check**: per the §12.1 transfer rules, verify the source's state change (frozen/invalidated/stays-valid) is legal.
 4. **Scope lifetime inference**: compute each borrowed pointer's active interval, ensuring it does not outlive the source's scope.
 
@@ -1378,7 +1422,7 @@ func safe_patterns() {
 
 NiHao manages three things through the unified attribute system (`const`, `static`, `flow`, `var`):
 
-- **Storage duration** (lifetime): the compatibility matrix prevents dangling pointers.
+- **Storage duration** (lifetime): the §12.1 transfer matrix prevents dangling pointers.
 - **Ownership and borrowing**: transfer rules control pointer state changes (frozen, invalidated, stays-valid).
 - **Scope inference**: the compiler automatically analyzes borrow validity to ensure safety.
 
