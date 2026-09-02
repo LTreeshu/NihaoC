@@ -40,5 +40,13 @@ func main() {
             break
         }
     }
+    /* 通配符模式：is _ 匹配任意 __is_val（恒真），每次循环都进入 */
+    e i32 = 0
+    while e < 3 {
+        e += 1
+        is _ {
+            puts("is wild ok")
+        }
+    }
     return
 }

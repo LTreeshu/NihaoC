@@ -1126,8 +1126,19 @@ static void parse_is_stmt(CompilerState *cs)
      *   is -1 { ... }   /   is 0..50 { ... }   /   is _flow => expr
      * Matches against the implicit __is_val temp (set by while). */
     next_tok(cs);
-    cgen_raw("if (__is_val");
     TokenType t = cur_tok(cs);
+    if (t == TOK_IDENTIFIER && strcmp(cs->parser.lex->tok_str, "_") == 0) {
+        /* 通配符：匹配任意 __is_val（恒真）——文档 pattern 列表含 _ */
+        next_tok(cs);
+        cgen_raw("if (1)");
+        if (cur_tok(cs) == TOK_LBRACE) {
+            parse_statement(cs);
+        } else {
+            nihao_error(cs, "expected block after 'is _'");
+        }
+        return;
+    }
+    cgen_raw("if (__is_val");
     if (t == TOK_MINUS) {
         next_tok(cs);
         if (cur_tok(cs) == TOK_INT_CONST) {
@@ -1172,12 +1183,8 @@ static void parse_is_stmt(CompilerState *cs)
 
     if (cur_tok(cs) == TOK_LBRACE) {
         parse_statement(cs);
-    } else if (cur_tok(cs) == TOK_FAT_ARROW) {
-        /* 单语句形式：is pat => stmt（BNF <is-stmt>）——生成 C 无花括号单语句 */
-        next_tok(cs);
-        parse_statement(cs);
     } else {
-        nihao_error(cs, "expected block or '=>' after 'is' pattern");
+        nihao_error(cs, "expected block after 'is' pattern");
     }
 }
 

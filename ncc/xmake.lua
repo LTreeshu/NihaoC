@@ -312,10 +312,10 @@ task("test")
                 if filt ~= "" and not (stem .. ".nc"):find(filt, 1, true) then
                     goto continue_err
                 end
-                if is_ir then
-                    -- IR 前端暂未实现 M2 静态检查，错误用例对其无意义
+                if is_ir and not stem:startswith("m2") then
+                    -- 非 M2 错误用例：IR 前端尚未实现对应静态检查，跳过
                     skipped = skipped + 1
-                    cprint("  [SKIP] err/%s.nc (IR 前端暂无静态检查)", stem)
+                    cprint("  [SKIP] err/%s.nc (IR 前端暂未覆盖该静态检查)", stem)
                     goto continue_err
                 end
 

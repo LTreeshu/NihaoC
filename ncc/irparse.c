@@ -31,6 +31,82 @@ static int *ve;             /* 数组元素数（0=标量）；数组元素槽 v
 static int *vetyp;          /* 数组元素类型编码（与 vtype 同编码；0=未记录）——元素截断/浮点标记 */
 static int *vty;            /* 变量聚合类型索引（-1=标量/基本数组）；>=0 查 agg_types */
 static int *vvis;           /* 变量可见性/存储期：0=var 1=const 2=flow 3=static 4=undef */
+static int *vstate;        /* M2 借用状态：0=VALID 1=FROZEN 2=INVALID（所有权检查） */
+static int *vborrow_src;   /* 本变量借用的源 vi（-1=无）；作用域退出时解冻源 */
+static int *vptr;          /* 是否指针类（void）：1=是（仅指针类有所有权语义） */
+
+/* 可见性常量（与 cgen 的 enum nihao_vis 对齐）：NH_UNDEF=0,NH_CONST,NH_FLOW,NH_STATIC,NH_VAR */
+#define VIS_VAR   0
+#define VIS_CONST 1
+#define VIS_FLOW  2
+#define VIS_STATIC 3
+#define VIS_UNDEF 4
+
+/* ---------- M2 所有权/借用静态检查（移植自 vis.c，基于 vi 索引） ---------- */
+#define IR_VS_VALID   0
+#define IR_VS_FROZEN  1
+#define IR_VS_INVALID 2
+
+static const char *ir_vis_str(int v)
+{
+    return v == VIS_CONST ? "const" : v == VIS_STATIC ? "static" :
+           v == VIS_FLOW ? "flow" : "var";
+}
+
+/* 转移矩阵：src→dst 是否禁止（1=禁止）。对齐 vis_check_transfer */
+static int ir_vis_transfer(int svis, int dvis)
+{
+    switch (svis) {
+        case VIS_CONST:  return (dvis == VIS_CONST) ? 0 : 1;
+        case VIS_STATIC: return (dvis == VIS_CONST || dvis == VIS_STATIC) ? 0 : 1;
+        case VIS_FLOW:   return (dvis == VIS_CONST || dvis == VIS_FLOW ||
+                                  dvis == VIS_VAR) ? 0 : 1;
+        default:         return (dvis == VIS_CONST || dvis == VIS_VAR) ? 0 : 1; /* var */
+    }
+}
+
+/* 声明/赋值转移检查：dst_vi 接收 src_vi 的所有权 */
+static void ir_vis_check_assign(CompilerState *cs, int dst_vi, int src_vi)
+{
+    if (src_vi < 0 || dst_vi < 0 || src_vi == dst_vi) return;
+    if (!vptr[src_vi]) return;                 /* 仅指针类有所有权语义 */
+    if (vstate[src_vi] == IR_VS_INVALID) {
+        nihao_error(cs, "%s is invalidated (ownership moved); cannot use it",
+                    vn[src_vi]);
+        return;
+    }
+    if (ir_vis_transfer(vvis[src_vi], vvis[dst_vi])) {
+        nihao_error(cs, "cannot assign %s (visibility %s) to %s (%s): "
+                        "target lifetime shorter than source",
+                    vn[src_vi], ir_vis_str(vvis[src_vi]),
+                    vn[dst_vi], ir_vis_str(vvis[dst_vi]));
+        return;
+    }
+    if (vvis[src_vi] == VIS_FLOW) {
+        vstate[src_vi] = (vvis[dst_vi] == VIS_FLOW) ? IR_VS_INVALID : IR_VS_FROZEN;
+    } else if (vvis[src_vi] == VIS_VAR) {
+        if (vvis[dst_vi] == VIS_CONST || vvis[dst_vi] == VIS_VAR)
+            vstate[src_vi] = IR_VS_FROZEN;
+    }
+    if (vstate[src_vi] == IR_VS_FROZEN) vborrow_src[dst_vi] = src_vi;
+}
+
+/* 读检查：所有权已转移（INVALID）则不可用 */
+static void ir_vis_check_usable(CompilerState *cs, int vi)
+{
+    if (vi < 0) return;
+    if (vstate[vi] == IR_VS_INVALID)
+        nihao_error(cs, "%s is invalidated: its ownership has been moved", vn[vi]);
+}
+
+/* 写检查：被活动借用冻结（FROZEN）则不可写 */
+static void ir_vis_check_writable(CompilerState *cs, int vi)
+{
+    if (vi < 0) return;
+    if (vstate[vi] == IR_VS_FROZEN)
+        nihao_error(cs, "%s is frozen by an active borrow (const/var)", vn[vi]);
+    ir_vis_check_usable(cs, vi);
+}
 static int *vtype;          /* 变量数值类型：0=int(默认) 1=double(f64/f32 槽化) */
 static int vn_count, vn_cap;
 
@@ -221,11 +297,6 @@ static int ir_coerce(int vr, int vtype_code)
 }
 
 /* 可见性常量（与 cgen 的 enum nihao_vis 对齐）：NH_UNDEF=0,NH_CONST,NH_FLOW,NH_STATIC,NH_VAR */
-#define VIS_VAR   0
-#define VIS_CONST 1
-#define VIS_FLOW  2
-#define VIS_STATIC 3
-#define VIS_UNDEF 4
 
 /* 前向声明（ir_agg_decl 在 var_declare/ir_expr 定义之前调用，
  * 隐式声明会导致 x64 指针参数截断，必须显式声明） */
@@ -438,6 +509,9 @@ static void var_reset(void)
         vetyp = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vty = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vvis = nihao_malloc(g_cs, vn_cap * sizeof(int));
+        vstate = nihao_malloc(g_cs, vn_cap * sizeof(int));
+        vborrow_src = nihao_malloc(g_cs, vn_cap * sizeof(int));
+        vptr = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vtype = nihao_malloc(g_cs, vn_cap * sizeof(int));
     }
 }
@@ -476,6 +550,9 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
         vetyp = nihao_realloc(g_cs, vetyp, vn_cap * sizeof(int));
         vty = nihao_realloc(g_cs, vty, vn_cap * sizeof(int));
         vvis = nihao_realloc(g_cs, vvis, vn_cap * sizeof(int));
+        vstate = nihao_realloc(g_cs, vstate, vn_cap * sizeof(int));
+        vborrow_src = nihao_realloc(g_cs, vborrow_src, vn_cap * sizeof(int));
+        vptr = nihao_realloc(g_cs, vptr, vn_cap * sizeof(int));
         vtype = nihao_realloc(g_cs, vtype, vn_cap * sizeof(int));
     }
     vn[vn_count] = name;
@@ -1066,6 +1143,7 @@ static int ir_primary(CompilerState *cs)
              * 注意 DOT_PAREN 已含 '('——token 流 p, DOT_PAREN, ')'） */
             next_tok(cs);
             expect(cs, TOK_RPAREN);
+            ir_vis_check_usable(cs, vi);   /* M2：读前检查所有权是否已转移（use-after-move） */
             int addr = ir_new_vreg(F);
             ir_emit(F, IR_MOV, addr, vt[vi], -1, 0);    /* p 槽值 = 目标地址（MOV 勿 LOAD） */
             int vr = ir_new_vreg(F);
@@ -1808,12 +1886,16 @@ static void ir_multi_decl(CompilerState *cs, int vis)
 static void ir_block(CompilerState *cs)
 {
     expect(cs, TOK_LBRACE);
+    int scope_start = vn_count;   /* 本块内新声明的变量起点（作用域退出解冻借用源） */
     skip_newlines(cs);
     while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF) {
         ir_stmt(cs);
         skip_newlines(cs);
     }
     expect(cs, TOK_RBRACE);
+    /* 解冻：本块内声明的借用变量的源（借用随作用域结束失效，对齐 vis_unfreeze_borrows） */
+    for (int vi = scope_start; vi < vn_count; vi++)
+        if (vborrow_src[vi] >= 0) vstate[vborrow_src[vi]] = IR_VS_VALID;
     skip_newlines(cs);
 }
 
@@ -2082,7 +2164,10 @@ static void ir_stmt(CompilerState *cs)
         }
         int l_done = ir_new_label(F);
         TokenType pt = cur_tok(cs);
-        if (pt == TOK_MINUS) {
+        if (pt == TOK_IDENTIFIER && strcmp(cs->parser.lex->tok_str, "_") == 0) {
+            /* 通配符：匹配任意 is_val（恒真），不 emit 条件跳转（文档 pattern 列表含 _） */
+            next_tok(cs);
+        } else if (pt == TOK_MINUS) {
             next_tok(cs);
             if (cur_tok(cs) == TOK_INT_CONST) {
                 long long v = -(long long)cs->parser.lex->tok_val.i;
@@ -2194,7 +2279,7 @@ static void ir_stmt(CompilerState *cs)
         } else {
             /* 规范 2026-09-01 移除 `=>` 箭头形式：is 仅块形式，且只能用于 while 体内
              * （<is-stmt> 从 <statement> 删除，do 不支持 is）。其余 token 一律报错，
-             * 避免静默接受已废弃语法。A 方案（parser.c，已冻结）仍保留 =>，属已知分歧。 */
+             * 避免静默接受已废弃语法。c/native（parser.c）与 IR（irparse.c）两前端均已对齐。 */
             nihao_error(cs, "ir: 'is' pattern must be followed by a block");
         }
         ir_emit(F, IR_LABEL, -1, -1, -1, 0);
@@ -2512,6 +2597,7 @@ static void ir_stmt(CompilerState *cs)
                 skip_newlines(cs);
                 return;
             }
+            ir_vis_check_writable(cs, vi);  /* M2：写前检查是否被活动借用冻结 */
             next_tok(cs);           /* .( */
             expect(cs, TOK_RPAREN);
             expect(cs, TOK_ASSIGN);
@@ -2761,7 +2847,14 @@ static void ir_stmt(CompilerState *cs)
                 expect(cs, TOK_RBRACKET);
             }
             expect(cs, TOK_ASSIGN); /* 消费 =（expect 已推进） */
+            int src_vi = -1;
+            if (cur_tok(cs) == TOK_IDENTIFIER) {
+                int sv = var_find(cs->parser.lex->tok_str);
+                if (sv >= 0) src_vi = sv;   /* RHS 是裸变量引用 → 走所有权检查 */
+            }
             int vi = var_declare(name, elems, -1, decl_vis);
+            if (nt == TOK_VOID) vptr[vi] = 1;   /* 指针类标记（仅 void 触发所有权语义） */
+            if (src_vi >= 0) ir_vis_check_assign(cs, vi, src_vi);  /* M2 转移检查 */
             if (elems > 0) {
                 vetyp[vi] = vt_code;    /* 数组元素类型（元素截断/浮点标记用） */
             } else if (vt_code == 2 && elems == 0 && is_arr) {
