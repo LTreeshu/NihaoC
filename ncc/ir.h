@@ -71,6 +71,7 @@ typedef struct {
     int ret_agg_ti;     /* 返回聚合类型索引（struct 返回 = sret；-1=非聚合） */
     int param_types[32];/* 参数类型 0=int 1=double（param_count <= 32，与 pnames 对齐） */
     int param_agg_ti[32];/* 参数聚合类型（struct 参数按值展开；-1=标量；按展开后索引） */
+    int param_vis[32];  /* 参数可见性前缀（flow/var/const/static），按声明序对齐 param；M2 调用点检查用 */
 } IrFn;
 
 typedef struct {

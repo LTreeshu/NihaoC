@@ -394,6 +394,9 @@ int vis_check_usable(CompilerState *cs, Symbol *s);
 int vis_check_writable(CompilerState *cs, Symbol *s);
 void vis_check_assign(CompilerState *cs, Visibility dst_vis, Symbol *src_sym,
                       Symbol *dst_sym, const char *dst_name);
+int vis_check_call_arg(CompilerState *cs, Visibility dst_vis, Symbol *src_sym,
+                       const char *dst_name);
+void vis_unfreeze(Symbol *s);
 void vis_unfreeze_borrows(Symbol *borrow_head, Symbol *scope_start);
 
 /* module.c */

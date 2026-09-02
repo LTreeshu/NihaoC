@@ -107,6 +107,36 @@ static void ir_vis_check_writable(CompilerState *cs, int vi)
         nihao_error(cs, "%s is frozen by an active borrow (const/var)", vn[vi]);
     ir_vis_check_usable(cs, vi);
 }
+
+/* 调用点参数检查：dst_vis = 被调函数参数可见性（来自 IrFn.param_vis，属被调函数
+ * 作用域，调用方无法直接索引其 vi）。仅对指针类实参（vptr[src_vi]）生效。
+ * 返回 1 表示发生借用（源被冻结），调用结束后须解冻源；0 表示转移/无变化。 */
+static int ir_vis_check_arg(CompilerState *cs, int dst_vis, int src_vi)
+{
+    if (src_vi < 0) return 0;
+    if (!vptr[src_vi]) return 0;                 /* 仅指针类有所有权语义 */
+    if (vstate[src_vi] == IR_VS_INVALID) {
+        nihao_error(cs, "%s is invalidated (ownership moved); cannot use it",
+                    vn[src_vi]);
+        return 0;
+    }
+    if (ir_vis_transfer(vvis[src_vi], dst_vis)) {
+        nihao_error(cs, "cannot pass %s (visibility %s) to parameter (visibility %s): "
+                        "target lifetime shorter than source",
+                    vn[src_vi], ir_vis_str(vvis[src_vi]), ir_vis_str(dst_vis));
+        return 0;
+    }
+    if (vvis[src_vi] == VIS_FLOW) {
+        vstate[src_vi] = (dst_vis == VIS_FLOW) ? IR_VS_INVALID : IR_VS_FROZEN;
+        return (dst_vis == VIS_FLOW) ? 0 : 1;   /* flow→flow: 转移(转移后不解冻)；flow→var/const: 借用(解冻) */
+    } else if (vvis[src_vi] == VIS_VAR) {
+        if (dst_vis == VIS_CONST || dst_vis == VIS_VAR) {
+            vstate[src_vi] = IR_VS_FROZEN;
+            return 1;
+        }
+    }
+    return 0;
+}
 static int *vtype;          /* 变量数值类型：0=int(默认) 1=double(f64/f32 槽化) */
 static int vn_count, vn_cap;
 
@@ -980,6 +1010,11 @@ static int ir_primary(CompilerState *cs)
             /* PB-16 struct 参数：按展开后参数索引查目标函数聚合签名 */
             IrFn *tfn = ir_find_fn(name);
             int argi = (tfn && tfn->is_mr) ? 1 : 0;   /* mr 时 0 是 _mr_ret 缓冲 */
+            /* M2 调用点参数前缀检查：call_pi = 用户参数序号（与 tfn->param_vis 对齐）；
+             * call_borrow_src 记录被冻结的源，调用结束后解冻（借用仅持续调用期间） */
+            int call_pi = 0;
+            int call_borrow_src[32];
+            int call_borrow_n = 0;
             if (cur_tok(cs) != TOK_RPAREN) {
                 for (;;) {
                     int pti = (tfn && argi >= 0 && argi < 32) ? tfn->param_agg_ti[argi] : -1;
@@ -1023,15 +1058,33 @@ static int ir_primary(CompilerState *cs)
                         }
                         argi += agg_types[pti].mcount;
                     } else {
+                        /* 标量实参：M2 参数前缀检查（flow→失效, var/const→冻结） */
+                        int src_vi = -1;
+                        if (cur_tok(cs) == TOK_IDENTIFIER) {
+                            int sv = var_find(cs->parser.lex->tok_str);
+                            if (sv >= 0) src_vi = sv;
+                        }
                         int a = ir_expr(cs);
                         if (argn < 64) arglist[argn++] = a;
+                        if (tfn && src_vi >= 0 && call_pi >= 0 && call_pi < 32) {
+                            int pdv = tfn->param_vis[call_pi];
+                            if (pdv != VIS_UNDEF) {
+                                int borrowed = ir_vis_check_arg(cs, pdv, src_vi);
+                                if (borrowed && call_borrow_n < 32)
+                                    call_borrow_src[call_borrow_n++] = src_vi;
+                            }
+                        }
                         argi++;
+                        call_pi++;
                     }
                     if (cur_tok(cs) != TOK_COMMA) break;
                     next_tok(cs);
                 }
             }
             expect(cs, TOK_RPAREN);
+            /* M2：调用结束，解冻被本次调用借用的源（借用仅持续调用期间） */
+            for (int _k = 0; _k < call_borrow_n; _k++)
+                if (call_borrow_src[_k] >= 0) vstate[call_borrow_src[_k]] = IR_VS_VALID;
             /* sret 调用（struct 返回）：目标函数是 mr → malloc 缓冲 → PARAM 缓冲+参数 →
              * CALL → 返回缓冲地址（调用方拷贝到聚合槽） */
             int is_mr_call = 0;
@@ -3048,6 +3101,7 @@ static void ir_func(CompilerState *cs)
     next_tok(cs);
     F = ir_fn_new(P, fname, is_main);
     var_reset();
+    for (int _i = 0; _i < 32; _i++) F->param_vis[_i] = VIS_VAR;  /* 默认 var（无前缀） */
     g_label_count = 0;      /* goto/label 表 per 函数清零 */
 
     expect(cs, TOK_LPAREN);
@@ -3056,27 +3110,40 @@ static void ir_func(CompilerState *cs)
     const char *pnames[32];
     int ptypes[32] = {0};   /* 参数类型编码：0=i64 1=double 2=i8 3=i16 4=i32 5=u8 6=u16 7=u32 */
     int ptype_ti[32];       /* 参数聚合类型索引（PB-16 struct 参数；-1=标量） */
-    for (int _i = 0; _i < 32; _i++) ptype_ti[_i] = -1;
+    int pvis[32];           /* 参数可见性前缀：0=var 1=const 2=flow 3=static（§12.3 M2） */
+    int pptr[32];           /* 参数是否指针类（void 类型）：仅其有所有权语义 */
+    for (int _i = 0; _i < 32; _i++) { ptype_ti[_i] = -1; pvis[_i] = VIS_VAR; pptr[_i] = 0; }
     if (cur_tok(cs) != TOK_RPAREN) {
         for (;;) {
-            /* param: name i32（先收集，注册延后——mr 隐藏参数须在头部） */
+            /* 可选参数可见性前缀 flow/var/const/static（§12.3 参数传递规则） */
+            int pv = VIS_VAR;
+            if (cur_tok(cs) == TOK_FLOW)        { pv = VIS_FLOW;   next_tok(cs); }
+            else if (cur_tok(cs) == TOK_CONST)  { pv = VIS_CONST;  next_tok(cs); }
+            else if (cur_tok(cs) == TOK_VAR)    { pv = VIS_VAR;    next_tok(cs); }
+            else if (cur_tok(cs) == TOK_STATIC) { pv = VIS_STATIC; next_tok(cs); }
+
+            /* param: name Type（先收集，注册延后——mr 隐藏参数须在头部） */
             if (cur_tok(cs) != TOK_IDENTIFIER) break;
-            pnames[nparam++] = cs->parser.lex->tok_str;
+            pnames[nparam] = cs->parser.lex->tok_str;
+            pvis[nparam] = pv;
             next_tok(cs);
             TokenType pt = cur_tok(cs);
-            ptypes[nparam - 1] =
+            ptypes[nparam] =
                 (pt == TOK_F32 || pt == TOK_F64) ? 1 :
                 (pt == TOK_CHAR || pt == TOK_I8) ? 2 :
                 (pt == TOK_I16) ? 3 : (pt == TOK_I32) ? 4 :
                 (pt == TOK_U8)  ? 5 : (pt == TOK_U16) ? 6 :
                 (pt == TOK_U32) ? 7 : 0;
-            if (pt == TOK_IDENTIFIER) {
+            if (pt == TOK_VOID) {
+                pptr[nparam] = 1;       /* void = 通用指针：指针类（所有权语义） */
+            } else if (pt == TOK_IDENTIFIER) {
                 int ti = agg_type_find(cs->parser.lex->tok_str);
                 if (ti >= 0) {
-                    ptype_ti[nparam - 1] = ti;   /* struct 参数（按值展开） */
-                    ptypes[nparam - 1] = 0;
+                    ptype_ti[nparam] = ti;   /* struct 参数（按值展开） */
+                    ptypes[nparam] = 0;
                 }
             }
+            nparam++;
             next_tok(cs);           /* 跳过类型 */
             if (cur_tok(cs) != TOK_COMMA) break;
             next_tok(cs);
@@ -3108,10 +3175,11 @@ static void ir_func(CompilerState *cs)
         vpi = 1;
     }
     for (int pi = 0; pi < nparam; pi++) {
+        F->param_vis[pi] = pvis[pi];     /* M2 调用点检查用（声明序，与 param 对齐） */
         int ti = ptype_ti[pi];
         if (ti >= 0) {
             int mcount = agg_types[ti].mcount;
-            int vi = var_declare(pnames[pi], mcount, ti, VIS_VAR);
+            int vi = var_declare(pnames[pi], mcount, ti, pvis[pi]);
             for (int k = 0; k < mcount; k++) {
                 F->param_types[vpi + k] = 0;   /* 成员统一 8 字节槽 */
             }
@@ -3120,7 +3188,8 @@ static void ir_func(CompilerState *cs)
             (void)vi;
             vpi += mcount;
         } else {
-            int vi = var_declare(pnames[pi], 0, -1, VIS_VAR);
+            int vi = var_declare(pnames[pi], 0, -1, pvis[pi]);
+            if (pptr[pi]) vptr[vi] = 1;       /* 指针类参数（void）：标记所有权语义 */
             F->param_types[vpi] = ptypes[pi];
             F->param_agg_ti[vpi] = -1;
             if (ptypes[pi] == 1) {

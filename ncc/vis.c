@@ -196,3 +196,42 @@ void vis_check_assign(CompilerState *cs, Visibility dst_vis, Symbol *src_sym,
         dst_sym->borrow_source = src_sym;
     }
 }
+
+/* Function-call argument check (call site). dst_vis is the receiving
+ * parameter's visibility; src_sym is the actual argument symbol.
+ * Returns 1 if a borrow occurred (source FROZEN), so the caller must
+ * unfreeze the source after the call returns. */
+int vis_check_call_arg(CompilerState *cs, Visibility dst_vis, Symbol *src_sym,
+                       const char *dst_name)
+{
+    if (!src_sym) return 0;
+    if (src_sym->kind == SYM_FUNCTION) return 0;
+    if (!vis_is_pointer_type(src_sym->type)) return 0;   /* only pointer-like */
+
+    if (src_sym->borrow_state == BS_INVALID) {
+        nihao_error(cs, "'%s' is invalidated (ownership moved); cannot use it",
+                    src_sym->name);
+        return 0;
+    }
+    if (vis_check_transfer(src_sym->vis, dst_vis)) {
+        nihao_error(cs, "cannot assign %s (visibility %s) to parameter '%s' (%s): "
+                        "target lifetime shorter than source",
+                    src_sym->name,
+                    src_sym->vis == VIS_CONST ? "const" :
+                    src_sym->vis == VIS_STATIC ? "static" :
+                    src_sym->vis == VIS_FLOW ? "flow" : "var",
+                    dst_name ? dst_name : "(param)",
+                    dst_vis == VIS_CONST ? "const" :
+                    dst_vis == VIS_STATIC ? "static" :
+                    dst_vis == VIS_FLOW ? "flow" : "var");
+        return 0;
+    }
+    vis_update_source(src_sym->vis, dst_vis, src_sym);
+    return (src_sym->borrow_state == BS_FROZEN) ? 1 : 0;
+}
+
+/* Unfreeze a symbol that was borrowed (FROZEN) — call after the call returns. */
+void vis_unfreeze(Symbol *s)
+{
+    if (s) s->borrow_state = BS_VALID;
+}

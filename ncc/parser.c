@@ -882,11 +882,12 @@ void parse_declaration(CompilerState *cs)
         skip_newlines(cs);
         if (cur_tok(cs) != TOK_RPAREN) {
             for (;;) {
-                /* optional param visibility prefix */
-                if (cur_tok(cs) == TOK_FLOW || cur_tok(cs) == TOK_STATIC ||
-                    cur_tok(cs) == TOK_CONST || cur_tok(cs) == TOK_VAR) {
-                    next_tok(cs);
-                }
+                /* optional param visibility prefix (§12.3 参数传递) */
+                Visibility pv = VIS_DEFAULT;   /* 无前缀 = var */
+                if (cur_tok(cs) == TOK_FLOW)        { pv = VIS_FLOW;   next_tok(cs); }
+                else if (cur_tok(cs) == TOK_STATIC) { pv = VIS_STATIC; next_tok(cs); }
+                else if (cur_tok(cs) == TOK_CONST)  { pv = VIS_CONST;  next_tok(cs); }
+                else if (cur_tok(cs) == TOK_VAR)    { pv = VIS_DEFAULT; next_tok(cs); }
         if (cur_tok(cs) != TOK_IDENTIFIER) {
             nihao_error(cs, "expected parameter name, got '%s'",
                         token_name(cur_tok(cs)));
@@ -897,7 +898,7 @@ void parse_declaration(CompilerState *cs)
         CType ptype;
         parse_type(cs, &ptype);
         Symbol *param = sym_push_local(cs, func_sym, pname, &ptype);
-        param->vis = VIS_DEFAULT;
+        param->vis = pv;   /* 记录参数可见性前缀（§12.3 M2 调用点检查用） */
         param->next = func_sym->params;
         func_sym->params = param;
 
@@ -2021,16 +2022,49 @@ static void parse_primary(CompilerState *cs)
 
                 /* generic function call */
                 cgen_raw("%s(", name);
+                /* M2 参数前缀检查：收集被调函数参数（声明序），对指针类实参按参数 vis 检查 */
+                Symbol *callee = sym_find(cs, name);
+                Symbol *oparams[32]; int nop = 0;
+                if (callee && callee->kind == SYM_FUNCTION && callee->params) {
+                    for (Symbol *pp = callee->params; pp && nop < 32; pp = pp->next)
+                        oparams[nop++] = pp;
+                    for (int _i = 0; _i < nop / 2; _i++) {  /* 反转（头插 → 倒序） */
+                        Symbol *_t = oparams[_i];
+                        oparams[_i] = oparams[nop - 1 - _i];
+                        oparams[nop - 1 - _i] = _t;
+                    }
+                }
+                Symbol *frozen_srcs[32]; int nf = 0;
                 if (cur_tok(cs) != TOK_RPAREN) {
-                    parse_expression(cs);
-                    while (cur_tok(cs) == TOK_COMMA) {
+                    int arg_idx = 0;
+                    for (;;) {
+                        /* 先解析实参（vis_check_usable 此时源仍 VALID），再按参数 vis 检查。
+                         * 顺序关键：flow→flow 转移(失效)须在实参被"使用"之后记录，
+                         * 否则 parse_expression 内的 vis_check_usable 会把本次移动误判为 use-after-move。 */
+                        Symbol *as = NULL;
+                        if (cur_tok(cs) == TOK_IDENTIFIER && nop > 0 && arg_idx < nop) {
+                            Symbol *s = sym_find(cs, cs->parser.lex->tok_str);
+                            Symbol *pp = oparams[arg_idx];
+                            if (s && s->kind == SYM_VARIABLE &&
+                                vis_is_pointer_type(s->type) && pp &&
+                                vis_is_pointer_type(pp->type))
+                                as = s;
+                        }
+                        parse_expression(cs);
+                        if (as) {
+                            int borrowed = vis_check_call_arg(cs, oparams[arg_idx]->vis,
+                                                             as, oparams[arg_idx]->name);
+                            if (borrowed && nf < 32) frozen_srcs[nf++] = as;
+                        }
+                        arg_idx++;
+                        if (cur_tok(cs) != TOK_COMMA) break;
                         next_tok(cs);
                         cgen_raw(", ");
-                        parse_expression(cs);
                     }
                 }
                 cgen_raw(")");
                 expect(cs, TOK_RPAREN);
+                for (int _k = 0; _k < nf; _k++) vis_unfreeze(frozen_srcs[_k]);  /* 调用结束解冻借用 */
             } else {
                 /* plain identifier (variable/function name) */
                 cgen_raw("%s", name);
