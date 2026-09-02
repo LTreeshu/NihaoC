@@ -164,6 +164,12 @@ ncc/
 - [x] **PB-24 统一管线（2026-08-30 定案：保留双路线，A=1.0 产品线 / B=2.0 演进线）**：IR 语法覆盖全量后决策条件满足（STAGE_SUMMARY §3.1 差距清零），ltree 拍板保留双管线并赋予时间线定位——A 方案先做对外可用 **1.0**（指针声明语法为唯一硬缺口，特性冻结只修 bug/文档/发布），B 方案作为下一代 **2.0** 持续演进（阶段 1 类型化指针 → 阶段 2 能力平移 M2/link/布局函数 → 阶段 3 质量性能 → 阶段 4 新特性）。清单与分支计划见 `docs/VERSIONING_ROADMAP.md`（NihaoC PB 06221e9）；GIT_CONVENTIONS 分支语义已同步更新。
 - [x] **B 方案 2.0 阶段 1 类型化指针模型（2026-08-31 完成）**：pt[] 表语义扩展——`p = &标量` 记录 `PT_SCALAR(code)`（-2-code 编码，与聚合索引 >=0 区分，-1 保留非指针），聚合/标量/枚举三分支记录；`*p` 读按指向类型标记浮点（f64/f32 → double vreg，防位模式被当整数）；`*p = e` 写按指向类型 coerce（窄型 TRUNC 截断 / double ITOD）；复合赋值 `*p += e` RMW（LOAD→op→STORE 含类型协调）；指针算术 `p+k` 首次加法项 ×8 槽宽缩放（与数组寻址 &arr[k]=base+k*8 一致；链式 p+k+1 保持字节语义——NihaoC 无 C 连续指针算术，已文档化）。用例 ir_ptr2.nc（IR_SUBSET，5 组断言：读/写/narrow 截断/double/复合+算术），**四后端一致 0 FAIL**（Windows 全矩阵 31 用例一致性全 PASS；WSL Ubuntu-24.04 ir-c 实测 6 断言输出一致）
 
+- [ ] **PB-25 指针语法收敛（对齐 PA 1.0.x：移除一元 `*p` 解引用 + 补 `.() op=` 复合）**：A 方案（parser.c/cgen.c）已在 1.0.x 收敛指针语法——删除具名指针 `T*` 显式声明与一元 `*` 解引用（`*p` 读/写/复合 `*p op=`），解引用统一为 `.()` / `.(T)` / `->`，乘法 `*` 保留。B 方案（irparse.c）仍保留一元 `*p` 语法且 `.() op=` 复合缺失，需对齐：
+  - **移除一元 `*p` 解引用**：删除/改写 `irparse.c:755-785`（类型化读 LOAD）、`irparse.c:2401-2475`（类型化写 + 复合 RMW `*p op=`）、`irparse.c:3051-3079`（兜底读/写）；注意区分"解引用 *"与"乘法 *"（`irparse.c:1378`/`1703`/`1705` 等 ir_term/ir_const 用法），勿误删乘法。
+  - **补 `.() op= e` 复合解引用**：在 `irparse.c:2644`（`.() = e` 写块）新增 `TOK_PLUS_ASSIGN`/`MINUS_ASSIGN`/`STAR_ASSIGN`/`SLASH_ASSIGN`/`PERCENT_ASSIGN` 分支，仿 `2401-2475` 的 LOAD→RMW→按指向类型 `ir_coerce`→STORE 序列（当前完全缺失，`grep .(` 全仓库仅 `irparse.c:1194` 与 `:2644` 两处）。
+  - **文档同步**：BNF/Chinese/English 指针节已 PA 侧更新；PB 侧语法条目（若有 `T*`/一元 `*` 记载）需一并收敛，使双方案文档一致。
+  - **回归**：`xmake test --all` 中 `ir_ptr.nc`/`ir_ptr2.nc`/`ir_slice.nc` 在 ir-c/ir-native 后端保持通过；`ir_ptr2.nc` 测试已展开 `*p += e` 为 `p.() = p.() + e`（双后端兼容写法），补齐 `.() op=` 后无需再依赖展开式。
+
 ---
 
 ## 三、推荐下一步（建议执行顺序）

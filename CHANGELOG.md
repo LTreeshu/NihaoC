@@ -9,7 +9,7 @@
 ### 功能（A 方案 c/native 后端）
 
 - 全量语法回归 **12P / 0F / 5S**（c/native 双后端一致）
-- 指针声明语法定案：**隐式推断 + 显式声明双支持**（`p = &x` / `p T* = &x`），`->` 指针成员访问（链式/复合赋值）
+- 指针声明语法定案：**隐式推断声明**（`p = &x` 自动推断为指向 x 的指针）；`->` 指针成员访问（链式/复合赋值）；1.0.x 起具名指针 `T*` 显式声明与一元 `*` 解引用已移除，解引用统一 `.()` / `.(T)` / `->`
 - 三元 `?:`、`is pat => stmt` 单语句匹配（`=>` 新 token）、goto/label
 - struct/union/enum（嵌套、位域、嵌套初始化列表、整体拷贝）、数组/动态数组（固定容量）、切片、多返回值（命名 struct 返回，C 机制）
 - 存储期与所有权（const/static/flow/var + 借用状态机）、cooking 编译期（常量/函数/static_assert）、len()、visof()
@@ -20,8 +20,16 @@
 - CLI 完整：init/build/run/debug/lex + -o/-c/-shared/-static/-I/-L/-l/--link/-g
 - 构建统一 xmake（Makefile 标 legacy）；错误信息"外壳中文 + 正文英文"
 - examples/ 示例集 7 例（6 例 1.0 可编译运行，06_cooking 为 2.0 预览）
-- 语言规格冻结：BNF v2.0 终校（`=>`/`->`/`T*` 补全）+ 中英语法元素表核对
+- 语言规格冻结：BNF v2.0 终校（`=>`/`->` 补全）+ 中英语法元素表核对；1.0.x 起 `T*` 具名指针与一元 `*` 解引用已从 BNF 移除
 - **双平台验证（Windows + Linux/WSL Ubuntu-24.04）**：c/native 全量回归 0 FAIL（12P/0F）+ examples 6/6 双后端一致；`-run` 内存执行 Linux 实测通过
+
+### 1.0.x 指针语法收敛（2026-09-03）
+
+- **移除带 `*` 的指针语法形式（与 BNF/文档一致）**：删除具名指针类型声明 `T*`（如 `p T* = &x`）与一元 `*` 解引用（`*p` 读/写/复合 `*p op=`）；指针解引用统一收敛为 `.()` / `.(T)` / `->`。`void` 通用指针、`void[n]` 指针数组、隐式推断 `p = &x` 与乘法 `*` / `*=` 均保留（属不同语义，非指针语法）。
+- **编译器（A 方案 parser.c）**：`parse_type` 删除 `TOK_STAR` 指针构造分支（仅保留 `[]` 数组后缀，并修正 `while` 条件避免 `*` 死循环）；`parse_unary` 删除一元 `*` 解引用分支（落入默认报错）。内部 `TYPE_POINTER` 类型与 `cgen.c` 的 `T*`/`void*` 文本映射**保留**（生成可编译 C 的前提，与用户输入语法无关）。
+- **示例与测试同步改写**：`examples/04_pointer.nc`、`tests/pos/ir_ptr.nc`、`ir_ptr2.nc`、`ir_slice.nc` 的 `*p` / `*(&x)` / `*p op=` 全部改为 `.()` 形式；复合 `*p += e` 展开为 `p.() = p.() + e`（双后端兼容写法）。
+- **回归验证**：c/native 双后端 **13P / 0F / 5S**（0 FAIL），`examples/04_pointer.nc` 运行输出 `deref write ok` / `addr deref ok`。
+- **B 方案（PB）待办登记**：`irparse.c` 仍支持一元 `*p`（读/写/复合 RMW）且 `.() op=` 缺失，已登记 `TODO.md` 专项二 PB-25（移除一元 `*p` + 补 `.() op=`，本次 PB 不实现）。
 
 ### Linux 平台修复（2026-08-31 WSL 实测）
 

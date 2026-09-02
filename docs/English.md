@@ -266,11 +266,10 @@ ptr  = ptr3[].()          // two-level dereference
 variable = ptr3[][].(i32) // three-level dereference
 ```
 
-> **Pointer declaration syntax (decided 2026-08-19: implicit inference + explicit declaration both supported)**
+> **Pointer declaration syntax (decided 2026-08-19: implicit inference declaration)**
 >
 > - **Implicit inference**: `p = &x` auto-infers `p` as a pointer to `x`'s type (no type name needed).
-> - **Explicit declaration**: `p T* = &x` is also legal (`T*` named pointer type; `parse_type` natively supports `*`, cgen emits `T*`).
-> - **`->` pointer member access**: `p->field` is equivalent to `(*p).field`; chained `p->a->b` and compound assignment `p->n += 1` are supported (aligned in both A-plan and IR layers since 2026-08-19).
+> - **`->` pointer member access**: `p->field` is equivalent to `p.()` dereference; chained `p->a->b` is supported (aligned in both A-plan and IR layers since 2026-08-19).
 
 #### 5.1.2 Array Pointers
 

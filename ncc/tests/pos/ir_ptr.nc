@@ -10,7 +10,8 @@ func main() {
     } else {
         puts("ptr bad")
     }
-    z i32 = *(&x)
+    px = &x
+    z i32 = px.()
     if z == 43 {
         puts("addr ok")
     } else {

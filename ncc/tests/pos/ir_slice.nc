@@ -18,7 +18,7 @@ func main() {
 
     /* 切片：arr[lo..hi] → 返回 &arr[lo]（指针） */
     p void = arr[1..4]
-    v i32 = *p
+    v i32 = p.()
     if v == 20 {
         puts("slice ok")
     } else {
@@ -26,7 +26,7 @@ func main() {
     }
     /* 省略起始切片 arr[..2] → &arr[0] */
     p2 void = arr[..2]
-    v2 i32 = *p2
+    v2 i32 = p2.()
     if v2 == 10 {
         puts("slice2 ok")
     } else {
@@ -42,7 +42,7 @@ func main() {
     }
     /* 切片读取（写回后） */
     p3 void = arr[2..4]
-    v3 i32 = *p3
+    v3 i32 = p3.()
     if v3 == 3 {
         puts("slice read2 ok")
     } else {
