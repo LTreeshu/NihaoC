@@ -2191,12 +2191,11 @@ static void ir_stmt(CompilerState *cs)
         }
         if (cur_tok(cs) == TOK_LBRACE) {
             ir_block(cs);
-        } else if (cur_tok(cs) == TOK_FAT_ARROW) {
-            /* 单语句形式：is pat => stmt（BNF <is-stmt>）——ir_stmt 自行收尾 */
-            next_tok(cs);
-            ir_stmt(cs);
         } else {
-            nihao_error(cs, "ir: 'is' pattern must be followed by a block or '=>' statement");
+            /* 规范 2026-09-01 移除 `=>` 箭头形式：is 仅块形式，且只能用于 while 体内
+             * （<is-stmt> 从 <statement> 删除，do 不支持 is）。其余 token 一律报错，
+             * 避免静默接受已废弃语法。A 方案（parser.c，已冻结）仍保留 =>，属已知分歧。 */
+            nihao_error(cs, "ir: 'is' pattern must be followed by a block");
         }
         ir_emit(F, IR_LABEL, -1, -1, -1, 0);
         F->ins[F->ins_count - 1].label = l_done;
@@ -2433,6 +2432,10 @@ static void ir_stmt(CompilerState *cs)
                 /* 非标量/聚合目标：& 未消费，回退通用 ir_expr 解析 */
             }
             int vr = ir_expr(cs);
+            /* PB-1 补缺（2026-09-01）：窄整数目标此前只在「声明初始化」路径经
+             * ir_coerce 截断，普通赋值直接落槽 —— `b u8 = 0; b = 300` 在 IR 后端
+             * 得到 300 而 A 方案（C 语义）得到 44。此处统一补目标类型协调。 */
+            vr = ir_coerce(vr, vtype[vi]);
             ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             skip_newlines(cs);
         } else if (nt == TOK_PLUS_ASSIGN || nt == TOK_MINUS_ASSIGN ||
@@ -2457,7 +2460,21 @@ static void ir_stmt(CompilerState *cs)
             }
             int b = ir_expr(cs);
             int vr = ir_new_vreg(F);
-            ir_emit(F, op, vr, vt[vi], b, 0);
+            if (ir_is_double(vt[vi])) {
+                /* 浮点复合赋值：目标为 double → 发浮点运算（对齐 ir_expr 二进制 op） */
+                int fb = ir_is_double(b) ? b : ir_to_double(b);
+                IrOp fop = IR_FADD;
+                if (op == IR_SUB) fop = IR_FSUB;
+                else if (op == IR_MUL) fop = IR_FMUL;
+                else if (op == IR_DIV) fop = IR_FDIV;
+                /* IR_MOD 无浮点操作码（语言层禁用 %= 浮点），退化用 FADD 不应到达 */
+                ir_emit(F, fop, vr, vt[vi], fb, 0);
+                ir_set_double(vr);                 /* 结果标记 double，使 ir_coerce 走 no-op（f32→FTRUNC） */
+                vr = ir_coerce(vr, vtype[vi]);      /* f64→no-op；f32→FTRUNC 单精度截断 */
+            } else {
+                ir_emit(F, op, vr, vt[vi], b, 0);
+                vr = ir_coerce(vr, vtype[vi]);   /* PB-1 补缺：窄整数目标类型截断 */
+            }
             ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             skip_newlines(cs);
         } else if (nt == TOK_INCREMENT || nt == TOK_DECREMENT) {
@@ -2474,7 +2491,16 @@ static void ir_stmt(CompilerState *cs)
             int one = ir_new_vreg(F);
             ir_emit(F, IR_CONST, one, -1, -1, 1);
             int vr = ir_new_vreg(F);
-            ir_emit(F, op, vr, vt[vi], one, 0);
+            if (ir_is_double(vt[vi])) {
+                /* 浮点自增/自减：1 提为 double 后走浮点运算；结果标记 double 后 ir_coerce */
+                int fone = ir_to_double(one);
+                ir_emit(F, op == IR_ADD ? IR_FADD : IR_FSUB, vr, vt[vi], fone, 0);
+                ir_set_double(vr);
+                vr = ir_coerce(vr, vtype[vi]);      /* f64→no-op；f32→FTRUNC */
+            } else {
+                ir_emit(F, op, vr, vt[vi], one, 0);
+                vr = ir_coerce(vr, vtype[vi]);   /* PB-1 补缺：窄整数目标类型截断 */
+            }
             ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             skip_newlines(cs);
         } else if (nt == TOK_DOT_PAREN) {
@@ -2715,9 +2741,15 @@ static void ir_stmt(CompilerState *cs)
                 next_tok(cs);
                 is_arr = 1;         /* char[] 动态字符串与数组共用此标记 */
                 if (cur_tok(cs) == TOK_RANGE || cur_tok(cs) == TOK_ELLIPSIS) {
-                    /* 纯动态数组 [...] / [..]：固定默认容量（增长语义留 TODO） */
+                    /* 纯动态数组 [...] / [..]：固定默认容量 8 槽（增长语义留 TODO） */
                     elems = 8;
                     next_tok(cs);
+                    if (cur_tok(cs) == TOK_INT_CONST) {
+                        /* [...N] / [..N]：历史兼容写法（A 方案早期实现），
+                         * 等同 BNF 规范的 [N...] —— 2026-09-01 与 parser.c 对齐 */
+                        elems = (int)cs->parser.lex->tok_val.i;
+                        next_tok(cs);
+                    }
                 } else if (cur_tok(cs) == TOK_INT_CONST) {
                     elems = (int)cs->parser.lex->tok_val.i;
                     next_tok(cs);

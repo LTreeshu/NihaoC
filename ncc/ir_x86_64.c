@@ -3,6 +3,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* 调用约定（平台相关）：
+ *  - Windows x64：整数参数 rcx/rdx/r8/r9；调用前需 32 字节影子空间。
+ *  - System V AMD64（Linux/macOS）：整数参数 rdi/rsi/rdx/rcx/r8/r9；
+ *    无影子空间，但调用前 %rsp 须 16 字节对齐（帧已按 callee_align=16 取整）。
+ *  浮点参数均走 xmm0..3。这两个宏/数组必须在 CALL 发射（本文件前部）之前定义。 */
+#ifdef _WIN32
+static const char *x64_int_arg_regs[] = { "%rcx", "%rdx", "%r8", "%r9", NULL };
+#define X64_SHADOW_SPACE 32
+#else
+static const char *x64_int_arg_regs[] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9", NULL };
+#define X64_SHADOW_SPACE 0
+#endif
+static const char *x64_fp_arg_regs[]  = { "%xmm0", "%xmm1", "%xmm2", "%xmm3", NULL };
+
 /* ============================================================
  * x86-64 后端（阶段 1：从 ir_to_native.c 迁移，符合 TargetBackend 接口）
  *
@@ -36,13 +50,35 @@ static void x64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
 {
     (void)f; (void)i;
     switch (in->op) {
-        case IR_CONST:
-            /* imm 可能 >32 位（double 位模式）→ imm64 先到寄存器 */
-            nb_put(b, "  movq $%lld, %%rax\n  movq %%rax, ",
-                   (long long)in->imm);
+        case IR_CONST: {
+            /* 64 位立即数加载。x86 两种 32 位立即数形式语义不同，且 tcc 汇编器
+             * 不支持 movabsq，故分情况处理：
+             * - 有符号 32 位域 [-0x80000000, 0x7FFFFFFF]：用 `movq $imm`（REX.W 的
+             *   32 位立即数形式）符号扩展到 64 位（如 -1 → 0xFFFFFFFFFFFFFFFF）；
+             * - 无符号 32 位域 [0, 0xFFFFFFFF]（高 32 位为 0）：用 `movl $imm` 零扩展
+             *   到 64 位（如 4294967295 = 0xFFFFFFFF 经零扩展为 0x00000000FFFFFFFF）；
+             * - 其余（double 位模式 0x4014...、0xFFFFFFFF... 段）：拆成低/高两个 32 位
+             *   搬 + 移位或，精确还原完整 64 位值。
+             * 注意：`movl $imm` 是【零扩展】，负数必须用上面的 movq 符号扩展分支。 */
+            long long v = (long long)in->imm;
+            if (v >= -0x80000000LL && v <= 0x7FFFFFFFLL) {
+                nb_put(b, "  movq $%lld, %%rax\n  movq %%rax, ", v);
+            } else {
+                unsigned long long uv = (unsigned long long)v;
+                unsigned hi = (unsigned)(uv >> 32);
+                unsigned lo = (unsigned)(uv & 0xFFFFFFFFu);
+                if (hi == 0) {
+                    nb_put(b, "  movl $%u, %%eax\n  movq %%rax, ", lo);
+                } else {
+                    nb_put(b, "  movl $%u, %%eax\n  movl $%u, %%edx\n"
+                              "  shlq $32, %%rdx\n  orq %%rdx, %%rax\n  movq %%rax, ",
+                            lo, hi);
+                }
+            }
             x64_slot(b, in->dst, tb);
             nb_put(b, "\n");
             break;
+        }
         case IR_MOV:
             nb_put(b, "  movq ");
             x64_slot(b, in->a, tb);
@@ -109,14 +145,32 @@ static void x64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             nb_put(b, "\n  addq $8, %%rsp\n");
             break;
         case IR_TRUNC:
-            /* 窄整数截断 + 符号/零扩展：左移对齐高位 + 算术/逻辑右移回（imm 编码） */
+            /* 窄整数截断 + 符号/零扩展。
+             * 8/16 位：左移对齐高位 + 算术(sar)/逻辑(shr)右移回（计数 48/56，
+             *       tcc 汇编器正常处理）。
+             * 32 位：tcc 汇编器会把 `shlq $32` 的计数按 5 位掩码归零、并把
+             *       `movl %eax,%eax` 这类自搬当 no-op 吞掉，导致 32→64 扩展失效。
+             *       故改用：i32 经跨寄存器 movslq 符号扩展，u32 经 `movl $0xFFFFFFFF`
+             *       零扩展掩码做 andq（各寄存器均非自搬，tcc 不优化）。 */
             {
-                int sh = (in->imm == 0 || in->imm == 3) ? 56 :
-                         (in->imm == 1 || in->imm == 4) ? 48 : 32;
+                int imm = in->imm;
                 nb_put(b, "  movq ");
                 x64_slot(b, in->a, tb);
-                nb_put(b, ", %%rax\n  shlq $%d, %%rax\n  %sq $%d, %%rax\n  movq %%rax, ",
-                       sh, in->imm >= 3 ? "shr" : "sar", sh);
+                nb_put(b, ", %%rax\n");
+                if (imm == 0) {        /* i8  : 符号扩展 8 位 */
+                    nb_put(b, "  shlq $56, %%rax\n  sarq $56, %%rax\n");
+                } else if (imm == 3) { /* u8  : 零扩展 8 位 */
+                    nb_put(b, "  shlq $56, %%rax\n  shrq $56, %%rax\n");
+                } else if (imm == 1) { /* i16 : 符号扩展 16 位 */
+                    nb_put(b, "  shlq $48, %%rax\n  sarq $48, %%rax\n");
+                } else if (imm == 4) { /* u16 : 零扩展 16 位 */
+                    nb_put(b, "  shlq $48, %%rax\n  shrq $48, %%rax\n");
+                } else if (imm == 2) { /* i32 : 符号扩展 32 位（跨寄存器搬，避免 tcc 汇编器优化自搬） */
+                    nb_put(b, "  movl %%eax, %%ecx\n  movslq %%ecx, %%rax\n");
+                } else if (imm == 5) { /* u32 : 零扩展 32 位（movl 自搬会被 tcc 汇编器当 no-op 吞掉，改用掩码） */
+                    nb_put(b, "  movl $0xFFFFFFFF, %%ecx\n  andq %%rcx, %%rax\n");
+                }
+                nb_put(b, "  movq %%rax, ");
                 x64_slot(b, in->dst, tb);
                 nb_put(b, "\n");
             }
@@ -309,7 +363,7 @@ static void x64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
                     nb_put(b, "\n");
                 }
             }
-            nb_put(b, "  subq $32, %%rsp\n");   /* shadow space */
+            nb_put(b, "  subq $%d, %%rsp\n", X64_SHADOW_SPACE);   /* shadow space (Windows x64) */
             if (in->op == IR_CALL) {
                 /* 用户函数直接 call；外部符号（puts 等 DLL 导入）经 __imp_ 间接调用 */
                 int is_user_fn = 0;
@@ -335,7 +389,9 @@ static void x64_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
                 x64_slot(b, in->a, tb);
                 nb_put(b, ", %%rax\n  call *%%rax\n");
             }
-            nb_put(b, "  addq $%d, %%rsp\n", 32 + (got > 4 ? 8 * (got - 4) : 0));
+            nb_put(b, "  addq $%d, %%rsp\n",
+                   X64_SHADOW_SPACE + (got > tb->int_arg_count
+                                        ? 8 * (got - tb->int_arg_count) : 0));
             /* 返回值存储（PB-浮点 ABI）：目标函数浮点返回 → xmm0 位模式搬入槽 */
             if (in->op == IR_CALL) {
                 int callee_dbl = 0;
@@ -425,8 +481,12 @@ static void x64_fn_epilogue(NBuf *b, const TargetBackend *tb,
     }
 }
 
-static const char *x64_int_arg_regs[] = { "%rcx", "%rdx", "%r8", "%r9", NULL };
-static const char *x64_fp_arg_regs[]  = { "%xmm0", "%xmm1", "%xmm2", "%xmm3", NULL };
+#ifdef _WIN32
+/* Windows x64 ABI：整数参数 rcx/rdx/r8/r9；调用前需 32 字节影子空间 */
+#else
+/* System V AMD64 ABI（Linux/macOS）：整数参数 rdi/rsi/rdx/rcx/r8/r9；
+ * 无需影子空间，但调用前 %rsp 须 16 字节对齐（帧已按 callee_align=16 取整） */
+#endif
 
 const TargetBackend x86_64_backend = {
     .name         = "x86-64",
@@ -436,7 +496,11 @@ const TargetBackend x86_64_backend = {
     .callee_align = 16,
     .frame_extra  = 0,            /* 影子空间在 CALL 时动态 sub，非帧内 */
     .int_arg_regs = x64_int_arg_regs,
+#ifdef _WIN32
     .int_arg_count = 4,
+#else
+    .int_arg_count = 6,
+#endif
     .fp_arg_regs  = x64_fp_arg_regs,
     .fp_arg_count = 4,
     .ret_reg      = "%rax",

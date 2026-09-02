@@ -342,15 +342,30 @@ void parse_type(CompilerState *cs, CType *type)
             *type = *ptr_type;
         } else if (cur_tok(cs) == TOK_LBRACKET) {
             next_tok(cs);
-            int array_size = -1; /* dynamic */
+            /* 数组容量语法（BNF §3，2026-09-01 对齐 IR 前端）：
+             *   [N]     —— 固定数组，容量 N
+             *   [N...]  —— 动态数组，固定容量 N（1.0 不自动增长）  ← BNF 规范写法
+             *   [N..]   —— 同上（.. 与 ... 等价）
+             *   [...]   —— 动态数组未指定容量 → 默认 8 槽（与 IR 前端一致）
+             *   [...N]  —— 历史兼容写法（A 方案早期实现），等同 [N...]
+             * 注 1：1.0 语义下 [N] 与 [N...] 生成的 C 代码相同（都不增长），
+             *       差异仅记录在源码层，供 2.0 ptr+len+cap 堆结构改造时区分。
+             * 注 2：char[]（方括号内无点）由上层特判为 TYPE_STRING，不进入此分支；
+             *       裸 []（如 void[]）也不进入本 if，array_size 保持 -1。 */
+            int array_size = -1; /* 未指定 */
             if (cur_tok(cs) == TOK_INT_CONST) {
                 array_size = (int)cs->parser.lex->tok_val.i;
                 next_tok(cs);
-            } else if (cur_tok(cs) == TOK_ELLIPSIS) {
+                if (cur_tok(cs) == TOK_RANGE || cur_tok(cs) == TOK_ELLIPSIS) {
+                    next_tok(cs);   /* [N..] / [N...]：容量即 N */
+                }
+            } else if (cur_tok(cs) == TOK_RANGE || cur_tok(cs) == TOK_ELLIPSIS) {
                 next_tok(cs);
                 if (cur_tok(cs) == TOK_INT_CONST) {
-                    array_size = (int)cs->parser.lex->tok_val.i;
+                    array_size = (int)cs->parser.lex->tok_val.i;  /* [...N]：历史兼容 */
                     next_tok(cs);
+                } else {
+                    array_size = 8;   /* [...]：[..] / [...] → 默认 8 槽 */
                 }
             }
             expect(cs, TOK_RBRACKET);
