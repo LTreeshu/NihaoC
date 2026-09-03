@@ -332,15 +332,9 @@ void parse_type(CompilerState *cs, CType *type)
             return;
     }
 
-    /* Check for pointer/array modifiers */
-    while (cur_tok(cs) == TOK_STAR || cur_tok(cs) == TOK_LBRACKET) {
-        if (cur_tok(cs) == TOK_STAR) {
-            next_tok(cs);
-            CType *ptr_type = type_new(cs, TYPE_POINTER);
-            ptr_type->ref = type_new(cs, type->kind);
-            memcpy(ptr_type->ref, type, sizeof(CType));
-            *type = *ptr_type;
-        } else if (cur_tok(cs) == TOK_LBRACKET) {
+    /* Check for array modifiers (指针声明已统一为隐式推断 p = &x；具名 T* 于 1.0.x 移除) */
+    while (cur_tok(cs) == TOK_LBRACKET) {
+        if (cur_tok(cs) == TOK_LBRACKET) {
             next_tok(cs);
             int array_size = -1; /* dynamic */
             if (cur_tok(cs) == TOK_INT_CONST) {
@@ -2228,11 +2222,6 @@ static void parse_unary(CompilerState *cs, int line)
         case TOK_BITWISE_AND:
             next_tok(cs);
             cgen_raw("&");
-            parse_unary(cs, line);
-            break;
-        case TOK_STAR:
-            next_tok(cs);
-            cgen_raw("*");
             parse_unary(cs, line);
             break;
         case TOK_INCREMENT:
