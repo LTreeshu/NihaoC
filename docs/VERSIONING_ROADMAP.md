@@ -41,7 +41,7 @@
 - [x] **README 更新**（8/31）：安装小节（xmake + tcc 依赖探测与获取）、CLI 命令一览表、后端表标注 1.0/2.0 范围（c/native = 1.0 正式支持；ir-* = 2.0 预览）、-run Linux only 说明
 - [x] **语言规格冻结**（8/31，1.0.x 收敛）：BNF v2.0 终校完成——补 `=>`（TOK_FAT_ARROW）词法、`->` 指针成员访问 postfix 规则；Chinese/English 补指针声明（隐式推断）；具名指针 `T*` 显式声明已移除，语法元素表核对通过（`=>`/`->` 已含）；multireturn 无残留
 - [x] **版本与发布**（8/31）：CHANGELOG.md 建立（M0→M4→1.0 里程碑条目）；`v1.0.0` tag 已本地创建（未推送，见 §3.2）
-- [ ] **Linux 实测（PA-9，环境就绪时）**：-run、libtcc.so、SysV——无环境则文档标注"Windows 已验证"（1.0 范围默认 Windows 已验证）
+- [x] **Linux 实测（PA-9，2026-08-31 WSL Ubuntu-24.04 完成）**：`-run` 内存执行修复（tcc_relocate(NULL) 语义误判→直接 tcc_run）、libtcc.so `-Bsymbolic` 重建（符号插值劫持）、SysV 调用约定（x87 浮点）；c/native 各 12P/0F/6S + examples 6/6 双后端一致——**Windows + Linux 双平台验证通过**（1.0 范围已含 Linux）
 
 ### 1.4 明确留给 2.0（1.0 不做）
 
@@ -145,9 +145,9 @@ hotfix：   PA 分支修 bug → 合 main（tag v1.0.x）→ 同步共享文件�
 
 ---
 
-## 4. 待 ltree 确认的决策点
+## 4. 决策点（已全部确认）
 
 1. **1.0 指针声明语法**：✅ 已定案（8/19 PA 分支，1.0.x 收敛为**隐式推断声明**）——`p = &x` 自动推断为指向 x 的指针类型；具名指针 `T*` 显式声明已移除，解引用统一为 `.()` / `. (T)` / `->`
-2. **1.0 发布范围**：是否包含 Linux 实测（无环境则 Windows-only 标注）？
-3. **examples 优先级**：先做哪 3-5 个示例？（建议 hello/fib/struct+指针/字符串/编译期）
-4. **分支计划采纳**：§3 分支语义与版本化是否照此执行（需更新 GIT_CONVENTIONS.md）？
+2. **1.0 发布范围**：✅ 已定（2026-08-31）——**包含 Linux 实测**：WSL Ubuntu-24.04 双平台验证通过（c/native 各 12P/0F/6S + examples 6/6 + `-run` 修复），见 PA-9；1.0 范围生效 Windows + Linux
+3. **examples 优先级**：✅ 已定——hello/fib/struct/pointer/string/cooking/multiret 7 例已建（6 例 1.0 可编译运行，06_cooking 标注 2.0 预览）
+4. **分支计划采纳**：✅ 已落账——`docs/GIT_CONVENTIONS.md` 分支语义与 §3 对齐（main/PA/PB 职责、版本化 v1.0.0/v1.0.x/v2.0.0、共享文件同步规则）；`[AI]` 提交标签与推送授权制已写入
