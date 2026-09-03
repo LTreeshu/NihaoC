@@ -47,8 +47,15 @@
 
 ## [2.0-dev] — 未发布（B 方案 IR 演进线）
 
-- **阶段 1 类型化指针模型（2026-08-31）**：`p = &标量` 记录指向类型（pt[] 表 PT_SCALAR 编码，聚合/标量/枚举三分支）；`*p` 解引用读按指向类型标记浮点；`*p = e` 写按指向类型 coerce（窄型 TRUNC 截断 / double ITOD）；复合赋值 `*p += e` RMW；指针算术 `p + k` ×8 槽宽缩放（与数组寻址一致）
-- 新用例 ir_ptr2.nc（IR_SUBSET）：读/写/narrow 截断/double/复合+算术 5 组断言，四后端一致 0 FAIL；WSL Linux ir-c 实测输出一致
+- **阶段 1 类型化指针模型（2026-08-31）**：`p = &标量` 记录指向类型（pt[] 表 PT_SCALAR 编码，聚合/标量/枚举三分支）；解引用读按指向类型标记浮点；解引用写按指向类型 coerce（窄型 TRUNC 截断 / double ITOD）；复合赋值 RMW；指针算术 `p + k` ×8 槽宽缩放（与数组寻址一致）。新用例 ir_ptr2.nc（IR_SUBSET）读/写/narrow 截断/double/复合+算术 5 组断言，四后端一致 0 FAIL
+
+### 2.0 指针语法收敛（2026-09-04，对齐 A 方案 1.0.x）
+
+- **移除一元 `*p` 解引用（与 BNF/文档一致）**：`irparse.c` 删除一元 `*` 解引用读（`ir_primary`）、`*p = e` / `*p op=` 写+复合（`ir_stmt` 两处），改为 `nihao_error` + 吞 token 防死循环；乘法 `*` 不受影响。指针解引用统一收敛为 `.()` / `.(T)` / `->`。`void` 通用指针、`void[n]` 指针数组与隐式推断 `p = &x` 保留。
+- **补 `.() op= e` 复合解引用**：`ir_stmt` 的 `.() = e` 写块支持 `+= -= *= /= %=`——LOAD 当前值 → 按指向类型协调（double 指向走 FADD/FSUB/FMUL/FDIV 且 LOAD 结果直接 `ir_set_double` 勿 ITOD）→ op → 按指向类型 `ir_coerce` 截断 → STORE。
+- **修复 2 个既有 IR 后端正确性缺陷**（此前被 `ir_ptr2.nc` 无 `.expect` + 跨后端一致性检查"错得一样也算 PASS"掩盖）：① `.() read` 对浮点指向（f64/f32）标记结果 vreg 为 double，避免位模式被当整数 ITOD 误转；② `.() = e` / `.() op=` 按**指向类型** `pt[vi]` 截断（窄型 TRUNC / double→int 兜底），原代码误用指针自身类型 `vtype[vi]` 导致窄写不截断。
+- **测试同步改写**：`ir_ptr2.nc` 复合解引用改为 `p.() += 2` / `pd.() += 1.0` / `pc.() += 1` / `p.() *= 3` / `p.() -= 10`（含 int/double/narrow/mul/sub），四后端一致 0 FAIL；`ir_ptr.nc`/`ir_slice.nc` 保持通过。
+- **回归验证**：`xmake test --all` 全矩阵（c/native/ir-c/ir-native）**0 FAIL**，`ir_ptr`/`ir_ptr2`/`ir_slice` 四后端一致。
 
 ## [M4] — CLI 工具链
 

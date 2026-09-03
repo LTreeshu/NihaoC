@@ -753,35 +753,11 @@ static int ir_primary(CompilerState *cs)
         return vr;
     }
     if (t == TOK_STAR) {
-        /* 一元解引用 *p -> LOAD
-         * 阶段 1 类型化：peek 预判 `*` 后是记录过指向类型的变量标识符——
-         * 指向标量时 LOAD 后按指向类型标记（double/f32 → 浮点 vreg）。
-         * 非变量/未记录指针（如 *(&x)、聚合指针）走通用 LOAD（原行为）。 */
-        LexerState *lx = cs->parser.lex;
-        lx->peek_valid = 0;
-        lexer_peek(lx);
-        int pvi = -1;
-        if (lx->peek_tok == TOK_IDENTIFIER) {
-            int tv = var_find(lx->peek_str);
-            if (tv >= 0 && PT_IS_SCALAR(pt[tv])) pvi = tv;
-        }
-        lx->peek_valid = 0;
-        if (pvi >= 0) {
-            int sc = PT_SCALAR_CODE(pt[pvi]);
-            next_tok(cs);                       /* * */
-            next_tok(cs);                       /* p */
-            int addr = ir_new_vreg(F);
-            ir_emit(F, IR_MOV, addr, vt[pvi], -1, 0);  /* p 槽值 = 目标地址 */
-            int vr = ir_new_vreg(F);
-            ir_emit(F, IR_LOAD, vr, addr, -1, 0);
-            if (sc == 1 || sc == 8) ir_set_double(vr); /* 指向 f64/f32 → 浮点值 */
-            return vr;
-        }
+        /* 一元解引用 *p 已从 1.0.x/2.0 指针语法移除（解引用统一 .()/.(T)/->）。
+         * 乘法 * 在 ir_term 处理，此处遇 * 即报错并吞掉该 token 防 fallthrough 死循环。 */
+        nihao_error(cs, "ir: unary dereference '*p' removed; use p.() instead");
         next_tok(cs);
-        int a = ir_primary(cs);
-        int vr = ir_new_vreg(F);
-        ir_emit(F, IR_LOAD, vr, a, -1, 0);
-        return vr;
+        return ir_new_vreg(F);
     }
     if (t == TOK_BITWISE_AND) {
         /* 取地址 &x -> ADDR（当前仅支持局部变量） */
@@ -1193,7 +1169,9 @@ static int ir_primary(CompilerState *cs)
         }
         if (cur_tok(cs) == TOK_DOT_PAREN) {
             /* 指针解引用 p.() → LOAD(*p)（p 变量存目标地址值；全量同语法。
-             * 注意 DOT_PAREN 已含 '('——token 流 p, DOT_PAREN, ')'） */
+             * 注意 DOT_PAREN 已含 '('——token 流 p, DOT_PAREN, ')'）。
+             * 指向浮点（f64/f32）时标记结果 vreg 为 double，避免后续赋值/运算
+             * 误把位模式当整数转换（ITOD）——pt[] 记录指针指向的标量类型。 */
             next_tok(cs);
             expect(cs, TOK_RPAREN);
             ir_vis_check_usable(cs, vi);   /* M2：读前检查所有权是否已转移（use-after-move） */
@@ -1201,6 +1179,10 @@ static int ir_primary(CompilerState *cs)
             ir_emit(F, IR_MOV, addr, vt[vi], -1, 0);    /* p 槽值 = 目标地址（MOV 勿 LOAD） */
             int vr = ir_new_vreg(F);
             ir_emit(F, IR_LOAD, vr, addr, -1, 0);       /* 读目标内容 */
+            if (PT_IS_SCALAR(pt[vi])) {
+                int sc = PT_SCALAR_CODE(pt[vi]);
+                if (sc == 1 || sc == 8) ir_set_double(vr);
+            }
             return vr;
         }
         if (cur_tok(cs) == TOK_ARROW) {
@@ -2399,80 +2381,12 @@ static void ir_stmt(CompilerState *cs)
         }
         skip_newlines(cs);
     } else if (t == TOK_STAR) {
-        /* *p = e（阶段 1 类型化解引用写）：STORE 到 *p。
-         * p 须为记录过指向类型的变量；指向标量时 rhs 按指向类型 coerce
-         * （窄型 TRUNC 截断 / double ITOD / f32 FTRUNC），防槽污染。 */
+        /* 解引用写 *p = e / *p op= e 已从 1.0.x/2.0 指针语法移除（统一 p.()= / p.() op=）。
+         * 吞掉 * 与后续行，避免解析器在该 token 上死循环。 */
+        nihao_error(cs, "ir: dereference-write '*p = e' removed; use p.() = e instead");
         next_tok(cs);
-        if (cur_tok(cs) != TOK_IDENTIFIER) {
-            nihao_error(cs, "ir: '*<var> = expr' requires a variable after '*'");
-            next_tok(cs);
-            skip_newlines(cs);
-            return;
-        }
-        const char *pname = cs->parser.lex->tok_str;
-        int pvi = var_find(pname);
-        next_tok(cs);
-        if (pvi < 0) {
-            nihao_error(cs, "ir: undeclared variable '%s'", pname);
-            skip_newlines(cs);
-            return;
-        }
-        if (pt[pvi] >= 0) {
-            nihao_error(cs, "ir: '*%s' is an aggregate pointer (use -> member access)", pname);
-            skip_newlines(cs);
-            return;
-        }
-        int at = cur_tok(cs);
-        int is_compound = 0;
-        IrOp op = IR_NOP;
-        if (at == TOK_PLUS_ASSIGN) { op = IR_ADD; is_compound = 1; }
-        else if (at == TOK_MINUS_ASSIGN) { op = IR_SUB; is_compound = 1; }
-        else if (at == TOK_STAR_ASSIGN) { op = IR_MUL; is_compound = 1; }
-        else if (at == TOK_SLASH_ASSIGN) { op = IR_DIV; is_compound = 1; }
-        else if (at == TOK_PERCENT_ASSIGN) { op = IR_MOD; is_compound = 1; }
-        if (at != TOK_ASSIGN && !is_compound) {
-            nihao_error(cs, "ir: expected '=' after '*%s'", pname);
-            skip_newlines(cs);
-            return;
-        }
-        next_tok(cs);
-        int v = ir_expr(cs);
-        if (is_compound) {
-            int addr0 = ir_new_vreg(F);
-            ir_emit(F, IR_MOV, addr0, vt[pvi], -1, 0);
-            int cur = ir_new_vreg(F);
-            ir_emit(F, IR_LOAD, cur, addr0, -1, 0);
-            if (PT_IS_SCALAR(pt[pvi])) {
-                int sc = PT_SCALAR_CODE(pt[pvi]);
-                if ((sc == 1 || sc == 8) && !ir_is_double(cur)) cur = ir_to_double(cur);
-                if (ir_is_double(cur) && !(sc == 1 || sc == 8)) {
-                    int nv = ir_new_vreg(F);
-                    ir_emit(F, IR_DTOI, nv, cur, -1, 0);
-                    cur = nv;
-                }
-                if (!ir_is_double(v) && ir_is_double(cur)) v = ir_to_double(v);
-                if (ir_is_double(v) && !ir_is_double(cur)) {
-                    int nv = ir_new_vreg(F);
-                    ir_emit(F, IR_DTOI, nv, v, -1, 0);
-                    v = nv;
-                }
-            }
-            int nv = ir_new_vreg(F);
-            ir_emit(F, op, nv, cur, v, 0);
-            if (PT_IS_SCALAR(pt[pvi])) {
-                int sc = PT_SCALAR_CODE(pt[pvi]);
-                if (ir_is_double(nv)) { if (!(sc == 1 || sc == 8)) { int t = ir_new_vreg(F); ir_emit(F, IR_DTOI, t, nv, -1, 0); nv = t; } }
-                else if (sc == 1 || sc == 8) nv = ir_to_double(nv);
-            }
-            v = nv;
-        }
-        int addr = ir_new_vreg(F);
-        ir_emit(F, IR_MOV, addr, vt[pvi], -1, 0);      /* 目标地址 = p 槽值 */
-        if (PT_IS_SCALAR(pt[pvi])) {
-            v = ir_coerce(v, PT_SCALAR_CODE(pt[pvi])); /* 按指向类型截断/提升 */
-        }
-        ir_emit(F, IR_STORE, -1, addr, v, 0);
         skip_newlines(cs);
+        return;
     } else if (t == TOK_IDENTIFIER) {
         const char *name = cs->parser.lex->tok_str;
         /* peek 下一个 token 分派：赋值 / 声明(name i32 = expr) / 表达式 */
@@ -2642,7 +2556,8 @@ static void ir_stmt(CompilerState *cs)
             ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             skip_newlines(cs);
         } else if (nt == TOK_DOT_PAREN) {
-            /* 指针解引用赋值 p.() = e（STORE 到 *p） */
+            /* 指针解引用 p.() = e（STORE）/ p.() op= e（复合 RMW，2.0 对齐 .() 复合解引用）。
+             * 地址 = p 槽值（目标地址），LOAD 当前值 → 类型协调 → op → 按指向类型截断 → STORE。 */
             next_tok(cs);           /* name */
             int vi = var_find(name);
             if (vi < 0) {
@@ -2653,13 +2568,55 @@ static void ir_stmt(CompilerState *cs)
             ir_vis_check_writable(cs, vi);  /* M2：写前检查是否被活动借用冻结 */
             next_tok(cs);           /* .( */
             expect(cs, TOK_RPAREN);
-            expect(cs, TOK_ASSIGN);
-            int v = ir_expr(cs);
-            v = ir_coerce(v, vtype[vi]);
-            int addr = ir_new_vreg(F);
-            ir_emit(F, IR_MOV, addr, vt[vi], -1, 0);    /* p 槽值 = 目标地址（MOV 勿 LOAD） */
-            ir_emit(F, IR_STORE, -1, addr, v, 0);
-            skip_newlines(cs);
+            TokenType at = cur_tok(cs);
+            if (at == TOK_ASSIGN || at == TOK_PLUS_ASSIGN || at == TOK_MINUS_ASSIGN ||
+                at == TOK_STAR_ASSIGN || at == TOK_SLASH_ASSIGN || at == TOK_PERCENT_ASSIGN) {
+                next_tok(cs);
+                int addr = ir_new_vreg(F);
+                ir_emit(F, IR_MOV, addr, vt[vi], -1, 0);    /* p 槽值 = 目标地址（MOV 勿 LOAD） */
+                int v;
+                if (at != TOK_ASSIGN) {
+                    /* 复合 p.() op= e：LOAD 当前值 → 按指向类型协调 → op → 截断 → STORE */
+                    int cur = ir_new_vreg(F);
+                    ir_emit(F, IR_LOAD, cur, addr, -1, 0);
+                    v = ir_expr(cs);
+                    int sc = (PT_IS_SCALAR(pt[vi])) ? PT_SCALAR_CODE(pt[vi]) : vtype[vi];
+                    IrOp op;
+                    switch (at) {
+                        case TOK_PLUS_ASSIGN:    op = IR_ADD; break;
+                        case TOK_MINUS_ASSIGN:   op = IR_SUB; break;
+                        case TOK_STAR_ASSIGN:    op = IR_MUL; break;
+                        case TOK_SLASH_ASSIGN:   op = IR_DIV; break;
+                        default:                 op = IR_MOD; break;
+                    }
+                    if (sc == 1 || sc == 8) {
+                        /* 浮点指向：LOAD 已是 double 位模式，直接标记（勿 ITOD）；rhs 提 double */
+                        ir_set_double(cur);
+                        if (!ir_is_double(v)) v = ir_to_double(v);
+                        IrOp fop = (op == IR_MUL) ? IR_FMUL : (op == IR_DIV) ? IR_FDIV :
+                                   (op == IR_SUB) ? IR_FSUB : IR_FADD;
+                        int nv = ir_new_vreg(F);
+                        ir_emit(F, fop, nv, cur, v, 0);
+                        ir_set_double(nv);
+                        v = nv;
+                    } else {
+                        if (ir_is_double(cur)) { int t = ir_new_vreg(F); ir_emit(F, IR_DTOI, t, cur, -1, 0); cur = t; }
+                        if (ir_is_double(v))   { int t = ir_new_vreg(F); ir_emit(F, IR_DTOI, t, v, -1, 0);   v = t; }
+                        int nv = ir_new_vreg(F);
+                        ir_emit(F, op, nv, cur, v, 0);
+                        v = nv;
+                    }
+                    v = ir_coerce(v, sc);   /* 按指向类型截断（窄型 TRUNC / double→int 兜底） */
+                } else {
+                    v = ir_expr(cs);
+                    v = ir_coerce(v, (PT_IS_SCALAR(pt[vi])) ? PT_SCALAR_CODE(pt[vi]) : vtype[vi]);
+                }
+                ir_emit(F, IR_STORE, -1, addr, v, 0);
+                skip_newlines(cs);
+            } else {
+                nihao_error(cs, "ir: expected '=' or 'op=' after p.()");
+                skip_newlines(cs);
+            }
         } else if (nt == TOK_ARROW) {
             /* 指针成员赋值 p->field = e / p->field op= e（地址 = p 值 + off*8） */
             next_tok(cs);           /* name */
@@ -3049,34 +3006,12 @@ static void ir_stmt(CompilerState *cs)
         ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
         skip_newlines(cs);
     } else if (t == TOK_STAR) {
-        /* *p = expr（STORE）或 *p 表达式（LOAD）
-         * 注意：ir_primary 的标识符分支含赋值表达式块，`*p = 43` 中
-         * ir_primary(p) 会误把 `=` 当 p 的赋值 → 标识符手动读值。 */
+        /* 一元解引用 *p（读/写）已从 1.0.x/2.0 指针语法移除（统一 .()/.(T)/->）。
+         * 吞掉 * 与后续行，防解析死循环。 */
+        nihao_error(cs, "ir: unary dereference '*p' removed; use p.() instead");
         next_tok(cs);
-        int addr;
-        if (cur_tok(cs) == TOK_IDENTIFIER) {
-            const char *pname = cs->parser.lex->tok_str;
-            int pvi = var_find(pname);
-            if (pvi < 0) {
-                nihao_error(cs, "ir: undeclared variable '%s'", pname);
-                skip_newlines(cs);
-                return;
-            }
-            next_tok(cs);
-            addr = ir_new_vreg(F);
-            ir_emit(F, IR_MOV, addr, vt[pvi], -1, 0);   /* 读指针值 */
-        } else {
-            addr = ir_primary(cs);
-        }
-        if (cur_tok(cs) == TOK_ASSIGN) {
-            next_tok(cs);
-            int vr = ir_expr(cs);
-            ir_emit(F, IR_STORE, -1, addr, vr, 0);
-        } else {
-            int vr = ir_new_vreg(F);
-            ir_emit(F, IR_LOAD, vr, addr, -1, 0);
-        }
         skip_newlines(cs);
+        return;
     } else if (t == TOK_COOKING) {
         /* 函数内编译期块：执行 static_assert，其余跳过 */
         ir_cooking(cs);

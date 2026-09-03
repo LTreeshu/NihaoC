@@ -60,7 +60,7 @@
 - [x] `p = &标量` 记录类型（pt[] 表扩展：`PT_SCALAR(-2-code)` 标量编码，聚合索引 >=0 / 标量 < -1 / -1 非指针三分区）
 - [x] 指针算术边界（p+1 语义：×8 槽宽缩放，与数组寻址一致；链式 p+k+1 保持字节语义——NihaoC 无 C 连续指针算术，语义已文档化）
 - [x] ir_arrow.nc 从 IR_ONLY 转正为 IR_SUBSET（8/19 PA 分支：A 方案指针声明落地 + IR 层 `->` 偏移 ×8 修复后，四后端一致）
-- [x] 类型化解引用：`*p` 读（double 标记）、`*p = e` 写（coerce/TRUNC）、`*p += e` 复合（RMW）——新用例 ir_ptr2.nc（IR_SUBSET）四后端一致，WSL Linux 实测输出一致
+- [x] 类型化解引用：`.() = e` 写（按指向类型 coerce/TRUNC）、`.() op= e` 复合（LOAD→类型协调→op→截断→STORE）、`.() read` 浮点标记（f64/f32 → double vreg）；一元 `*p` 已于 2026-09-04 收敛移除（等价能力由 `.()` 提供）——新用例 ir_ptr2.nc（IR_SUBSET）四后端一致，WSL Linux 实测输出一致
 
 ### 阶段 2：产品能力补齐（A 方案能力平移，P0-P1）
 
