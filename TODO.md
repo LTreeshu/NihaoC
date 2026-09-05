@@ -1,7 +1,7 @@
 # NihaoC 项目进度与 TODO 清单
 
-> 更新日期：2026-08-30
-> 本文档反映 `ncc/` 活跃开发目录（git `c80309d`）的最新状态，源码已同步至本目录 `ncc/`。
+> 更新日期：2026-09-05
+> 本文档反映 `ncc/` 活跃开发目录（git `7c070ce`，PB 分支）的最新状态，源码已同步至本目录 `ncc/`。
 > 2026-08-29 起仓库分支化：B 方案开发在 `PB` 分支（见 `docs/GIT_CONVENTIONS.md`）。
 
 ---
@@ -22,6 +22,10 @@
 | 后端 A | `-backend=native`：libtcc 进程内生成机器码 | ✅ |
 | 后端 B | IR 中间层骨架（三地址码 + 双后端） | ✅ |
 | 后端 B | IR 双后端端到端跑通（`-backend=ir-c` / `ir-native`） | ✅ |
+| 后端 B | 阶段 1 类型化指针模型（pt[] 类型化 + `.() op=` 复合，含一元 `*p` 收敛移除） | ✅ |
+| PB-25 | 指针语法收敛：移除一元 `*p` 解引用 + 补 `.() op=` 复合，与 A 1.0.x 对齐 | ✅ |
+| PB-26 | 参数前缀 `flow/var/const/static` + 调用点 M2 所有权检查移植 | ✅ |
+| 验收 | PB `xmake test --all` 全矩阵（c/native/ir-c/ir-native）73 PASS / 0 FAIL / 26 SKIP | ✅ |
 
 ### 1.2 当前代码架构
 
@@ -171,6 +175,11 @@ ncc/
   - **顺带修复 2 个既有 IR 后端正确性缺陷**（此前被 `ir_ptr2.nc` 无 `.expect` + 跨后端一致性检查"错得一样也算 PASS"掩盖）：① `.() read` 对浮点指向（f64/f32）标记结果 vreg 为 double，避免后续赋值/运算把位模式当整数 ITOD 误转；② `.() = e` / `.() op=` 按**指向类型** `pt[vi]` 截断（窄型 TRUNC / double→int 兜底），原代码误用指针自身类型 `vtype[vi]` 导致窄写不截断。
   - **测试**：`ir_ptr2.nc` 改为 `p.() += 2` / `pd.() += 1.0` / `pc.() += 1` / `p.() *= 3` / `p.() -= 10` 复合断言（含 int/double/narrow/mul/sub），四后端一致 0 FAIL。
   - **回归**：`xmake test --all` 全矩阵（c/native/ir-c/ir-native）**0 FAIL**，`ir_ptr.nc`/`ir_ptr2.nc`/`ir_slice.nc` 四后端一致。
+
+- [x] **PB-26 参数前缀 + M2 所有权检查移植（2026-09-04 完成，与 PB-25 同期提交 `e09e609`/`5abde45`）**：B 方案（irparse.c）移植 A 方案 M2 静态检查能力：
+  - **参数前缀 `flow/var/const/static`**：函数参数声明支持可见性前缀，记录到变量表 `vvis`，与 `visof(x)` / `is _flow` 等可见性模式对齐（PB-5 变量前缀已覆盖局部变量，本项补齐参数位）。
+  - **调用点 M2 所有权检查**：调用表达式处按参数前缀执行所有权/借用检查（冻结/失效状态机），`err/m2a..m2e` 系列用例在 ir-c/ir-native 双后端转正为 PASS（此前 SKIP）。
+  - **回归**：`xmake test --all` 全矩阵 0 FAIL；err 测试四后端一致。
 
 ---
 

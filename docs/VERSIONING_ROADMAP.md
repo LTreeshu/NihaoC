@@ -64,7 +64,9 @@
 
 ### 阶段 2：产品能力补齐（A 方案能力平移，P0-P1）
 
-- [ ] **M2 静态检查移植**（所有权/借用状态机——A 方案早期实现，2.0 重构进 IR 层；err 测试从 SKIP 转正）
+- [x] **M2 静态检查移植（2026-09-04 完成，PB-26）**：所有权/借用状态机移植进 IR 层（irparse.c），参数前缀 `flow/var/const/static` 记录 `vvis`；调用点 M2 所有权检查生效，`err/m2a..m2e` 在 ir-c/ir-native 双后端转正为 PASS（详见 TODO.md PB-26）
+- [ ] **link/use 跨文件**（module.c 语义接入 IR 前端，单文件模型 → 模块化）
+- [ ] **布局内置函数**（structof/unionof/holdof/bitoffsetof——需真实内存布局替代 8 字节槽模型）
 - [ ] **link/use 跨文件**（module.c 语义接入 IR 前端，单文件模型 → 模块化）
 - [ ] **布局内置函数**（structof/unionof/holdof/bitoffsetof——需真实内存布局替代 8 字节槽模型）
 
