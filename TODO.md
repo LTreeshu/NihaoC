@@ -26,6 +26,7 @@
 | PB-25 | 指针语法收敛：移除一元 `*p` 解引用 + 补 `.() op=` 复合，与 A 1.0.x 对齐 | ✅ |
 | PB-26 | 参数前缀 `flow/var/const/static` + 调用点 M2 所有权检查移植 | ✅ |
 | 验收 | PB `xmake test --all` 全矩阵（c/native/ir-c/ir-native）73 PASS / 0 FAIL / 26 SKIP | ✅ |
+| C | ir-c 输出质量：保留变量名（vreg_name 接入 ir.h/ir.c/irparse.c，ir_to_c 用 vrid 输出可读名；结构体直出待 B 真实布局） | ✅ |
 
 ### 1.2 当前代码架构
 

@@ -112,8 +112,25 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                    f->param_types[i] == 1 ? "double" : "int64_t", i);
         }
         cb_put(&b, ") {\n");
+
+        /* PB 阶段3 C 项：构建 vreg 标识符表——有名用源码名，无名用 tN（与声明一致）。
+         * 用于局部变量声明与全部指令操作数引用，使生成 C 可读。 */
+        char **vrid = NULL;
+        if (f->vreg_count > 0) {
+            vrid = nihao_malloc(g_cs, f->vreg_count * sizeof(char *));
+            for (int i = 0; i < f->vreg_count; i++) {
+                if (f->vreg_name && i < f->vreg_count && f->vreg_name[i]) {
+                    vrid[i] = nihao_strdup(g_cs, f->vreg_name[i]);
+                } else {
+                    char tmp[32];
+                    snprintf(tmp, sizeof(tmp), "t%d", i);
+                    vrid[i] = nihao_strdup(g_cs, tmp);
+                }
+            }
+        }
+
         /* 局部变量声明：遍历全部 vreg——数组基（ALLOCA imm>8）声明为
-         * C 数组 t{i}[imm/8]；其余（标量槽/临时）声明单变量。
+         * C 数组 vrid[i][imm/8]；其余（标量槽/临时）声明单变量。
          * 数组元素 vreg 无 ALLOCA 也声明（未被引用，无害）。 */
         if (f->vreg_count > 0) {
             for (int i = 0; i < f->vreg_count; i++) {
@@ -125,18 +142,19 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                     }
                 }
                 if (asz > 8) {
-                    cb_put(&b, "    int64_t t%d[%lld];\n", i, asz / 8);
+                    cb_put(&b, "    int64_t %s[%lld];\n", vrid[i], asz / 8);
                 } else {
-                    cb_put(&b, "    %s t%d;\n",
-                           (f->vreg_type && f->vreg_type[i] == 1) ? "double" : "int64_t", i);
+                    cb_put(&b, "    %s %s;\n",
+                           (f->vreg_type && f->vreg_type[i] == 1) ? "double" : "int64_t",
+                           vrid[i]);
                 }
             }
         }
         /* 参数绑定到 vreg 0..nparam-1（parser 先 declare 的参数在 vreg 0..） */
         for (int i = 0; i < f->param_count; i++) {
-            cb_put(&b, "    t%d = arg%d;\n", i, i);
+            cb_put(&b, "    %s = arg%d;\n", vrid[i], i);
         }
-        /* 指令 */
+        /* 指令（操作数统一用 vrid：有名变量读源码名，无名临时读 tN，与声明一致） */
         for (int i = 0; i < f->ins_count; i++) {
             IrIns *in = &f->ins[i];
             switch (in->op) {
@@ -146,84 +164,84 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                         /* 浮点常量：imm 是 double 位模式 */
                         union { int64_t i; double d; } u;
                         u.i = in->imm;
-                        cb_put(&b, "    t%d = %.17g;\n", in->dst, u.d);
+                        cb_put(&b, "    %s = %.17g;\n", vrid[in->dst], u.d);
                     } else {
-                        cb_put(&b, "    t%d = %lld;\n", in->dst, (long long)in->imm);
+                        cb_put(&b, "    %s = %lld;\n", vrid[in->dst], (long long)in->imm);
                     }
                     break;
                 case IR_MOV:
-                    cb_put(&b, "    t%d = t%d;\n", in->dst, in->a);
+                    cb_put(&b, "    %s = %s;\n", vrid[in->dst], vrid[in->a]);
                     break;
                 case IR_ADD: case IR_SUB: case IR_MUL:
                 case IR_DIV: case IR_MOD:
                 case IR_SHL: case IR_SHR: case IR_AND: case IR_OR:
-                    cb_put(&b, "    t%d = t%d %s t%d;\n",
-                           in->dst, in->a, bin_op(in->op), in->b);
+                    cb_put(&b, "    %s = %s %s %s;\n",
+                           vrid[in->dst], vrid[in->a], bin_op(in->op), vrid[in->b]);
                     break;
                 case IR_FADD: case IR_FSUB: case IR_FMUL: case IR_FDIV:
-                    cb_put(&b, "    t%d = t%d %s t%d;\n",
-                           in->dst, in->a,
+                    cb_put(&b, "    %s = %s %s %s;\n",
+                           vrid[in->dst], vrid[in->a],
                            in->op == IR_FADD ? "+" :
                            in->op == IR_FSUB ? "-" :
                            in->op == IR_FMUL ? "*" : "/",
-                           in->b);
+                           vrid[in->b]);
                     break;
                 case IR_ITOD:
-                    cb_put(&b, "    t%d = (double)t%d;\n", in->dst, in->a);
+                    cb_put(&b, "    %s = (double)%s;\n", vrid[in->dst], vrid[in->a]);
                     break;
                 case IR_DTOI:
-                    cb_put(&b, "    t%d = (int64_t)t%d;\n", in->dst, in->a);
+                    cb_put(&b, "    %s = (int64_t)%s;\n", vrid[in->dst], vrid[in->a]);
                     break;
                 case IR_FTRUNC:
-                    cb_put(&b, "    t%d = (float)t%d;\n", in->dst, in->a);
+                    cb_put(&b, "    %s = (float)%s;\n", vrid[in->dst], vrid[in->a]);
                     break;
                 case IR_TRUNC:
                     /* 窄整数截断 + 符号/零扩展（imm: 0=i8 1=i16 2=i32 3=u8 4=u16 5=u32） */
-                    cb_put(&b, "    t%d = (%s)t%d;\n", in->dst,
+                    cb_put(&b, "    %s = (%s)%s;\n", vrid[in->dst],
                            in->imm == 0 ? "int8_t" : in->imm == 1 ? "int16_t" :
                            in->imm == 2 ? "int32_t" : in->imm == 3 ? "uint8_t" :
-                           in->imm == 4 ? "uint16_t" : "uint32_t", in->a);
+                           in->imm == 4 ? "uint16_t" : "uint32_t", vrid[in->a]);
                     break;
                 case IR_FCMP:
-                    cb_put(&b, "    t%d = (t%d %s t%d);\n",
-                           in->dst, in->a,
+                    cb_put(&b, "    %s = (%s %s %s);\n",
+                           vrid[in->dst], vrid[in->a],
                            in->imm == 0 ? "==" : in->imm == 1 ? "!=" :
                            in->imm == 2 ? "<"  : in->imm == 3 ? "<=" :
                            in->imm == 4 ? ">"  : ">=",
-                           in->b);
+                           vrid[in->b]);
                     break;
                 case IR_NEG:
-                    cb_put(&b, "    t%d = -t%d;\n", in->dst, in->a);
+                    cb_put(&b, "    %s = -%s;\n", vrid[in->dst], vrid[in->a]);
                     break;
                 case IR_NOT:
-                    cb_put(&b, "    t%d = ~t%d;\n", in->dst, in->a);
+                    cb_put(&b, "    %s = ~%s;\n", vrid[in->dst], vrid[in->a]);
                     break;
                 case IR_CMP_EQ: case IR_CMP_NE: case IR_CMP_LT:
                 case IR_CMP_LE: case IR_CMP_GT: case IR_CMP_GE:
-                    cb_put(&b, "    t%d = (t%d %s t%d);\n",
-                           in->dst, in->a, cmp_op(in->op), in->b);
+                    cb_put(&b, "    %s = (%s %s %s);\n",
+                           vrid[in->dst], vrid[in->a], cmp_op(in->op), vrid[in->b]);
                     break;
                 case IR_JMP:
                     cb_put(&b, "    goto L%d;\n", in->label);
                     break;
                 case IR_JZ:
-                    cb_put(&b, "    if (!t%d) goto L%d;\n", in->a, in->label);
+                    cb_put(&b, "    if (!%s) goto L%d;\n", vrid[in->a], in->label);
                     break;
                 case IR_JNZ:
-                    cb_put(&b, "    if (t%d) goto L%d;\n", in->a, in->label);
+                    cb_put(&b, "    if (%s) goto L%d;\n", vrid[in->a], in->label);
                     break;
                 case IR_LABEL:
                     cb_put(&b, "L%d:;\n", in->label);
                     break;
                 case IR_LD_ADDR:
-                    cb_put(&b, "    t%d = (int64_t)(intptr_t)%s;\n", in->dst, in->sym);
+                    cb_put(&b, "    %s = (int64_t)(intptr_t)%s;\n", vrid[in->dst], in->sym);
                     break;
                 case IR_ALLOCA:
-                    /* C 中局部变量已声明；ALLOCA 槽即 t%d */
+                    /* C 中局部变量已声明；ALLOCA 槽即 vrid */
                     break;
                 case IR_ADDR:
-                    /* 平铺槽（imm=8）：&t{a+imm} 直接引用槽 vreg；
-                     * 基本数组基（imm>8）：&t{a}[imm]（C 数组元素，字节连续） */
+                    /* 平铺槽（imm=8）：&vrid{a+imm} 直接引用槽 vreg；
+                     * 基本数组基（imm>8）：&vrid{a}[imm]（C 数组元素，字节连续） */
                     {
                         long long asz = 8;
                         for (int ai = 0; ai < f->ins_count; ai++) {
@@ -234,47 +252,47 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                             }
                         }
                         if (asz > 8) {
-                            cb_put(&b, "    t%d = (int64_t)(intptr_t)&t%d[%lld];\n",
-                                   in->dst, in->a, (long long)in->imm);
+                            cb_put(&b, "    %s = (int64_t)(intptr_t)&%s[%lld];\n",
+                                   vrid[in->dst], vrid[in->a], (long long)in->imm);
                         } else {
-                            cb_put(&b, "    t%d = (int64_t)(intptr_t)&t%d;\n",
-                                   in->dst, in->a + (int)in->imm);
+                            cb_put(&b, "    %s = (int64_t)(intptr_t)&%s;\n",
+                                   vrid[in->dst], vrid[in->a + (int)in->imm]);
                         }
                     }
                     break;
                 case IR_ELEM_ADDR:
                     /* 元素地址 = 基址 + idx*width（imm=宽度，0 兼容=8） */
-                    cb_put(&b, "    t%d = t%d + t%d * %d;\n",
-                           in->dst, in->a, in->b,
+                    cb_put(&b, "    %s = %s + %s * %d;\n",
+                           vrid[in->dst], vrid[in->a], vrid[in->b],
                            in->imm == 1 ? 1 : in->imm == 2 ? 2 :
                            in->imm == 4 ? 4 : 8);
                     break;
                 case IR_LOAD:
                     /* 类型感知存取（PB-1 数组元素宽度/浮点数组）：dst 标记 double → double 指针 */
-                    cb_put(&b, "    t%d = *(%s*)(intptr_t)t%d;\n",
-                           in->dst,
+                    cb_put(&b, "    %s = *(%s*)(intptr_t)%s;\n",
+                           vrid[in->dst],
                            (f->vreg_type && in->dst < f->vreg_count &&
                             f->vreg_type[in->dst] == 1) ? "double" : "int64_t",
-                           in->a);
+                           vrid[in->a]);
                     break;
                 case IR_STORE:
                     /* 源 vreg 为 double → double 指针（否则 int64 截断 double 位模式） */
-                    cb_put(&b, "    *(%s*)(intptr_t)t%d = t%d;\n",
+                    cb_put(&b, "    *(%s*)(intptr_t)%s = %s;\n",
                            (f->vreg_type && in->b < f->vreg_count &&
                             f->vreg_type[in->b] == 1) ? "double" : "int64_t",
-                           in->a, in->b);
+                           vrid[in->a], vrid[in->b]);
                     break;
                 case IR_LOAD8:
-                    cb_put(&b, "    t%d = *(uint8_t*)(intptr_t)t%d;\n",
-                           in->dst, in->a);
+                    cb_put(&b, "    %s = *(uint8_t*)(intptr_t)%s;\n",
+                           vrid[in->dst], vrid[in->a]);
                     break;
                 case IR_STORE8:
-                    cb_put(&b, "    *(uint8_t*)(intptr_t)t%d = t%d;\n",
-                           in->a, in->b);
+                    cb_put(&b, "    *(uint8_t*)(intptr_t)%s = %s;\n",
+                           vrid[in->a], vrid[in->b]);
                     break;
                 case IR_RET:
                     if (in->a >= 0)
-                        cb_put(&b, "    return t%d;\n", in->a);
+                        cb_put(&b, "    return %s;\n", vrid[in->a]);
                     else
                         cb_put(&b, "    return 0;\n");
                     break;
@@ -291,14 +309,14 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                     }
                     int start = tc > nargs ? tc - nargs : 0;
                     /* malloc 返回 void* → 显式 (int64_t)(intptr_t) 消除警告 */
-                    cb_put(&b, "    t%d = %s%s(", in->dst,
+                    cb_put(&b, "    %s = %s%s(", vrid[in->dst],
                            (in->sym && strcmp(in->sym, "malloc") == 0) ?
                                "(int64_t)(intptr_t)" : "",
                            in->sym);
                     for (int k = start; k < tc; k++) {
                         cb_put(&b, "%s%s", k > start ? ", " : "",
                                is_str_addr(f, temp[k]) ? "(char*)" : "");
-                        cb_put(&b, "t%d", temp[k]);
+                        cb_put(&b, "%s", vrid[temp[k]]);
                     }
                     cb_put(&b, ");\n");
                     break;
@@ -312,11 +330,11 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                         if (f->ins[k].op == IR_PARAM) temp[tc++] = f->ins[k].a;
                     }
                     int start = tc > nargs ? tc - nargs : 0;
-                    cb_put(&b, "    t%d = ((int64_t (*)())t%d)(", in->dst, in->a);
+                    cb_put(&b, "    %s = ((int64_t (*)())%s)(", vrid[in->dst], vrid[in->a]);
                     for (int k = start; k < tc; k++) {
                         cb_put(&b, "%s%s", k > start ? ", " : "",
                                is_str_addr(f, temp[k]) ? "(char*)" : "");
-                        cb_put(&b, "t%d", temp[k]);
+                        cb_put(&b, "%s", vrid[temp[k]]);
                     }
                     cb_put(&b, ");\n");
                     break;

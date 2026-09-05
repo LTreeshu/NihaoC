@@ -612,6 +612,10 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
         }
     }
     vt[vn_count] = base;
+    /* PB 阶段3 C 项：把源码变量名写入 IR，供 ir_to_c 输出保留可读名
+     * （数组/聚合仅基 vreg 命名，元素/成员 vreg 仍平铺 tN，与声明一致） */
+    if (base >= 0 && base < F->vreg_count)
+        F->vreg_name[base] = vn[vn_count];
     return vn_count++;
 }
 

@@ -67,6 +67,7 @@ typedef struct {
     int ins_cap;
     IrIns *ins;
     int *vreg_type;     /* vreg -> 0=int 1=double（随 vreg_count 动态增长） */
+    const char **vreg_name; /* vreg -> 源码变量名（有名用名，无名 NULL；ir_to_c 输出可读化，PB 阶段3 C 项） */
     int ret_is_double;  /* 返回值为 f64/f32（PB-浮点 ABI） */
     int ret_agg_ti;     /* 返回聚合类型索引（struct 返回 = sret；-1=非聚合） */
     int param_types[32];/* 参数类型 0=int 1=double（param_count <= 32，与 pnames 对齐） */

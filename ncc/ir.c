@@ -49,6 +49,9 @@ int ir_new_vreg(IrFn *f)
     /* vreg 类型表随 vreg_count 增长（默认 0=int；1=double） */
     f->vreg_type = nihao_realloc(g_cs, f->vreg_type, f->vreg_count * sizeof(int));
     f->vreg_type[vr] = 0;
+    /* vreg 名字表同步增长（默认 NULL=无名；var_declare 后写入源码名） */
+    f->vreg_name = nihao_realloc(g_cs, f->vreg_name, f->vreg_count * sizeof(char *));
+    f->vreg_name[vr] = NULL;
     return vr;
 }
 
