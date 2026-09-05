@@ -87,6 +87,7 @@ ncc/
 - [x] **收敛后端生成器（2026-09-01 完成）**：codegen.c（旧直通后端）已删除，仅存 cgen.c（parser→C）与 ir_to_c.c（IR→C）双生成器；设计归档见 docs/LEGACY_CODEGEN.md。
 - [ ] linker.c 与后端的关系梳理（当前仅 default 后端使用）。
 - [x] 根目录 `docs/archive/Chinese.md.bak`（2026-08-20 用户确认后删除）。
+- [ ] **cgen `void*` 赋值告警清理（2026-09-05 登记，来自 PB 全量验收）**：`xmake test --all` PB 全量验收中，c/native 后端编译 `ir_struct` 生成的 C 出现 `warning: assignment makes pointer from integer without a cast`（`build/tests/c/ir_struct.exe.c:26`）。根因：A 方案 `cgen.c` 把 `void*` 通用指针映射为 C 的 `void*`，赋值时由整型（或退化数组首址）赋值触发 C 编译器 warning；属内部代码生成历史现象，**与本次指针语法收敛无关**。清理项：在 `cgen` 对该类 `void*` 赋值加显式转换（或改 `intptr_t` 中转，类比 PB-18 的 `(int64_t)(intptr_t)`），消除 warning；验收 `xmake test -b c / -b native` 无 warning。
 
 ---
 
