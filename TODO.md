@@ -91,7 +91,7 @@ ncc/
 - [x] **收敛后端生成器（2026-09-01 完成）**：codegen.c（旧直通后端）已删除，仅存 cgen.c（parser→C）与 ir_to_c.c（IR→C）双生成器；设计归档见 docs/LEGACY_CODEGEN.md。
 - [ ] linker.c 与后端的关系梳理（当前仅 default 后端使用）。
 - [x] 根目录 `docs/archive/Chinese.md.bak`（2026-08-20 用户确认后删除）。
-- [ ] **cgen `void*` 赋值告警清理（2026-09-05 登记，来自 PB 全量验收）**：`xmake test --all` PB 全量验收中，c/native 后端编译 `ir_struct` 生成的 C 出现 `warning: assignment makes pointer from integer without a cast`（`build/tests/c/ir_struct.exe.c:26`）。根因：A 方案 `cgen.c` 把 `void*` 通用指针映射为 C 的 `void*`，赋值时由整型（或退化数组首址）赋值触发 C 编译器 warning；属内部代码生成历史现象，**与本次指针语法收敛无关**。清理项：在 `cgen` 对该类 `void*` 赋值加显式转换（或改 `intptr_t` 中转，类比 PB-18 的 `(int64_t)(intptr_t)`），消除 warning；验收 `xmake test -b c / -b native` 无 warning。
+- [x] **cgen `void*` 赋值告警清理（2026-09-05 登记并修复）**：`xmake test --all` PB 全量验收中，c/native 后端编译 `ir_struct` 生成的 C 出现 `warning: assignment makes pointer from integer without a cast`（`build/tests/c/ir_struct.exe.c:26`）。根因：A 方案 `cgen.c` 把 `void*`/`char[]`（`TYPE_STRING`）通用指针映射为 C 的 `void*`/`char*`，赋值时由整型初值赋值触发 C 编译器 warning；属内部代码生成历史现象，与指针语法收敛无关（NihaoC 把 `char[]`/`void` 当 8 字节不透明槽，整数初值合法，与 IR 槽模型一致）。**修复（2026-09-05）**：`parser.c` 的 `parse_init_list` 接收被初始化变量类型，按成员位置取成员类型，对"整数初值 → 指针成员/元素"加 `(T*)` 显式转换（生成 `Person p = {(char*)100, 25, 90}`）；新增 `init_elem_type`/`is_pointer_like` 辅助函数。验收 `xmake test --all` 全矩阵 73 PASS / 0 FAIL / 26 SKIP，**0 warning**。
 
 ---
 

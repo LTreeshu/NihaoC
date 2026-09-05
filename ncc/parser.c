@@ -506,9 +506,40 @@ static int is_expr_continuer(TokenType t)
     }
 }
 
+/* 按聚合初始化位置取成员/元素类型：
+ *   struct/union → 第 k 个成员；array → 所有位置同为元素类型（base->ref）；其余 NULL */
+static CType *init_elem_type(CType *base, int k)
+{
+    if (!base) return NULL;
+    if (base->kind == TYPE_STRUCT || base->kind == TYPE_UNION) {
+        if (base->sym) {
+            Symbol *m = base->sym->members;
+            for (int i = 0; m && i < k; i++) m = m->next;
+            if (m) return m->type;
+        }
+        return NULL;
+    }
+    if (base->kind == TYPE_ARRAY) {
+        return base->ref;   /* 所有位置同为元素类型 */
+    }
+    return NULL;
+}
+
+/* 指针类类型：NihaoC 的 char[]/void/具名指针 → C 的 char* / void* / T*，
+ * 整数赋之需显式转换，否则触发 'makes pointer from integer without a cast' */
+static int is_pointer_like(CType *t)
+{
+    if (!t) return 0;
+    return t->kind == TYPE_POINTER || t->kind == TYPE_STRING ||
+           t->kind == TYPE_VOID;
+}
+
 /* 初始化列表（嵌套递归）：已消费 {，元素逐项 parse_expression；遇 { 递归。
- * 定义在使用处（parse_declaration）前 */
-static void parse_init_list(CompilerState *cs)
+ * base：被初始化变量类型（struct/union/array）；按位置对"整数 → 指针成员/元素"加 (T*)
+ *       显式转换，消除 C 编译器 'assignment makes pointer from integer without a cast' 告警——
+ *       NihaoC 把 char[]/void 当作 8 字节不透明槽，整数初值合法（与 IR 槽模型一致），但
+ *       cgen 生成的 C 为 char* / void*，裸整数赋值触发告警。base 为 NULL 时退化为原样输出。*/
+static void parse_init_list(CompilerState *cs, CType *base)
 {
     cgen_raw("{");
     next_tok(cs);
@@ -518,8 +549,13 @@ static void parse_init_list(CompilerState *cs)
         for (;;) {
             if (k > 0) cgen_raw(", ");
             if (cur_tok(cs) == TOK_LBRACE) {
-                parse_init_list(cs);
+                CType *sub = init_elem_type(base, k);
+                parse_init_list(cs, sub);
             } else {
+                CType *et = init_elem_type(base, k);
+                if (et && is_pointer_like(et) && cur_tok(cs) == TOK_INT_CONST) {
+                    cgen_raw("(%s)", c_type_name(et));
+                }
                 parse_expression(cs);
             }
             k++;
@@ -1051,9 +1087,10 @@ void parse_declaration(CompilerState *cs)
                 }
             }
         }
-        /* 数组/聚合初始化列表：= {e0, e1, ...}（原样输出给 C；嵌套 { } 递归） */
+        /* 数组/聚合初始化列表：= {e0, e1, ...}（嵌套 { } 递归；按成员类型对
+         * 整数→指针成员加 (T*) 转换，消除 C 编译器 pointer-from-integer 告警） */
         if (cur_tok(cs) == TOK_LBRACE) {
-            parse_init_list(cs);
+            parse_init_list(cs, &vtype);
         } else {
             parse_expression(cs);
         }
