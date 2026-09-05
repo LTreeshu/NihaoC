@@ -87,9 +87,9 @@ ncc/
 
 ### P3 — 代码卫生
 
-- [ ] 清理 `test/` 下的生成二进制（f1b、f4 等），改为构建目录输出。
+- [x] **清理生成二进制（2026-09-05 登记并闭环）**：源码树生成产物统一落 `build/`（xmake.lua `rule "nihao"` 与 `task "test"` 均写 `build/tests/<backend>/...`），`tests/pos`、`tests/err` 仅存 `.nc`/`.expect`；`ncc/.gitignore` 已忽略 `build/`、`a.out`、`a.out.c`，历史 `test/` 死项（f1b/f4）清理说明。源码根目录遗留的 `ncc/a.out` 已删除。
 - [x] **收敛后端生成器（2026-09-01 完成）**：codegen.c（旧直通后端）已删除，仅存 cgen.c（parser→C）与 ir_to_c.c（IR→C）双生成器；设计归档见 docs/LEGACY_CODEGEN.md。
-- [ ] linker.c 与后端的关系梳理（当前仅 default 后端使用）。
+- [x] **linker.c 与后端的关系梳理（2026-09-05 完成）**：头注释精确化——本模块为"库声明收集器"，`link` 指令写入点仅 A/默认后端链路 `parser.c`（`link_add_library`）；消费方 `native.c:144`/`stdlib.c:94` 读取 `link_libs` 交 tcc；**IR 后端链路 `irparse.c` 当前不调用本模块**（`link` 指令在 IR 双后端未生效），该接入归属 2.0 阶段 2「link/use 跨文件」项（路线图 A）。
 - [x] 根目录 `docs/archive/Chinese.md.bak`（2026-08-20 用户确认后删除）。
 - [x] **cgen `void*` 赋值告警清理（2026-09-05 登记并修复）**：`xmake test --all` PB 全量验收中，c/native 后端编译 `ir_struct` 生成的 C 出现 `warning: assignment makes pointer from integer without a cast`（`build/tests/c/ir_struct.exe.c:26`）。根因：A 方案 `cgen.c` 把 `void*`/`char[]`（`TYPE_STRING`）通用指针映射为 C 的 `void*`/`char*`，赋值时由整型初值赋值触发 C 编译器 warning；属内部代码生成历史现象，与指针语法收敛无关（NihaoC 把 `char[]`/`void` 当 8 字节不透明槽，整数初值合法，与 IR 槽模型一致）。**修复（2026-09-05）**：`parser.c` 的 `parse_init_list` 接收被初始化变量类型，按成员位置取成员类型，对"整数初值 → 指针成员/元素"加 `(T*)` 显式转换（生成 `Person p = {(char*)100, 25, 90}`）；新增 `init_elem_type`/`is_pointer_like` 辅助函数。验收 `xmake test --all` 全矩阵 73 PASS / 0 FAIL / 26 SKIP，**0 warning**。
 
