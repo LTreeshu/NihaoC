@@ -961,10 +961,19 @@ void parse_declaration(CompilerState *cs)
         }
         expect(cs, TOK_RPAREN);
 
-        /* optional return type after ')' */
+        /* optional return type after ')'
+         * PB-27：返回类型前可加可见性前缀 flow/var/const/static（§12.3 后半段）
+         *   flow  create_ptr() flow  void { ... return ptr }  // 转移所有权
+         *   static get()      static void { return pool }    // 共享引用
+         *   无前缀 = var 借用（默认） */
         CType ret_type;
         int has_ret = 0;
+        Visibility ret_vis_local = VIS_DEFAULT;
         skip_newlines(cs);
+        if (cur_tok(cs) == TOK_FLOW)        { ret_vis_local = VIS_FLOW;   next_tok(cs); }
+        else if (cur_tok(cs) == TOK_CONST)  { ret_vis_local = VIS_CONST;  next_tok(cs); }
+        else if (cur_tok(cs) == TOK_VAR)    { ret_vis_local = VIS_DEFAULT; next_tok(cs); }
+        else if (cur_tok(cs) == TOK_STATIC) { ret_vis_local = VIS_STATIC; next_tok(cs); }
         if (is_type_begin(cur_tok(cs)) || is_user_type_name(cs) || cur_tok(cs) == TOK_VOID) {
             parse_type(cs, &ret_type);
             has_ret = 1;
@@ -974,6 +983,7 @@ void parse_declaration(CompilerState *cs)
             memcpy(rtsave, &ret_type, sizeof(CType));
             func_sym->type->next = rtsave;
         }
+        func_sym->ret_vis = ret_vis_local;  /* PB-27：记录到符号，调用点 M2 检查用 */
 
         /* determine C return type */
         char cret[128];
@@ -982,8 +992,10 @@ void parse_declaration(CompilerState *cs)
             snprintf(cret, sizeof(cret), "int");
         } else if (has_ret && ret_type.kind != TYPE_VOID) {
             snprintf(cret, sizeof(cret), "%s", c_type_name(&ret_type));
-        } else if (vis == VIS_FLOW || vis == VIS_CONST) {
-            /* flow/const function returning a pointer -> void* */
+        } else if (vis == VIS_FLOW || vis == VIS_CONST ||
+                   ret_vis_local == VIS_FLOW || ret_vis_local == VIS_CONST ||
+                   ret_vis_local == VIS_STATIC) {
+            /* 函数体/返回类型前的前缀为 flow/const/static（PB-27 包含返回值前缀）→ 指针返回 void* */
             snprintf(cret, sizeof(cret), "void*");
         } else {
             snprintf(cret, sizeof(cret), "void");
@@ -1080,7 +1092,28 @@ void parse_declaration(CompilerState *cs)
             lexer_peek(lex);
             TokenType after = lex->peek_tok;
             lex->peek_valid = 0;
-            if (!is_expr_continuer(after)) {
+            if (after == TOK_LPAREN) {
+                /* PB-27：函数调用 RHS → 接收变量（指针类）按 callee->ret_vis→var_sym->vis 检查。
+                 * 仅当 callee 显式声明了非 var 返回前缀时才检查——无前缀 = "新值" 语义
+                 * （malloc/create 默认返回 var 但实质是 fresh value，不参与所有权转移）。 */
+                Symbol *callee = sym_find(cs, cs->parser.lex->tok_str);
+                if (callee && callee->kind == SYM_FUNCTION && var_sym->type &&
+                    vis_is_pointer_type(var_sym->type) && callee->ret_vis > VIS_DEFAULT) {
+                    if (vis_check_transfer((Visibility)callee->ret_vis, var_sym->vis)) {
+                        nihao_error(cs, "cannot assign %s() return (visibility %s) to '%s' (%s): "
+                                        "target lifetime would be shorter than source",
+                                    callee->name,
+                                    ((Visibility)callee->ret_vis) == VIS_CONST ? "const" :
+                                    ((Visibility)callee->ret_vis) == VIS_STATIC ? "static" :
+                                    ((Visibility)callee->ret_vis) == VIS_FLOW ? "flow" : "var",
+                                    name,
+                                    var_sym->vis == VIS_CONST ? "const" :
+                                    var_sym->vis == VIS_STATIC ? "static" :
+                                    var_sym->vis == VIS_FLOW ? "flow" : "var");
+                    }
+                }
+                /* tfn/callee==NULL 或 ret_vis==VIS_DEFAULT：前向引用或默认返回，跳过 */
+            } else if (!is_expr_continuer(after)) {
                 Symbol *init_sym = sym_find(cs, cs->parser.lex->tok_str);
                 if (init_sym && init_sym->kind == SYM_VARIABLE) {
                     vis_check_assign(cs, var_sym->vis, init_sym, var_sym, name);

@@ -102,3 +102,12 @@
     - [ ] PB-27.11 ADT / 带载荷枚举变体 `is Some(v)`（前置：语言先支持 ADT 类型）
     - [ ] PB-27.12 穷尽检查告警（前置：枚举/ADT 完整变体列表）
 - [ ] **PB-28 `is` 模式匹配测试补充**：`_var`/`_undef`/`_const`/`_static` 模式、枚举常量模式、标识符变量绑定、通配符 `_`、`do`+`is` 拒绝用例、错误路径（`is -`、`is 5..`、循环外 `is`、反向范围）、VAR/UNDEF 跨后端一致性；覆盖后并入 IR_SUBSET 白名单跑四后端矩阵
+
+### 返回值可见性前缀（2.0）
+
+- [x] **PB-29 返回值可见性前缀 + 调用点 M2 所有权转移（§12.3 后半段，2026-09-10 完成）**：补齐 B 方案返回类型可见性前缀与调用点 M2 检查（PB-26 完成参数位；本项完成返回位）：
+  - **返回类型前缀 `flow|var|const|static`**：函数声明 `func name(...) [vis] ret_type` 解析可见性前缀，记录到 `IrFn.ret_vis`（IR 端）与 `Symbol.ret_vis`（cgen 端）；无前缀 = `VIS_VAR` 默认（C 风格"新值"语义）。
+  - **声明赋值 M2 检查**（peek RHS 是 `IDENTIFIER(` → 调用表达式）：按 `ir_vis_transfer(ret_vis, decl_vis)` 判定所有权转移合法性；**仅 `ret_vis > VIS_VAR` 才检查**（默认 var = "新值"语义，`malloc`/`create` 等默认 var 返回不参与转移，避免破坏 IR_SUBSET 矩阵里 `flow a = malloc(i32)` 这类合法写法）。
+  - **cgen 返回类型生成**：`Symbol.ret_vis ∈ {flow/const/static}` 时 `cret = "void*"`（让 C 函数签名合法，避免参数/返回类型不匹配编译错）。
+  - **测试**：新增 `pos/struct_param_prefix.nc`（IR_ONLY，2 断言；struct × flow/var/const 前缀）、`pos/static_param_share.nc`（IR_SUBSET，4 断言；static 参数共享，函数局部 static + 延迟赋值规避 C "static 局部+函数 init 非法"）、`pos/return_flow.nc`（IR_SUBSET，4 断言；`flow→flow` 转移 + `static→const` 转移）、`err/m2f_retflow.nc`（3 错误用例，`flow→static` 禁止，报"target lifetime"）。
+  - **回归**：`xmake test --all` 全矩阵（c/native/ir-c/ir-native）**0 FAIL**；四后端一致。

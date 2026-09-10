@@ -70,6 +70,7 @@ typedef struct {
     const char **vreg_name; /* vreg -> 源码变量名（有名用名，无名 NULL；ir_to_c 输出可读化，PB 阶段3 C 项） */
     int ret_is_double;  /* 返回值为 f64/f32（PB-浮点 ABI） */
     int ret_agg_ti;     /* 返回聚合类型索引（struct 返回 = sret；-1=非聚合） */
+    int ret_vis;        /* 返回值可见性前缀（flow/var/const/static），默认 VIS_VAR；M2 调用点赋值检查用（PB-27） */
     int param_types[32];/* 参数类型 0=int 1=double（param_count <= 32，与 pnames 对齐） */
     int param_agg_ti[32];/* 参数聚合类型（struct 参数按值展开；-1=标量；按展开后索引） */
     int param_vis[32];  /* 参数可见性前缀（flow/var/const/static），按声明序对齐 param；M2 调用点检查用 */

@@ -2862,13 +2862,43 @@ static void ir_stmt(CompilerState *cs)
             }
             expect(cs, TOK_ASSIGN); /* 消费 =（expect 已推进） */
             int src_vi = -1;
+            int call_ret_vis = -1;          /* PB-27：RHS 是函数调用时记录 callee->ret_vis */
+            const char *call_name = NULL;    /* PB-27：函数名（错误消息用） */
             if (cur_tok(cs) == TOK_IDENTIFIER) {
-                int sv = var_find(cs->parser.lex->tok_str);
-                if (sv >= 0) src_vi = sv;   /* RHS 是裸变量引用 → 走所有权检查 */
+                /* peek 下一 token：若是 ( 则视为函数调用 RHS（PB-27 返回值所有权检查），
+                 * 否则视为裸变量引用（PB-26 转移检查） */
+                LexerState *lx = cs->parser.lex;
+                lx->peek_valid = 0;
+                lexer_peek(lx);
+                TokenType after = lx->peek_tok;
+                lx->peek_valid = 0;
+                if (after == TOK_LPAREN) {
+                    call_name = cs->parser.lex->tok_str;
+                    IrFn *tfn = ir_find_fn(call_name);
+                    if (tfn) call_ret_vis = tfn->ret_vis;
+                    /* tfn==NULL：前向引用，跳过检查（同 PB-26 var 路径的容错） */
+                } else {
+                    int sv = var_find(cs->parser.lex->tok_str);
+                    if (sv >= 0) src_vi = sv;   /* RHS 是裸变量引用 → 走所有权检查 */
+                }
             }
             int vi = var_declare(name, elems, -1, decl_vis);
             if (nt == TOK_VOID) vptr[vi] = 1;   /* 指针类标记（仅 void 触发所有权语义） */
-            if (src_vi >= 0) ir_vis_check_assign(cs, vi, src_vi);  /* M2 转移检查 */
+            if (src_vi >= 0) {
+                ir_vis_check_assign(cs, vi, src_vi);  /* M2 转移检查（裸变量 RHS） */
+            } else if (call_ret_vis > VIS_VAR && nt == TOK_VOID) {
+                /* PB-27：函数调用 RHS → 接收变量（void* 指针类）按 ret_vis→decl_vis 检查。
+                 * 仅当 callee 显式声明了非 var 返回前缀时才检查——无前缀 = "新值" 语义
+                 * （如 malloc、create 默认返回 var 但实质是 fresh value，不参与所有权转移）。
+                 * 转移矩阵（ir_vis_transfer）: flow→{flow,var,const}, static→{static,const},
+                 *   var→{var,const}, const→{const}；其他组合均禁止。 */
+                if (ir_vis_transfer(call_ret_vis, decl_vis)) {
+                    nihao_error(cs, "cannot assign %s() return (visibility %s) to '%s' (%s): "
+                                    "target lifetime shorter than source",
+                                call_name ? call_name : "(call)",
+                                ir_vis_str(call_ret_vis), name, ir_vis_str(decl_vis));
+                }
+            }
             if (elems > 0) {
                 vetyp[vi] = vt_code;    /* 数组元素类型（元素截断/浮点标记用） */
             } else if (vt_code == 2 && elems == 0 && is_arr) {
@@ -3091,6 +3121,16 @@ static void ir_func(CompilerState *cs)
     expect(cs, TOK_RPAREN);
     skip_newlines(cs);
     if (cur_tok(cs) != TOK_LBRACE) {
+        /* PB-27：返回类型可见性前缀 flow/var/const/static（§12.3 后半段）
+         *   flow  create_ptr() flow  void { ... return ptr }  // 转移所有权
+         *   static get()      static void { return pool }    // 共享引用
+         *   var/const: 借用（无前缀 = var 借用） */
+        int rv = VIS_VAR;
+        if (cur_tok(cs) == TOK_FLOW)        { rv = VIS_FLOW;   next_tok(cs); }
+        else if (cur_tok(cs) == TOK_CONST)  { rv = VIS_CONST;  next_tok(cs); }
+        else if (cur_tok(cs) == TOK_VAR)    { rv = VIS_VAR;    next_tok(cs); }
+        else if (cur_tok(cs) == TOK_STATIC) { rv = VIS_STATIC; next_tok(cs); }
+        F->ret_vis = rv;
         /* struct 返回 = sret：具名聚合类型 → 隐藏 out-param 机制
          * （返回聚合值经 _mr_ret 缓冲指针，调用方 malloc+拷贝） */
         if (cur_tok(cs) == TOK_IDENTIFIER) {

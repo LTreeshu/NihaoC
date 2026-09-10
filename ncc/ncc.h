@@ -112,7 +112,8 @@ struct Symbol {
     int hash;
     CType *type;
     Visibility vis;
-    
+    int ret_vis;          /* 仅 SYM_FUNCTION：返回值可见性前缀（PB-27）；0=VIS_DEFAULT=var */
+
     /* Storage info */
     int is_defined;             /* has body been defined */
     int is_extern;              /* external symbol */
