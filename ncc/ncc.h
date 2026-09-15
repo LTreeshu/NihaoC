@@ -428,11 +428,9 @@ void parse_declaration(CompilerState *cs);
 void parse_function(CompilerState *cs, Symbol *func_sym);
 void parse_statement(CompilerState *cs);
 void parse_expression(CompilerState *cs);
-void parse_function_full(CompilerState *cs, Symbol *func_sym);
 
 /* irparse.c / ir.c / ir_to_c.c / ir_to_native.c - IR middle layer (backend=ir-*) */
 int ir_compile(CompilerState *cs, const char *filename, int backend, int verbose);
-void parse_statement_full(CompilerState *cs);
 
 /* codegen.c */
 void codegen_init(CompilerState *cs);
