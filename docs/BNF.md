@@ -5,7 +5,7 @@
 > - 以 [`Chinese.md`](./Chinese.md)（中文语法规范）为唯一语义标准，与编译器实现（`ncc/lexer.c`、`ncc/parser.c`、`ncc/token.h`）保持一致。
 > - 记号（terminals）一律使用双引号字符串；非终结符使用 `<...>` 尖括号表示。
 > - 约定：`::=` 定义；`|` 选择；`[ x ]` 可选（0 或 1 次）；`{ x }` 重复（0 或多次）；`( x | y )` 分组。
-> - 版本：v2.0（2026-08-05 修订，覆盖全部已实现语法）。
+> - 版本：v2.1（2026-09-15 修订，指针语法收敛：一元 `*` 解引用移除，解引用统一 `.()`/`.(T)`/`->`，PA/PB 双前端对齐）。
 
 ---
 
@@ -213,7 +213,7 @@
 <multiplicative-expr> ::= <unary-expr> { ( "*" | "/" | "%" ) <unary-expr> }
 
 <unary-expr>     ::= <postfix-expr>
-                   | ( "-" | "!" | "~" | "&" | "*" ) <unary-expr>
+                   | ( "-" | "!" | "~" | "&" ) <unary-expr>
                    | ( "++" | "--" ) <unary-expr>
 
 <postfix-expr>   ::= <primary-expr> { <postfix-op> }
