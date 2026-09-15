@@ -1,6 +1,6 @@
 # 方案 A — libtcc native 后端待办（PA 分支）
 
-> 更新日期：2026-09-07
+> 更新日期：2026-09-15
 > 本文件为 PA 分支（1.0 冻结线）专属待办。通用里程碑与跨分支待办见 `ROADMAP.md`。
 > PA 分支处于冻结维护态，仅接受规范合规修复与代码卫生项。
 
@@ -28,5 +28,5 @@
 - [x] **PA-10 可用性语义（已于 2026-08-06 完成）**：新增 native_memory_available()（Windows 0 / 其他 1），run_mode 分支改用它替代 #ifdef
 - [x] **PA-11 tcc 目录探测重复**：native.c 与 xmake.lua 各一套，易漂移（已记录；建议后续以 NIHAO_TCC_DIR 为唯一来源）
 - [x] **PA-12 A 方案 1.0 发布（2026-08-31 完成）**：门禁验证 ✅（c/native 各 12P/0F/5S + examples 6/6，Windows）；Linux 实测 ✅（PA-9，c/native 各 12P/0F/6S + examples 6/6 + `-run` 修复）；README 更新 ✅（安装/CLI/后端表 1.0/2.0 范围）；BNF v2.0 终校 ✅（`=>`/`->`/`T*` 补全，中英文档同步）；CHANGELOG.md 建立 ✅；本地 `v1.0.0` tag ✅（commit 0aebcb7，合 main + push 由 ltree 决定，2026-08-31 已授权执行）。发布后 PA 分支进入冻结维护态
-- [ ] **PA-13 `is` 移除 `=>` 箭头形式（2026-09-01 规范定案的冻结例外）**：文档已删除单语句 `=>` 形式，C 后端 parser.c:1160 parse_is_stmt 的 TOK_FAT_ARROW 分支移除，只保留块形式 `is <pattern> { ... }`。属规范合规，允许在冻结线执行
-- [ ] **PA-14 清理废弃死代码（冻结例外·代码卫生）**：parser.c:2449-2556 的 `parse_statement_full` / `parse_function_full` 已废弃且无调用点，删除
+- [x] **PA-13 `is` 移除 `=>` 箭头形式（2026-09-15 完成）**：文档已删除单语句 `=>` 形式，C 后端 parser.c parse_is_stmt 的 TOK_FAT_ARROW 分支移除，只保留块形式 `is <pattern> { ... }`。测试文件 ir_is.nc 同步清理 `=>` 用例。token.h 注释更新（`=>` 仅 IR parser 使用）。属规范合规，允许在冻结线执行
+- [x] **PA-14 清理废弃死代码（2026-09-15 完成，冻结例外·代码卫生）**：parser.c 的 `parse_statement_full` / `parse_function_full` / `compile_file_full`（共 199 行）已废弃且无调用点，删除。ncc.h 对应声明同步移除
