@@ -14,7 +14,8 @@ do
         or os.isfile(path.join(envdir, "tcc"))) then
         tcc_dir = envdir
     else
-        for p in (os.getenv("PATH") or ""):gmatch("[^;:]+") do
+        -- path.splitenv 按平台分隔符切 PATH；gmatch("[^;:]+") 会把 Windows 盘符冒号误切成两段
+        for _, p in ipairs(path.splitenv(os.getenv("PATH") or "")) do
             if os.isfile(path.join(p, "tcc.exe")) or os.isfile(path.join(p, "tcc")) then
                 tcc_dir = p
                 break
@@ -38,7 +39,7 @@ toolchain("tcc")
             or os.isfile(path.join(envdir, "tcc"))) then
             bindir = envdir
         else
-            for p in (os.getenv("PATH") or ""):gmatch("[^;:]+") do
+            for _, p in ipairs(path.splitenv(os.getenv("PATH") or "")) do
                 if os.isfile(path.join(p, "tcc.exe")) or os.isfile(path.join(p, "tcc")) then
                     bindir = p
                     break
@@ -68,8 +69,14 @@ target("ncc")
               "ir_backend.c", "ir_x86_64.c", "ir_riscv64.c", "ir_arm64.c", "ir_loongarch64.c")
     add_includedirs(".", path.join(tcc_dir, "libtcc"))
     if is_host("windows") and os.isfile(path.join(tcc_dir, "libtcc.dll")) then
-        -- tcc 链接器不认 -l 与 GNU 导入库，直接链接 DLL 文件
-        add_ldflags(path.join(tcc_dir, "libtcc.dll"), {force = true})
+        -- tcc 链接器不认 -l 与 GNU 导入库，直接链接 DLL 文件。
+        -- tcc 目录若含空格（如 "D:\Program Files\tcc"），tcc 会把路径按空格切分而链接失败，
+        -- 故先复制 libtcc.dll 到构建目录再链接副本；顺带让 ncc.exe 运行时无需 PATH 找 DLL。
+        local dllsrc = path.join(tcc_dir, "libtcc.dll")
+        before_link(function (target)
+            os.cp(dllsrc, path.join(target:targetdir(), "libtcc.dll"))
+        end)
+        add_ldflags(path.join("$(builddir)", "libtcc.dll"), {force = true})
     elseif not is_host("windows") then
         -- Linux：优先直链 libtcc.so。apt 的 libtcc.a 内部符号与 ncc 重名
         -- （expect/sym_find/sym_push 等），静态链接会 multiple definition 冲突（2026-08-31 实测）
