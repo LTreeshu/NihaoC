@@ -76,7 +76,7 @@ CType *type_new(CompilerState *cs, TypeKind kind)
     memset(type, 0, sizeof(CType));
 
     type->kind = kind;
-    type->vis = VIS_DEFAULT;
+    type->vis = VIS_VAR;
     type->size = type_default_size(kind);
     type->align = type_default_align(kind);
     type->bit_size = 0;
@@ -99,7 +99,7 @@ CType *type_array(CompilerState *cs, void *elem_type, int size)
     memset(arr_type, 0, sizeof(CType));
 
     arr_type->kind = TYPE_ARRAY;
-    arr_type->vis = VIS_DEFAULT;
+    arr_type->vis = VIS_VAR;
     arr_type->align = 1;
     arr_type->bit_size = 0;
     arr_type->bit_offset = 0;

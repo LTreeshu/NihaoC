@@ -62,7 +62,7 @@ int vis_is_pointer_type(CType *t)
 /* Normalize default visibility to VAR for matrix lookups */
 static int vis_norm(Visibility v)
 {
-    return (v == VIS_DEFAULT) ? VIS_DEFAULT /* var */ : (int)v;
+    return (v == VIS_VAR) ? VIS_VAR /* var */ : (int)v;
 }
 
 /* Storage-lifetime + ownership/borrow transfer check (ch.12.2 matrix).
@@ -78,10 +78,10 @@ int vis_check_transfer(Visibility src, Visibility dst)
         case VIS_STATIC:
             return (d == VIS_CONST || d == VIS_STATIC) ? 0 : 1;
         case VIS_FLOW:
-            return (d == VIS_CONST || d == VIS_FLOW || d == VIS_DEFAULT) ? 0 : 1;
-        case VIS_DEFAULT: /* var */
+            return (d == VIS_CONST || d == VIS_FLOW || d == VIS_VAR) ? 0 : 1;
+        case VIS_VAR: /* var */
         default:
-            return (d == VIS_CONST || d == VIS_DEFAULT) ? 0 : 1;
+            return (d == VIS_CONST || d == VIS_VAR) ? 0 : 1;
     }
 }
 
@@ -96,12 +96,12 @@ void vis_update_source(Visibility src, Visibility dst, Symbol *src_sym)
         case VIS_FLOW:
             if (d == VIS_FLOW) {
                 src_sym->borrow_state = BS_INVALID;   /* ownership moved */
-            } else if (d == VIS_CONST || d == VIS_DEFAULT) {
+            } else if (d == VIS_CONST || d == VIS_VAR) {
                 src_sym->borrow_state = BS_FROZEN;    /* borrowed */
             }
             break;
-        case VIS_DEFAULT: /* var */
-            if (d == VIS_CONST || d == VIS_DEFAULT) {
+        case VIS_VAR: /* var */
+            if (d == VIS_CONST || d == VIS_VAR) {
                 src_sym->borrow_state = BS_FROZEN;
             }
             break;

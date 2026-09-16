@@ -56,7 +56,7 @@ Symbol *sym_push(CompilerState *cs, SymKind kind, const char *tok_str, CType *ty
     sym->kind = kind;
     sym->name = nihao_strdup(cs, tok_str);
     sym->hash = sym_hash(tok_str);
-    sym->vis = VIS_DEFAULT;
+    sym->vis = VIS_VAR;
     sym->is_defined = 0;
     sym->is_extern = 0;
     sym->is_builtin = 0;
@@ -97,7 +97,7 @@ Symbol *sym_add_member(CompilerState *cs, Symbol *sym, const char *name, CType *
 
     member->kind = SYM_VARIABLE;
     member->name = nihao_strdup(cs, name);
-    member->vis = VIS_DEFAULT;
+    member->vis = VIS_VAR;
 
     /* Copy type */
     CType *t = nihao_malloc(cs, sizeof(CType));
@@ -143,7 +143,7 @@ Symbol *sym_push_local(CompilerState *cs, Symbol *func_sym, const char *name, CT
 
     sym->kind = SYM_VARIABLE;
     sym->name = nihao_strdup(cs, name);
-    sym->vis = VIS_DEFAULT;
+    sym->vis = VIS_VAR;
 
     if (type) {
         CType *t = nihao_malloc(cs, sizeof(CType));

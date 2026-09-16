@@ -35,12 +35,8 @@ static int *vstate;        /* M2 借用状态：0=VALID 1=FROZEN 2=INVALID（所
 static int *vborrow_src;   /* 本变量借用的源 vi（-1=无）；作用域退出时解冻源 */
 static int *vptr;          /* 是否指针类（void）：1=是（仅指针类有所有权语义） */
 
-/* 可见性常量（与 cgen 的 enum nihao_vis 对齐）：NH_UNDEF=0,NH_CONST,NH_FLOW,NH_STATIC,NH_VAR */
-#define VIS_VAR   0
-#define VIS_CONST 1
-#define VIS_FLOW  2
-#define VIS_STATIC 3
-#define VIS_UNDEF 4
+/* 可见性常量直接用 ncc.h 的 Visibility 枚举（PB-27.3+9：与 cgen 端 enum nihao_vis 数值统一：
+ *   VIS_UNDEF=0, VIS_CONST=1, VIS_FLOW=2, VIS_STATIC=3, VIS_VAR=4）。 */
 
 /* ---------- M2 所有权/借用静态检查（移植自 vis.c，基于 vi 索引） ---------- */
 #define IR_VS_VALID   0
@@ -525,6 +521,31 @@ static int loop_depth;
 
 /* ---- is 模式匹配：当前循环条件表达式的值 vreg（while/do 设置，体内 is 匹配） ---- */
 static int is_val_vreg = -1;
+
+/* PB-27.7：is 模式比较的类型感知——按 is_val_vreg 类型选 int (IR_CMP_*) 或
+ * double (IR_FCMP) 指令；double 常量转位模式存 IR_CONST imm。 */
+static int emit_is_cmp_with_const(int is_val_vreg, IrOp int_cmp_op, long long const_val)
+{
+    int k = ir_new_vreg(F);
+    int r = ir_new_vreg(F);
+    if (ir_is_double(is_val_vreg)) {
+        double dv = (double)const_val;
+        long long bits;
+        memcpy(&bits, &dv, sizeof(bits));
+        ir_emit(F, IR_CONST, k, -1, -1, bits);
+        ir_set_double(k);
+        int fc = (int_cmp_op == IR_CMP_EQ) ? 0 :    /* FCMP_EQ */
+                 (int_cmp_op == IR_CMP_LT) ? 2 :    /* FCMP_LT */
+                 (int_cmp_op == IR_CMP_LE) ? 3 :    /* FCMP_LE */
+                 (int_cmp_op == IR_CMP_GT) ? 4 :    /* FCMP_GT */
+                 /* GE */ 5;                        /* FCMP_GE */
+        ir_emit(F, IR_FCMP, r, is_val_vreg, k, fc);
+    } else {
+        ir_emit(F, IR_CONST, k, -1, -1, const_val);
+        ir_emit(F, int_cmp_op, r, is_val_vreg, k, 0);
+    }
+    return r;
+}
 
 /* ---- 局部变量表 ---- */
 static void var_reset(void)
@@ -2083,7 +2104,12 @@ static void ir_stmt(CompilerState *cs)
         ir_emit(F, IR_JZ, -1, c, -1, 0);
         F->ins[F->ins_count - 1].label = l_end;
         int save_is = is_val_vreg;
-        is_val_vreg = c;                /* 体内 is 匹配条件值 */
+        /* PB-27.1：do 循环不设置 is_val_vreg（do 不支持 is 模式匹配，
+         * 对齐 2026-09-01 is 规范：is 仅配合 while）。
+         * 若 do 体内出现 is，会触发 is_val_vreg<0 报错（下方 §"ir: do loop does not support 'is' pattern"）。 */
+        if (!is_do) {
+            is_val_vreg = c;            /* 仅 while 设置条件值 */
+        }
         ir_block(cs);
         is_val_vreg = save_is;
         ir_emit(F, IR_JMP, -1, -1, -1, 0);
@@ -2193,30 +2219,34 @@ static void ir_stmt(CompilerState *cs)
         }
         skip_newlines(cs);
     } else if (t == TOK_IS) {
-        /* is 模式匹配：is pat { ... }，匹配 while/do 循环条件值 is_val_vreg
-         * pat: <int> | -<int> | <int>..<int>（闭区间） */
+        /* is 模式匹配：is pat { ... }，匹配 while 循环条件值 is_val_vreg
+         * （PB-27.1：do 不支持 is，仅 while 设 is_val_vreg）
+         * pat: <int> | -<int> | <int>..<int>（闭区间） | <ident> | _ 通配 | _vis 可见性枚举 */
         next_tok(cs);
         if (is_val_vreg < 0) {
-            nihao_error(cs, "ir: 'is' pattern match only valid inside while/do loop body");
+            /* PB-27.1：is 仅配合 while（do 不设 is_val_vreg + 循环外也是此错误） */
+            nihao_error(cs, "ir: 'is' pattern match only valid inside while loop body");
             skip_newlines(cs);
             return;
         }
         int l_done = ir_new_label(F);
         TokenType pt = cur_tok(cs);
         if (pt == TOK_IDENTIFIER && strcmp(cs->parser.lex->tok_str, "_") == 0) {
-            /* 通配符：匹配任意 is_val（恒真），不 emit 条件跳转（文档 pattern 列表含 _） */
+            /* PB-27.5：通配符 `_`：匹配任意 is_val（恒真），不 emit 条件跳转 */
             next_tok(cs);
         } else if (pt == TOK_MINUS) {
             next_tok(cs);
             if (cur_tok(cs) == TOK_INT_CONST) {
                 long long v = -(long long)cs->parser.lex->tok_val.i;
                 next_tok(cs);
-                int k = ir_new_vreg(F);
-                ir_emit(F, IR_CONST, k, -1, -1, v);
-                int eq = ir_new_vreg(F);
-                ir_emit(F, IR_CMP_EQ, eq, is_val_vreg, k, 0);
+                int eq = emit_is_cmp_with_const(is_val_vreg, IR_CMP_EQ, v);
                 ir_emit(F, IR_JZ, -1, eq, -1, 0);
                 F->ins[F->ins_count - 1].label = l_done;
+            } else {
+                /* PB-27.2：畸形模式 `is -` 后必须跟 INT_CONST，否则报错 */
+                nihao_error(cs, "ir: bad 'is' pattern (expected integer after '-')");
+                skip_newlines(cs);
+                return;
             }
         } else if (pt == TOK_INT_CONST) {
             long long lo = (long long)cs->parser.lex->tok_val.i;
@@ -2225,41 +2255,41 @@ static void ir_stmt(CompilerState *cs)
                 next_tok(cs);
                 if (cur_tok(cs) == TOK_INT_CONST) {
                     long long hi = (long long)cs->parser.lex->tok_val.i;
+                    /* PB-27.4：反向范围 `is 5..2` 编译期检查 lo<=hi，否则报错 */
+                    if (lo > hi) {
+                        nihao_error(cs, "ir: invalid range in 'is' pattern (%lld..%lld, lo > hi)", lo, hi);
+                        skip_newlines(cs);
+                        return;
+                    }
                     next_tok(cs);
-                    int klo = ir_new_vreg(F);
-                    ir_emit(F, IR_CONST, klo, -1, -1, lo);
-                    int ge = ir_new_vreg(F);
-                    ir_emit(F, IR_CMP_GE, ge, is_val_vreg, klo, 0);
+                    int ge = emit_is_cmp_with_const(is_val_vreg, IR_CMP_GE, lo);
                     ir_emit(F, IR_JZ, -1, ge, -1, 0);
                     F->ins[F->ins_count - 1].label = l_done;
-                    int khi = ir_new_vreg(F);
-                    ir_emit(F, IR_CONST, khi, -1, -1, hi);
-                    int le = ir_new_vreg(F);
-                    ir_emit(F, IR_CMP_LE, le, is_val_vreg, khi, 0);
+                    int le = emit_is_cmp_with_const(is_val_vreg, IR_CMP_LE, hi);
                     ir_emit(F, IR_JZ, -1, le, -1, 0);
                     F->ins[F->ins_count - 1].label = l_done;
+                } else {
+                    /* PB-27.2：畸形模式 `is 5..` 后必须跟 INT_CONST，否则报错 */
+                    nihao_error(cs, "ir: bad 'is' pattern (expected integer after '..')");
+                    skip_newlines(cs);
+                    return;
                 }
             } else {
-                int k = ir_new_vreg(F);
-                ir_emit(F, IR_CONST, k, -1, -1, lo);
-                int eq = ir_new_vreg(F);
-                ir_emit(F, IR_CMP_EQ, eq, is_val_vreg, k, 0);
+                int eq = emit_is_cmp_with_const(is_val_vreg, IR_CMP_EQ, lo);
                 ir_emit(F, IR_JZ, -1, eq, -1, 0);
                 F->ins[F->ins_count - 1].label = l_done;
             }
         } else if (pt == TOK__FLOW || pt == TOK__STATIC || pt == TOK__CONST ||
                    pt == TOK__VAR || pt == TOK__UNDEF) {
             /* 可见性模式：is _flow / is _static 等（BNF <visibility-enum>）——
-             * 匹配循环条件值 == 可见性常量（VIS_CONST=1 FLOW=2 STATIC=3 VAR=0 UNDEF=4） */
+             * 匹配循环条件值 == 可见性常量（VIS_UNDEF=0, VIS_CONST=1, VIS_FLOW=2,
+             * VIS_STATIC=3, VIS_VAR=4；PB-27.3 数值与 cgen NH_ 统一） */
             int visv = (pt == TOK__FLOW) ? VIS_FLOW :
                        (pt == TOK__STATIC) ? VIS_STATIC :
                        (pt == TOK__CONST) ? VIS_CONST :
                        (pt == TOK__VAR) ? VIS_VAR : VIS_UNDEF;
             next_tok(cs);
-            int k = ir_new_vreg(F);
-            ir_emit(F, IR_CONST, k, -1, -1, visv);
-            int eq = ir_new_vreg(F);
-            ir_emit(F, IR_CMP_EQ, eq, is_val_vreg, k, 0);
+            int eq = emit_is_cmp_with_const(is_val_vreg, IR_CMP_EQ, (long long)visv);
             ir_emit(F, IR_JZ, -1, eq, -1, 0);
             F->ins[F->ins_count - 1].label = l_done;
         } else if (pt == TOK_IDENTIFIER) {
@@ -2271,8 +2301,16 @@ static void ir_stmt(CompilerState *cs)
             if (pvi >= 0) {
                 int pv = ir_new_vreg(F);
                 ir_emit(F, IR_MOV, pv, vt[pvi], -1, 0);
-                int eq = ir_new_vreg(F);
-                ir_emit(F, IR_CMP_EQ, eq, is_val_vreg, pv, 0);
+                /* PB-27.7：is_val_vreg 类型感知（与变量模式同） */
+                int eq;
+                if (ir_is_double(is_val_vreg)) {
+                    int fc = ir_new_vreg(F);
+                    ir_emit(F, IR_FCMP, fc, is_val_vreg, pv, 0);  /* FCMP_EQ */
+                    eq = fc;
+                } else {
+                    eq = ir_new_vreg(F);
+                    ir_emit(F, IR_CMP_EQ, eq, is_val_vreg, pv, 0);
+                }
                 ir_emit(F, IR_JZ, -1, eq, -1, 0);
                 F->ins[F->ins_count - 1].label = l_done;
                 next_tok(cs);
@@ -2286,27 +2324,11 @@ static void ir_stmt(CompilerState *cs)
                 return;
             }
             if (has_c) {
-                int k = ir_new_vreg(F);
-                ir_emit(F, IR_CONST, k, -1, -1, cval);
-                int eq = ir_new_vreg(F);
-                ir_emit(F, IR_CMP_EQ, eq, is_val_vreg, k, 0);
+                /* PB-27.7：常量比较类型感知（用 helper） */
+                int eq = emit_is_cmp_with_const(is_val_vreg, IR_CMP_EQ, cval);
                 ir_emit(F, IR_JZ, -1, eq, -1, 0);
                 F->ins[F->ins_count - 1].label = l_done;
             }
-        } else if (pt == TOK__UNDEF || pt == TOK__CONST || pt == TOK__FLOW ||
-                   pt == TOK__STATIC || pt == TOK__VAR) {
-            /* 可见性模式：is _static { }（比较 is_val == NH_STATIC） */
-            long long vv = (pt == TOK__UNDEF) ? VIS_UNDEF :
-                           (pt == TOK__CONST) ? VIS_CONST :
-                           (pt == TOK__FLOW)  ? VIS_FLOW :
-                           (pt == TOK__STATIC)? VIS_STATIC : VIS_VAR;
-            next_tok(cs);
-            int k = ir_new_vreg(F);
-            ir_emit(F, IR_CONST, k, -1, -1, vv);
-            int eq = ir_new_vreg(F);
-            ir_emit(F, IR_CMP_EQ, eq, is_val_vreg, k, 0);
-            ir_emit(F, IR_JZ, -1, eq, -1, 0);
-            F->ins[F->ins_count - 1].label = l_done;
         } else {
             nihao_error(cs, "ir: bad 'is' pattern");
             next_tok(cs);
@@ -2886,10 +2908,12 @@ static void ir_stmt(CompilerState *cs)
             if (nt == TOK_VOID) vptr[vi] = 1;   /* 指针类标记（仅 void 触发所有权语义） */
             if (src_vi >= 0) {
                 ir_vis_check_assign(cs, vi, src_vi);  /* M2 转移检查（裸变量 RHS） */
-            } else if (call_ret_vis > VIS_VAR && nt == TOK_VOID) {
+            } else if ((call_ret_vis == VIS_CONST || call_ret_vis == VIS_FLOW ||
+                       call_ret_vis == VIS_STATIC) && nt == TOK_VOID) {
                 /* PB-27：函数调用 RHS → 接收变量（void* 指针类）按 ret_vis→decl_vis 检查。
-                 * 仅当 callee 显式声明了非 var 返回前缀时才检查——无前缀 = "新值" 语义
-                 * （如 malloc、create 默认返回 var 但实质是 fresh value，不参与所有权转移）。
+                 * 仅当 callee 显式声明了非 var 返回前缀（VIS_CONST/VIS_FLOW/VIS_STATIC）才检查——
+                 * 无前缀或外部符号（call_ret_vis==VIS_VAR 或 < 0，如 malloc/create 默认返回 var 但
+                 * 实质是 fresh value，不参与所有权转移）。
                  * 转移矩阵（ir_vis_transfer）: flow→{flow,var,const}, static→{static,const},
                  *   var→{var,const}, const→{const}；其他组合均禁止。 */
                 if (ir_vis_transfer(call_ret_vis, decl_vis)) {

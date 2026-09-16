@@ -57,13 +57,16 @@ typedef enum {
     TYPE_ALIAS,
 } TypeKind;
 
-/* Visibility attributes */
+/* Visibility attributes
+ * 与 cgen 端 enum nihao_vis 数值对齐（cgen.c:270：NH_UNDEF=0, NH_CONST, NH_FLOW, NH_STATIC, NH_VAR）：
+ *   VIS_UNDEF=0  VIS_CONST=1  VIS_FLOW=2  VIS_STATIC=3  VIS_VAR=4
+ * PB-27.9 补 VIS_VAR（替换原 VIS_DEFAULT=0 的语义重复），PB-27.3 统一数值。 */
 typedef enum {
-    VIS_DEFAULT = 0,    /* local scope */
+    VIS_UNDEF = 0,      /* undefined visibility */
     VIS_CONST,          /* read-only global */
     VIS_FLOW,           /* dynamically tracked heap */
-    VIS_STATIC,          /* static lifetime */
-    VIS_UNDEF           /* undefined visibility */
+    VIS_STATIC,         /* static lifetime */
+    VIS_VAR             /* default "new value" semantics（无前缀声明 / 默认返回） */
 } Visibility;
 
 
@@ -112,7 +115,7 @@ struct Symbol {
     int hash;
     CType *type;
     Visibility vis;
-    int ret_vis;          /* 仅 SYM_FUNCTION：返回值可见性前缀（PB-27）；0=VIS_DEFAULT=var */
+    int ret_vis;          /* 仅 SYM_FUNCTION：返回值可见性前缀（PB-27）；VIS_VAR=4 默认 / VIS_CONST=1 / VIS_FLOW=2 / VIS_STATIC=3 */
 
     /* Storage info */
     int is_defined;             /* has body been defined */

@@ -644,7 +644,7 @@ static int infer_init_type(CompilerState *cs, CType *out)
 void parse_declaration(CompilerState *cs)
 {
     TokenType tok = cur_tok(cs);
-    Visibility vis = VIS_DEFAULT;
+    Visibility vis = VIS_VAR;
     char attr[256];
     attr[0] = '\0';
 
@@ -693,7 +693,7 @@ void parse_declaration(CompilerState *cs)
         vis = VIS_STATIC;
         next_tok(cs);
     } else if (tok == TOK_VAR) {
-        vis = VIS_DEFAULT;
+        vis = VIS_VAR;
         next_tok(cs);
     }
 
@@ -916,11 +916,11 @@ void parse_declaration(CompilerState *cs)
         if (cur_tok(cs) != TOK_RPAREN) {
             for (;;) {
                 /* optional param visibility prefix (§12.3 参数传递) */
-                Visibility pv = VIS_DEFAULT;   /* 无前缀 = var */
+                Visibility pv = VIS_VAR;   /* 无前缀 = var */
                 if (cur_tok(cs) == TOK_FLOW)        { pv = VIS_FLOW;   next_tok(cs); }
                 else if (cur_tok(cs) == TOK_STATIC) { pv = VIS_STATIC; next_tok(cs); }
                 else if (cur_tok(cs) == TOK_CONST)  { pv = VIS_CONST;  next_tok(cs); }
-                else if (cur_tok(cs) == TOK_VAR)    { pv = VIS_DEFAULT; next_tok(cs); }
+                else if (cur_tok(cs) == TOK_VAR)    { pv = VIS_VAR; next_tok(cs); }
         if (cur_tok(cs) != TOK_IDENTIFIER) {
             nihao_error(cs, "expected parameter name, got '%s'",
                         token_name(cur_tok(cs)));
@@ -968,11 +968,11 @@ void parse_declaration(CompilerState *cs)
          *   无前缀 = var 借用（默认） */
         CType ret_type;
         int has_ret = 0;
-        Visibility ret_vis_local = VIS_DEFAULT;
+        Visibility ret_vis_local = VIS_VAR;
         skip_newlines(cs);
         if (cur_tok(cs) == TOK_FLOW)        { ret_vis_local = VIS_FLOW;   next_tok(cs); }
         else if (cur_tok(cs) == TOK_CONST)  { ret_vis_local = VIS_CONST;  next_tok(cs); }
-        else if (cur_tok(cs) == TOK_VAR)    { ret_vis_local = VIS_DEFAULT; next_tok(cs); }
+        else if (cur_tok(cs) == TOK_VAR)    { ret_vis_local = VIS_VAR; next_tok(cs); }
         else if (cur_tok(cs) == TOK_STATIC) { ret_vis_local = VIS_STATIC; next_tok(cs); }
         if (is_type_begin(cur_tok(cs)) || is_user_type_name(cs) || cur_tok(cs) == TOK_VOID) {
             parse_type(cs, &ret_type);
@@ -1094,11 +1094,14 @@ void parse_declaration(CompilerState *cs)
             lex->peek_valid = 0;
             if (after == TOK_LPAREN) {
                 /* PB-27：函数调用 RHS → 接收变量（指针类）按 callee->ret_vis→var_sym->vis 检查。
-                 * 仅当 callee 显式声明了非 var 返回前缀时才检查——无前缀 = "新值" 语义
-                 * （malloc/create 默认返回 var 但实质是 fresh value，不参与所有权转移）。 */
+                 * 仅当 callee 显式声明了非 var 返回前缀（VIS_CONST/VIS_FLOW/VIS_STATIC）才检查——
+                 * 无前缀或外部符号（ret_vis==VIS_VAR，如 malloc/create 默认返回 var 但
+                 * 实质是 fresh value，不参与所有权转移）。 */
                 Symbol *callee = sym_find(cs, cs->parser.lex->tok_str);
                 if (callee && callee->kind == SYM_FUNCTION && var_sym->type &&
-                    vis_is_pointer_type(var_sym->type) && callee->ret_vis > VIS_DEFAULT) {
+                    vis_is_pointer_type(var_sym->type) &&
+                    (callee->ret_vis == VIS_CONST || callee->ret_vis == VIS_FLOW ||
+                     callee->ret_vis == VIS_STATIC)) {
                     if (vis_check_transfer((Visibility)callee->ret_vis, var_sym->vis)) {
                         nihao_error(cs, "cannot assign %s() return (visibility %s) to '%s' (%s): "
                                         "target lifetime would be shorter than source",
@@ -1112,7 +1115,7 @@ void parse_declaration(CompilerState *cs)
                                     var_sym->vis == VIS_FLOW ? "flow" : "var");
                     }
                 }
-                /* tfn/callee==NULL 或 ret_vis==VIS_DEFAULT：前向引用或默认返回，跳过 */
+                /* tfn/callee==NULL 或 ret_vis==VIS_VAR：前向引用或默认返回，跳过 */
             } else if (!is_expr_continuer(after)) {
                 Symbol *init_sym = sym_find(cs, cs->parser.lex->tok_str);
                 if (init_sym && init_sym->kind == SYM_VARIABLE) {
@@ -1337,7 +1340,7 @@ void parse_statement(CompilerState *cs)
                     if (cs->parser.cur_func) {
                         Symbol *isym = sym_push_local(cs, cs->parser.cur_func,
                                                      iname, &it);
-                        isym->vis = VIS_DEFAULT;
+                        isym->vis = VIS_VAR;
                     }
                     cgen_raw("%s %s%s = ", c_type_name(&it), iname,
                              c_type_suffix(&it));
