@@ -282,19 +282,28 @@ variable = ptr3[][].(i32) // three-level dereference
 ```nihao
 arry char[9] = {1,2,3,4,5,6,7,8,9}
 arryptr void = &arry           // pointer to an array
-arryptr[0] = 0
-arryptr[9] = 9                 // undefined behavior
 arryptr.(char[9])[0] = 0       // dereference member [0]
+// arryptr[0] = 0                 // compile error: element width of a generic void pointer is unknown
 // arryptr.(char[9])[9] = 9       // compile error: out of bounds
 
-arrybuffer char[8] = arryptr.(char[9])[0..7]
-// arrybuffer == {0,1,2,4,5,6,7,8}
+arrybuffer char[8] = arryptr.(char[9])[0..7]   // slice read into an array -> copy by declared size
+// arrybuffer == {0,2,3,4,5,6,7,8}
 
 // array of array pointers
 arryptr2 void[2] = {&arry,&arrybuffer}
 arryptr2[0].(char[9])[8] = arry[8]
 arryptr2[1].(char[8])[7] = arrybuffer[7]
+
+// slice assignment: element-wise write-back
+arry[1..3] = {20,30,40}
 ```
+
+> **Array pointers and slices (decided 2026-09-20, A-plan c/native backends)**
+>
+> - **A generic `void` pointer cannot be subscripted bare**: for `p[i]` and `p[a..b]` the element width is unknown at compile time, so the frontend reports an error and requires `p.(T)` first (`p.(T)[i]`, `p.(T)[a..b]`). The bounds check belongs to `.()` itself (§12.1).
+> - **Empty subscript `p[]`**: one level of dereference, equivalent to `p.()` with the type omitted; it keeps participating in the postfix chain (`p3[][].(i32)`).
+> - **Slice read `p[a..b]`**: the value is "a pointer to element `a`"; `b` is a writing hint only — the A backends do not record slice length. Assigning it to an array variable copies element-by-element up to that array's declared size. Omitting the start bound is written `p[..b]` and equals `p[0..b]`.
+> - **Slice assignment `p[a..b] = {v0, v1, ...}`**: writes back element by element starting at `a`; the value list decides how many elements are written.
 
 #### 5.1.3 Pointer Arrays
 
@@ -305,17 +314,24 @@ dptrarry1[2].(i32) += 1
 
 dptr3 void[4][5] = malloc(void[4][5]) // dynamically allocate a 2-D pointer array
 dptr3[3][4] = ptr       // safe pointer transfer
-// error: dptr3[0][0].(int64) error: int64 type size > i32 type size!
 dptr3[3][4].(i32) += 1  // multi-level dereference
+// dptr3[0][0].(i64)     // no error: the width behind a pointer-array slot is unknowable at compile time, so the check is skipped (§12.1)
+// ptr.(i64)             // compile error: ptr comes from malloc(i32), its target holds only 4 bytes
 
 // pointer to pointer array
 ptrarry void = &arryptr2
 ptrarry.(void[2])[0].(char[9])[8] = 8
 ptrarry.(void[2])[1].(char[8])[7] = 7
 
-// arry == {0,1,2,4,5,6,7,8,8}
-// arrybuffer == {0,1,2,4,5,6,7,7}
+// arry == {0,2,3,4,5,6,7,8,8}
+// arrybuffer == {0,2,3,4,5,6,7,7}
 ```
+
+> **A `T[n]` declaration initialized by `malloc` decays to a pointer**: `dptrarry1 void[3] = malloc(void[3])`
+> emits `void* (*dptrarry1) = malloc(3 * sizeof(void*))` — a C array cannot be initialized by a non-constant,
+> so the declaration takes the "array decays to a pointer to its first element" form (only the leading dimension
+> is dropped: `void[4][5]` → `void* (*p)[5]`). Brace initialization (`arryptr2 void[2] = {&arry,&arrybuffer}`)
+> stays a real C array.
 
 #### 5.1.4 Composite Type Pointers
 

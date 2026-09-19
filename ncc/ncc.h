@@ -229,6 +229,8 @@ typedef struct {
     int unget_buffer_enabled;
     unsigned int malloc_bytes;  /* 本次 malloc(T) 请求的字节数，供声明初始化记录 pointee_bytes */
     int lhs_was_deref;          /* 赋值左侧是解引用链（`p.(T) = v`）而非对 p 本身赋值 */
+    int rhs_was_slice;          /* 刚解析的表达式以切片读 `[a..b]` 结尾（数组声明据此走复制） */
+    int slice_lmark;            /* 该切片读文本在 cgen 缓冲里的起点，用于确认它是赋值左侧整体 */
     
     /* Error handling */
     int error_count;

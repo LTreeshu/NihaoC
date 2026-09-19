@@ -514,6 +514,47 @@ static void parse_init_list(CompilerState *cs)
     cgen_raw("}");
 }
 
+/* 固定数组的元素总个数（多维取各维乘积）；含省略维度/动态维时返回 0（未知） */
+static int type_array_count(CType *t)
+{
+    int n = 1;
+    if (!t || t->kind != TYPE_ARRAY) return 0;
+    while (t->kind == TYPE_ARRAY && t->ref) {
+        if (t->param_count <= 0) return 0;
+        n *= t->param_count;
+        t = t->ref;
+    }
+    return n;
+}
+
+/* 数组最深元素类型（`void[4][5]` -> void 槽）；非数组原样返回 */
+static CType *type_deepest_elem(CType *t)
+{
+    while (t && t->kind == TYPE_ARRAY && t->ref) t = t->ref;
+    return t;
+}
+
+/* postfix 前缀文本回取（定义在表达式解析段） */
+static char *cgen_take_prefix(CompilerState *cs, int mark, int *indent);
+
+/* 数组退化成指针时的 C 后缀：去掉源码里最前面的一个维度，
+ * `E name[4][5]` -> `E (*name)[5]`；一维时后缀为空 -> `E *name` */
+static const char *c_decay_suffix(CType *t)
+{
+    static char buf[64];
+    int dims[8];
+    int n = 0;
+    while (t && t->kind == TYPE_ARRAY && t->ref && t->param_count > 0 && n < 8) {
+        dims[n++] = t->param_count;   /* dims[0]=最外层（最后一个方括号） */
+        t = t->ref;
+    }
+    buf[0] = 0;
+    size_t off = 0;
+    for (int i = n - 2; i >= 0 && off + 8 < sizeof(buf); i--)
+        off += (size_t)snprintf(buf + off, sizeof(buf) - off, "[%d]", dims[i]);
+    return buf;
+}
+
 /* Heuristic C type for a type-inferred variable initializer.
  * Returns 1 if the RHS first token gave a usable hint. */
 /* 推断初始化表达式的类型。
@@ -990,35 +1031,21 @@ void parse_declaration(CompilerState *cs)
     }
     var_sym->vis = vis;
 
-    /* emit declaration header */
-    {
-        int is_fptr = (vtype.kind == TYPE_FUNC ||
-                       (vtype.kind == TYPE_ARRAY && vtype.ref &&
-                        vtype.ref->kind == TYPE_FUNC));
-        if (is_fptr) {
-            /* 函数指针（数组）：C 为 ret(*name[suffix])(params)
-             * 类型名包在名字两侧，数组后缀 [N] 插在 *name 后 */
-            CType *ft = (vtype.kind == TYPE_FUNC) ? &vtype : vtype.ref;
-            char pstr[512];
-            c_type_params(ft, pstr, sizeof(pstr));
-            cgen_raw("%s%s%s(*%s%s)(%s)", is_const ? "const " : "",
-                     is_static ? "static " : "",
-                     c_type_name(ft->next), name, c_type_suffix(&vtype),
-                     pstr[0] ? pstr : "void");
-        } else {
-            cgen_raw("%s%s%s %s%s", is_const ? "const " : "",
-                     is_static ? "static " : "",
-                     c_type_name(&vtype), name, c_type_suffix(&vtype));
-        }
+    /* 初始化形态判定：固定数组的「非花括号」初始化要先解析，才能决定声明形态
+     * （切片读 → 复制进数组；指针表达式如 malloc → C 指针退化） */
+    int has_init = inferred_eq;
+    if (!has_init && cur_tok(cs) == TOK_ASSIGN) {
+        next_tok(cs);
+        has_init = 1;
     }
-
-    /* initializer（inferred_eq：'=' 已消费，cur_tok 已是 RHS；否则 '=' 待消费） */
-    if (inferred_eq || cur_tok(cs) == TOK_ASSIGN) {
-        if (!inferred_eq) {
-            next_tok(cs);
-        }
-        cgen_raw(" = ");
+    int brace_init = 0;
+    char *rhs_text = NULL;
+    int rhs_slice = 0;
+    int rhs_indent = 0;
+    if (has_init) {
+        brace_init = (cur_tok(cs) == TOK_LBRACE);
         cs->parser.malloc_bytes = 0;
+        cs->parser.rhs_was_slice = 0;
         /* Ownership/lifetime check: single-identifier initializer */
         if (cur_tok(cs) == TOK_IDENTIFIER) {
             LexerState *lex = cs->parser.lex;
@@ -1033,8 +1060,60 @@ void parse_declaration(CompilerState *cs)
                 }
             }
         }
-        /* 数组/聚合初始化列表：= {e0, e1, ...}（原样输出给 C；嵌套 { } 递归） */
-        if (cur_tok(cs) == TOK_LBRACE) {
+        if (vtype.kind == TYPE_ARRAY && vtype.param_count > 0 && !brace_init) {
+            int rmark = cgen_mark();
+            parse_expression(cs);
+            rhs_text = cgen_take_prefix(cs, rmark, &rhs_indent);
+            rhs_slice = cs->parser.rhs_was_slice;
+            if (var_sym) var_sym->pointee_bytes = cs->parser.malloc_bytes;
+        }
+    }
+
+    /* emit declaration header */
+    if (rhs_indent) cgen_raw("%*s", rhs_indent, "");   /* 回取 RHS 时连同缩进一起截掉，补回 */
+    {
+        int is_fptr = (vtype.kind == TYPE_FUNC ||
+                       (vtype.kind == TYPE_ARRAY && vtype.ref &&
+                        vtype.ref->kind == TYPE_FUNC));
+        if (is_fptr) {
+            /* 函数指针（数组）：C 为 ret(*name[suffix])(params)
+             * 类型名包在名字两侧，数组后缀 [N] 插在 *name 后 */
+            CType *ft = (vtype.kind == TYPE_FUNC) ? &vtype : vtype.ref;
+            char pstr[512];
+            c_type_params(ft, pstr, sizeof(pstr));
+            cgen_raw("%s%s%s(*%s%s)(%s)", is_const ? "const " : "",
+                     is_static ? "static " : "",
+                     c_type_name(ft->next), name, c_type_suffix(&vtype),
+                     pstr[0] ? pstr : "void");
+        } else if (rhs_text && !rhs_slice) {
+            /* 数组退化为指针：`E name[s1][s2]` -> `E (*name)[s2]`（一维即 `E (*name)`） */
+            cgen_raw("%s%s%s(*%s)%s", is_const ? "const " : "",
+                     is_static ? "static " : "",
+                     c_type_name(type_deepest_elem(&vtype)), name,
+                     c_decay_suffix(&vtype));
+        } else {
+            cgen_raw("%s%s%s %s%s", is_const ? "const " : "",
+                     is_static ? "static " : "",
+                     c_type_name(&vtype), name, c_type_suffix(&vtype));
+        }
+    }
+
+    /* initializer */
+    if (has_init) {
+        if (rhs_slice) {
+            /* `T[n] x = p[a..b]`：切片读赋给数组变量 → 按声明容量逐元素复制 */
+            int cnt = type_array_count(&vtype);
+            cgen_line(";");
+            cgen_line("memcpy(&%s, (void*)(%s), %d * sizeof(%s));", name, rhs_text,
+                      cnt > 0 ? cnt : vtype.param_count,
+                      c_type_name(type_deepest_elem(&vtype)));
+            return;
+        }
+        cgen_raw(" = ");
+        if (rhs_text) {
+            cgen_raw("%s", rhs_text);
+        } else if (brace_init) {
+            /* 数组/聚合初始化列表：= {e0, e1, ...}（原样输出给 C；嵌套 { } 递归） */
             parse_init_list(cs);
         } else {
             parse_expression(cs);
@@ -2096,8 +2175,17 @@ static void parse_primary(CompilerState *cs)
                         next_tok(cs);
                     } else {
                         parse_type(cs, &tmp);
-                        cs->parser.malloc_bytes = tmp.size;
-                        cgen_raw("malloc(sizeof(%s)", c_type_name(&tmp));
+                        int cnt = type_array_count(&tmp);
+                        if (cnt > 0) {
+                            /* 数组类型：c_type_name 只给元素名，sizeof 会漏乘维度
+                               → 显式写成「个数 * sizeof(最深元素)」 */
+                            CType *el = type_deepest_elem(&tmp);
+                            cgen_raw("malloc(%d * sizeof(%s)", cnt, c_type_name(el));
+                            cs->parser.malloc_bytes = el->size ? (unsigned)cnt * el->size : 0;
+                        } else {
+                            cs->parser.malloc_bytes = tmp.size;
+                            cgen_raw("malloc(sizeof(%s)", c_type_name(&tmp));
+                        }
                         if (cur_tok(cs) == TOK_COMMA) {
                             next_tok(cs);
                             /* malloc(T, n)：元素数为字面量时记录总字节数 */
@@ -2185,134 +2273,110 @@ static void parse_primary(CompilerState *cs)
     }
 }
 
-/* Dereference chain: x.(T) / x.()  followed by .m [i] (args) ... */
-static void parse_deref_chain(CompilerState *cs, int line)
+/* postfix 前缀文本回取：截掉 mark 之后的输出并返回其副本（去掉行首缩进，
+   缩进由调用方重新发出，保证生成 C 的排版不变） */
+static char *cgen_take_prefix(CompilerState *cs, int mark, int *indent)
 {
-    char *name = cs->parser.lex->tok_str;
-    Symbol *sym = sym_find(cs, name);
-    cs->parser.last_ident = sym;
-    if (sym && sym->kind == SYM_VARIABLE) {
-        vis_check_usable(cs, sym);
+    const char *s = cgen_slice(mark);
+    const char *p = s;
+    int k = 0;
+    while (*p == ' ' || *p == '\t') { p++; k++; }
+    size_t n = strlen(p);
+    char *buf = nihao_malloc(cs, n + 1);
+    memcpy(buf, p, n + 1);
+    cgen_truncate(mark);
+    if (indent) *indent = k;
+    return buf;
+}
+
+/* 解引用用的 C 转换类型名（含指针星号）。数组类型必须写成 `char (*)[9]`
+   才是合法的「指向数组的指针」转换；NihaoC 的 void 槽位实为指针，
+   故数组元素类型 void 在 C 里渲染成 void*。 */
+static const char *c_cast_name(CType *t)
+{
+    static char buf[128];
+    char base[96];
+    const char *sfx = c_type_suffix(t);
+    if (t->kind == TYPE_ARRAY && t->ref && t->param_count > 0 && sfx && sfx[0]) {
+        if (t->ref->kind == TYPE_VOID) snprintf(base, sizeof(base), "void*");
+        else snprintf(base, sizeof(base), "%s", c_type_name(t->ref));
+        snprintf(buf, sizeof(buf), "%s (*)%s", base, sfx);
+        return buf;
     }
-    next_tok(cs);                       /* consume ident */
+    snprintf(base, sizeof(base), "%s", c_type_name(t));
+    snprintf(buf, sizeof(buf), "%s*", base);
+    return buf;
+}
+
+/* 对已生成的 postfix 前缀解一层引用。want 为 NULL 时按符号的指针类型推导，
+   推不出（通用 void 指针、前缀非裸标识符）则按 void** 读回一个指针值。 */
+static void deref_prefix(CompilerState *cs, int mark, Symbol *sym, CType *want)
+{
+    int indent = 0;
+    char *prefix = cgen_take_prefix(cs, mark, &indent);
+    CType auto_type;
+    if (!want) {
+        CType *pt = (sym && sym->kind == SYM_VARIABLE) ? sym->type : NULL;
+        if (pt && pt->kind == TYPE_POINTER && pt->ref && pt->ref->kind != TYPE_VOID) {
+            memcpy(&auto_type, pt->ref, sizeof(CType));
+            want = &auto_type;
+        }
+    }
+    if (want) cgen_raw("%*s(*(%s)(%s))", indent, "", c_cast_name(want), prefix);
+    else      cgen_raw("%*s(*(void**)(%s))", indent, "", prefix);
+}
+
+/* cur_tok == TOK_DOT_PAREN：消费 `.(T)` / `.()`，把前缀包成一次解引用 */
+static void deref_step(CompilerState *cs, int mark, Symbol *sym)
+{
     next_tok(cs);                       /* consume .( */
     cs->parser.lhs_was_deref = 1;       /* 赋值左侧是解引用链，而非对指针本身赋值 */
-
     if (cur_tok(cs) == TOK_RPAREN) {
-        /* .() : dereference pointer one level
-         * 类型取自符号实际指针 ref（隐式推断/显式声明均记录在 sym->type）；
-         * 无类型信息或指向 void（NihaoC 通用指针）时回退 void** */
-        next_tok(cs);                   /* consume ) */
-        CType *pt = (sym && sym->kind == SYM_VARIABLE) ? sym->type : NULL;
-        if (pt && pt->kind == TYPE_POINTER && pt->ref &&
-            pt->ref->kind != TYPE_VOID) {
-            cgen_raw("(*(%s*)%s)", c_type_name(pt->ref), name);
-        } else {
-            cgen_raw("(*(void**)%s)", name);
-        }
-    } else {
-        CType tmp;
-        unsigned int avail = 0;
-        parse_type(cs, &tmp);
-        /* `.()` 越界检查（§12.1）：读取宽度不得超过指针当前所指对象的静态字节数 */
-        if (sym && sym->kind == SYM_VARIABLE) {
-            avail = sym->pointee_bytes;
-            if (!avail && sym->type && sym->type->kind == TYPE_POINTER &&
-                sym->type->ref && sym->type->ref->kind != TYPE_VOID) {
-                avail = sym->type->ref->size;
-            }
+        next_tok(cs);
+        deref_prefix(cs, mark, sym, NULL);
+        return;
+    }
+    CType tmp;
+    parse_type(cs, &tmp);
+    expect(cs, TOK_RPAREN);
+    /* `.()` 越界检查（§12.1）：读取宽度不得超过指针当前所指对象的静态字节数。
+       前缀不是裸变量（链式/下标之后）时字节数不可静态得知，保守不检查。 */
+    if (sym && sym->kind == SYM_VARIABLE) {
+        unsigned int avail = sym->pointee_bytes;
+        if (!avail && sym->type && sym->type->kind == TYPE_POINTER &&
+            sym->type->ref && sym->type->ref->kind != TYPE_VOID) {
+            avail = sym->type->ref->size;
         }
         if (avail && tmp.size > avail) {
             nihao_error(cs, "'.(%s)' reads %u bytes but the pointer target holds only %u bytes",
                         c_type_name(&tmp), tmp.size, avail);
         }
-        cgen_raw("(*(%s*)%s)", c_type_name(&tmp), name);
-        expect(cs, TOK_RPAREN);
     }
-
-    /* continue postfix chain */
-    for (;;) {
-        TokenType tok = cur_tok(cs);
-        if (tok == TOK_DOT) {
-            next_tok(cs);
-            if (cur_tok(cs) != TOK_IDENTIFIER) {
-                nihao_error(cs, "expected member name after '.'");
-                next_tok(cs);
-            } else {
-                cgen_raw(".%s", cs->parser.lex->tok_str);
-                next_tok(cs);
-            }
-        } else if (tok == TOK_ARROW) {
-            next_tok(cs);
-            if (cur_tok(cs) != TOK_IDENTIFIER) {
-                nihao_error(cs, "expected member name after '->'");
-                next_tok(cs);
-            } else {
-                cgen_raw("->%s", cs->parser.lex->tok_str);
-                next_tok(cs);
-            }
-        } else if (tok == TOK_LBRACKET) {
-            next_tok(cs);
-            if (cur_tok(cs) == TOK_RANGE) {
-                next_tok(cs);
-                parse_expression(cs);
-                expect(cs, TOK_RBRACKET);
-                nihao_error(cs, "slice is only supported on assignment targets");
-            } else {
-                cgen_raw("[");
-                parse_expression(cs);
-                cgen_raw("]");
-                expect(cs, TOK_RBRACKET);
-            }
-        } else if (tok == TOK_LPAREN) {
-            next_tok(cs);
-            cgen_raw("(");
-            if (cur_tok(cs) != TOK_RPAREN) {
-                parse_expression(cs);
-                while (cur_tok(cs) == TOK_COMMA) {
-                    next_tok(cs);
-                    cgen_raw(", ");
-                    parse_expression(cs);
-                }
-            }
-            cgen_raw(")");
-            expect(cs, TOK_RPAREN);
-        } else if (tok == TOK_INCREMENT) {
-            if (cs->parser.lex->line_num != line) break;   /* 跨行不算后缀 ++ */
-            cgen_raw("++");
-            next_tok(cs);
-        } else if (tok == TOK_DECREMENT) {
-            if (cs->parser.lex->line_num != line) break;   /* 跨行不算后缀 -- */
-            cgen_raw("--");
-            next_tok(cs);
-        } else {
-            break;
-        }
-    }
+    deref_prefix(cs, mark, sym, &tmp);
 }
 
-/* Postfix: call / .(T) deref / [i] / [a..b] / .member / ++ -- */
+/* Postfix: call / .(T) deref / [i] / [] / [a..b] / .member / ++ -- */
 static void parse_postfix(CompilerState *cs, int line)
 {
     (void)line;
-    /* Lookahead: dereference chain "x.(T)" / "x.()" */
+    /* 解引用算子要把「已生成的前缀 C 文本」整体包成 `(*(<T>*)(prefix))`，
+       故在 primary 之前记下缓冲位置；变量级信息（所指字节数、类型）只在
+       前缀仍是一个裸标识符时有效。 */
+    Symbol *base_sym = NULL;
     if (cur_tok(cs) == TOK_IDENTIFIER) {
-        LexerState *lex = cs->parser.lex;
-        lex->peek_valid = 0;
-        lexer_peek(lex);
-        if (lex->peek_tok == TOK_DOT_PAREN) {
-            lex->peek_valid = 0;
-            parse_deref_chain(cs, cs->parser.lex->line_num);
-            return;
-        }
-        lex->peek_valid = 0;
+        Symbol *s = sym_find(cs, cs->parser.lex->tok_str);
+        if (s && s->kind == SYM_VARIABLE) base_sym = s;
     }
-
+    int mark = cgen_mark();
+    int chained = 0;
     parse_primary(cs);
 
     for (;;) {
+        Symbol *psym = chained ? NULL : base_sym;
         TokenType tok = cur_tok(cs);
-        if (tok == TOK_SAFE_DOT) {
+        if (tok == TOK_DOT_PAREN) {
+            deref_step(cs, mark, psym);
+        } else if (tok == TOK_SAFE_DOT) {
             /* '?.': 已从语法移除，安全检查统一由 `.()` 承担（BNF v2.3 / PA-21） */
             nihao_error(cs, "'?.' is not part of the grammar; use '.()' "
                             "(dereference performs the visibility and bounds checks)");
@@ -2332,19 +2396,58 @@ static void parse_postfix(CompilerState *cs, int line)
             cgen_raw(")");
             expect(cs, TOK_RPAREN);
         } else if (tok == TOK_LBRACKET) {
-            /* [i] index or [a..b] slice */
+            /* [] 隐式解引用 / [i] 下标 / [a..b] 切片读 */
             next_tok(cs);
-            if (cur_tok(cs) == TOK_RANGE) {
-                /* slice read: not directly expressible in C */
+            if (cur_tok(cs) == TOK_RBRACKET) {
+                /* 空下标 `p[]`：解一层引用，等价省略类型的 `p.()`（§5.1.1） */
                 next_tok(cs);
-                parse_expression(cs);
-                expect(cs, TOK_RBRACKET);
-                nihao_error(cs, "slice expression is only supported on assignment targets");
+                deref_prefix(cs, mark, psym, NULL);
             } else {
-                cgen_raw("[");
-                parse_expression(cs);
-                cgen_raw("]");
-                expect(cs, TOK_RBRACKET);
+                if (psym && psym->type && psym->type->kind == TYPE_VOID) {
+                    /* 通用 void 指针的元素宽度静态未知，裸下标/切片无法翻译成合法 C；
+                       先用 `.()` 固定元素类型（§5.1.2） */
+                    nihao_error(cs, "cannot subscript the generic 'void' pointer '%s'; "
+                                    "write %s.(T)[i] to fix the element type first",
+                                psym->name, psym->name);
+                }
+                if (cur_tok(cs) == TOK_RANGE) {
+                    /* `[..hi]`：省略起点，等价 `[0..hi]` */
+                    int ind = 0;
+                    char *prefix = cgen_take_prefix(cs, mark, &ind);
+                    next_tok(cs);
+                    int himark = cgen_mark();
+                    parse_expression(cs);          /* hi：A 后端不记录切片长度，丢弃 */
+                    cgen_truncate(himark);
+                    expect(cs, TOK_RBRACKET);
+                    cgen_raw("%*s(&((%s)[0]))", ind, "", prefix);
+                    cs->parser.rhs_was_slice = 1;
+                    cs->parser.slice_lmark = mark;
+                } else {
+                    cgen_raw("[");
+                    parse_expression(cs);
+                    if (cur_tok(cs) == TOK_RANGE) {
+                        /* 切片读 `p[a..b]`：C 没有切片类型，取「指向 a 号元素的指针」，
+                           长度由接收方决定（数组声明按容量复制 / 逐项写回 / `[i]` 访问） */
+                        int ind = 0;
+                        char *lo_expr = cgen_take_prefix(cs, mark, &ind);  /* `p[a` */
+                        size_t n = strlen(lo_expr);
+                        char *closed = nihao_malloc(cs, n + 2);
+                        memcpy(closed, lo_expr, n);
+                        closed[n] = ']';
+                        closed[n + 1] = 0;
+                        next_tok(cs);
+                        int himark = cgen_mark();
+                        parse_expression(cs);      /* hi：同上，丢弃 */
+                        cgen_truncate(himark);
+                        expect(cs, TOK_RBRACKET);
+                        cgen_raw("%*s(&%s)", ind, "", closed);
+                        cs->parser.rhs_was_slice = 1;
+                        cs->parser.slice_lmark = mark;
+                    } else {
+                        cgen_raw("]");
+                        expect(cs, TOK_RBRACKET);
+                    }
+                }
             }
         } else if (tok == TOK_DOT) {
             next_tok(cs);
@@ -2375,6 +2478,7 @@ static void parse_postfix(CompilerState *cs, int line)
         } else {
             break;
         }
+        chained = 1;                    /* 前缀不再是裸标识符 */
     }
 }
 
@@ -2543,6 +2647,7 @@ static void parse_ternary(CompilerState *cs, int line)
 
 static void parse_assign(CompilerState *cs, int line)
 {
+    int lmark = cgen_mark();      /* LHS 文本起点（切片赋值需要回取） */
     parse_ternary(cs, line);
     TokenType t = cur_tok(cs);
     if (cs->parser.lex->line_num != line) return;
@@ -2554,6 +2659,38 @@ static void parse_assign(CompilerState *cs, int line)
                 vis_check_writable(cs, lhs);
                 /* 对指针本身重新赋值：其目标宽度不再静态可知，撤销记录（保守不检查） */
                 if (!cs->parser.lhs_was_deref) lhs->pointee_bytes = 0;
+            }
+            if (cs->parser.rhs_was_slice && cs->parser.slice_lmark == lmark) {
+                /* 切片赋值 `p[a..b] = {v0, v1, ...}`：LHS 的切片读已生成「指向 a 号
+                   元素的指针」，逐元素写回即 `ptr[k] = vk`（逗号表达式，一条 C 语句） */
+                int sl_indent = 0;
+                char *sl = cgen_take_prefix(cs, lmark, &sl_indent);
+                next_tok(cs);                     /* '=' */
+                if (cur_tok(cs) != TOK_LBRACE) {
+                    nihao_error(cs, "slice assignment expects a value list: "
+                                     "p[a..b] = {v0, v1, ...}");
+                }
+                cgen_raw("%*s(", sl_indent, "");
+                int k = 0;
+                if (cur_tok(cs) == TOK_LBRACE) next_tok(cs);
+                skip_newlines(cs);
+                while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF) {
+                    if (k > 0) cgen_raw(", ");
+                    int vmark = cgen_mark();
+                    parse_expression(cs);
+                    char *vt = cgen_take_prefix(cs, vmark, NULL);
+                    cgen_raw("(%s)[%d] = %s", sl, k, vt);
+                    k++;
+                    skip_newlines(cs);
+                    if (cur_tok(cs) != TOK_COMMA) break;
+                    next_tok(cs);
+                    skip_newlines(cs);
+                }
+                if (cur_tok(cs) == TOK_RBRACE) next_tok(cs);
+                cgen_raw(")");
+                cs->parser.rhs_was_slice = 0;
+                cs->parser.slice_lmark = -1;
+                break;
             }
             next_tok(cs);
             cgen_raw(" = ");
@@ -2612,5 +2749,7 @@ void parse_expression(CompilerState *cs)
 {
     /* 换行即语句边界：binop 链各层按行号停止（函数体内 lexer 不产生 NEWLINE） */
     cs->parser.lhs_was_deref = 0;
+    cs->parser.rhs_was_slice = 0;
+    cs->parser.slice_lmark = -1;
     parse_assign(cs, cs->parser.lex->line_num);
 }
