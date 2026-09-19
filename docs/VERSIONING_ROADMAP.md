@@ -101,6 +101,7 @@ v2.0.0  = PB 就绪（阶段 3 达标）→ 合入 main → tag（届时 main �
 
 - tag 命名：`v<major>.<minor>.<patch>`，提交信息带 `release:` 前缀
 - 1.x 期间 main 与 PA 保持同步（PA 是开发源，main 是发布镜像）
+- tag 台账：`v1.0.0` → `2036fba`（2026-08-31，annotated）、`v1.0.1` → `75c59cc`（2026-09-03，lightweight）；`v1.0.2` 于 2026-09-19 发布准备就绪待 tag（内容见 `CHANGELOG.md` 与 `GIT_CONVENTIONS.md` §5）
 
 ### 3.3 工作流
 

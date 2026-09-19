@@ -560,6 +560,8 @@ if i < 3 {
 | `Struct(f1, f2)` | type match + field destructuring | binds each field | `is Point(x, y) { ... }` |
 | `Variant(pat)` | ADT tag match + sub-pattern | binds payload | `is Some(v) { ... }` |
 
+> **Implementation status**: the A backend (c/native) currently supports five pattern kinds — integer literal, negative integer, closed range `lo..hi`, enum variant, and visibility enum. The `_` wildcard and `<identifier>` variable binding are **not** yet implemented in the A backend (`<identifier>` compares by value); struct destructuring and ADT variant destructuring are reserved syntax. See `IMPLEMENTATION_STATUS.md` for the item-by-item mapping.
+
 #### Semantic Rules
 
 - **R1 — `__is_val` type**: equals the type of the `while` condition expression.
