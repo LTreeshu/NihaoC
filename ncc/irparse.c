@@ -1892,7 +1892,7 @@ static void ir_stmt(CompilerState *cs)
         loop_depth--;
     } else if (t == TOK_WHILE || t == TOK_DO) {
         /* NihaoC: while/do 均为前测循环（do 是 while 的别名关键字）。
-         * 条件值存 is_val_vreg，体内 `is pat { }` 匹配该值。 */
+         * 仅 while 的条件值存 is_val_vreg——`is` 只配合 while，do 不支持（BNF §6）。 */
         int is_do = (t == TOK_DO);
         next_tok(cs);
         int l_loop = ir_new_label(F);
@@ -1906,7 +1906,7 @@ static void ir_stmt(CompilerState *cs)
         ir_emit(F, IR_JZ, -1, c, -1, 0);
         F->ins[F->ins_count - 1].label = l_end;
         int save_is = is_val_vreg;
-        is_val_vreg = c;                /* 体内 is 匹配条件值 */
+        is_val_vreg = is_do ? -1 : c;   /* 体内 is 匹配条件值；do 不支持 is */
         ir_block(cs);
         is_val_vreg = save_is;
         ir_emit(F, IR_JMP, -1, -1, -1, 0);
@@ -1914,7 +1914,6 @@ static void ir_stmt(CompilerState *cs)
         ir_emit(F, IR_LABEL, -1, -1, -1, 0);
         F->ins[F->ins_count - 1].label = l_end;
         loop_depth--;
-        (void)is_do;
     } else if (t == TOK_FOR) {
         /* for init; cond; step { body }
          * IR 布局：cond 检查 → body → L_cont(step) → JMP cond
@@ -2016,11 +2015,11 @@ static void ir_stmt(CompilerState *cs)
         }
         skip_newlines(cs);
     } else if (t == TOK_IS) {
-        /* is 模式匹配：is pat { ... }，匹配 while/do 循环条件值 is_val_vreg
+        /* is 模式匹配：is pat { ... }，匹配 while 循环条件值 is_val_vreg（do 不支持）
          * pat: <int> | -<int> | <int>..<int>（闭区间） */
         next_tok(cs);
         if (is_val_vreg < 0) {
-            nihao_error(cs, "ir: 'is' pattern match only valid inside while/do loop body");
+            nihao_error(cs, "ir: 'is' pattern match only valid inside while loop body");
             skip_newlines(cs);
             return;
         }
