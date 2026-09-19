@@ -146,7 +146,7 @@ end
 -- IR 子集白名单（与 tests 用例同步维护）
 -- IR_SUBSET: IR 双后端（ir-c/ir-native）可编译运行的通用用例（全量后端也可跑）
 -- IR_ONLY  : IR 专属用例——子集语法（如无类型指针声明），全量 parser 无法编译
-local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true}
+local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, elseif_chain = true}
 local IR_ONLY = {ir_builtin = true, ir_mr = true, ir_slice = true, ir_sparam = true, ir_cook = true}
 -- IR_ERR_SKIP: IR 前端未实现 M2 静态检查、不支持 `.(T)` 类型化解引用（含其宽度检查与
 -- 通用 void 指针裸下标拒绝），也不支持从属/位域内置函数；`len()` 对静态不可知的标量

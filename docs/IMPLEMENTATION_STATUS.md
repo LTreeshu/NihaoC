@@ -82,6 +82,15 @@ A 后端把 `sizeof` / `typeof` / `alignof` / `offsetof` / `bitoffsetof` / `viso
 
 ---
 
+## 条件与分支（§6，BNF `<if-stmt>`）
+
+| 规范要求 | 编译器实现 | 对应代码 | 状态 |
+|---------|----------|---------|------|
+| `if <expr> <block> [else (if-stmt \| block)]`——`else if` 递归形式 | A 后端 `parse_if_stmt` 用 `while (cur_tok == TOK_ELSE)` 循环消化整条 `else if` 链；IR 前端 `ir_if_stmt` 在 `else` 后 peek 到 `if` 时递归自身，多级分支共用同一条 `JZ`/`JMP` 标签链 | parser.c:1599–1621、irparse.c:1771–1793 | ✅ 双前端一致（v1.0.2 / PA-28 补 IR 侧；此前 `else if` 在 ir-c / ir-native 报 `expected '{', got 'if'`） |
+| `else` 分支必须是块 | IR 前端 `ir_block` 严格要求 `{`；A 后端语法上对 `else` 后接非块语句不报错，但生成的 C 缺少分隔符（`elseputs(...)`）而延迟到 C 编译期失败 | parser.c:1615–1619、irparse.c:1759–1769（`ir_block`） | ✅ 有效语义与 BNF 一致（只有块形式可用）；A 后端该分支的宽松属代码生成缺陷，无文档承诺该写法，未纳入本版 |
+
+---
+
 ## `is` 模式匹配（§6.1，BNF v2.2）
 
 | 规范要求 | 编译器实现 | 对应代码 | 状态 |
@@ -131,11 +140,14 @@ A 后端把 `sizeof` / `typeof` / `alignof` / `offsetof` / `bitoffsetof` / `viso
 | tests/pos/ownerof.nc | `structof`/`unionof`/`holdof` 三参反推首地址 + `bitoffsetof` 位偏移 | ✅（v1.0.2 / PA-22 新增，c/native；IR 侧未覆盖，跳过） |
 | tests/err/void_subscript.nc | 通用 `void` 指针裸下标前端拒绝，提示改写 `p.(T)[i]` | ✅（v1.0.2 / PA-25 新增，c/native；IR 前端无 `.(T)`，经 `IR_ERR_SKIP` 跳过） |
 | tests/pos/deref_slice.nc | 多级 `[]`/`.()` 链、数组指针 `.(char[9])[i]`、切片读复制、切片写逐元素回写、`T[n]=malloc(T[n])` 退化、多维声明 | ✅（v1.0.2 / PA-25 新增，c/native；IR 侧未覆盖，跳过） |
+| tests/pos/len_builtin.nc | `len()` 三类取值：数组容量（多维取乘积）、动态字符串取字面量长度、切片取 `hi-lo` | ✅（v1.0.2 / PA-27 新增，c/native；未列入 `IR_SUBSET`，IR 后端自动跳过） |
+| tests/err/len_unknown.nc | `len()` 实参逻辑长度静态不可知时前端报错 | ✅（v1.0.2 / PA-27 新增，c/native；IR 前端返回 0 不报错，经 `IR_ERR_SKIP` 跳过） |
+| tests/pos/elseif_chain.nc | `else if` 链（含链中命中、末尾无 `else`、全不命中、循环体内、`else` 普通块） | ✅（v1.0.2 / PA-28 新增，四后端输出一致） |
 | tests/pos/borrow.nc | `flow`→`var` 借用 + 解冻 | ✅ |
 | tests/pos/flow.nc | `flow` 块级自动释放 | ✅ |
 | tests/pos/transfer.nc | `flow` 返回值所有权转移 | ✅ |
 
-> 上表为 1.0 发布集（`tests/pos` + `tests/err`，c/native 双后端）。`tests/pos/ir_*.nc` 属 2.0 IR 线（PB 分支），不在 1.0 发布门禁内。err 用例自 v1.0.2（PA-19）起在四个后端下均执行，`m2a`~`m2d` 四条 M2 静态检查用例与 `deref_bounds`（`.(T)` 类型化解引用）、`structof_bad_member`（从属查询内置函数）、`void_subscript`（通用 `void` 指针裸下标检查）共七条经 `xmake.lua` 的 `IR_ERR_SKIP` 在 IR 后端跳过（IR 前端无所有权/借用检查，只支持裸 `p.()`，且未实现从属/位域内置函数与 `.(T)` 相关检查）。`ownerof`（从属查询 + 位域偏移）与 `deref_slice`（后缀链解引用 + 切片 + 数组退化）未列入 `IR_SUBSET`，在 IR 后端按「IR 子集未覆盖」自动跳过。`is` 模式匹配由 `tests/pos/pattern.nc` 覆盖，该用例含 `is _` 通配符分支（v1.0.2 / PA-15 起，四后端输出一致）；`is <identifier>` 变量绑定仍无用例（对应上表 ⚠️ 项）。门禁（v1.0.2 / PA-25 后）：`xmake test --all` → c / native 各 **21 PASS / 0 FAIL / 5 SKIP**，ir-c / ir-native 各 **5 PASS / 0 FAIL / 17 SKIP**。
+> 上表为 1.0 发布集（`tests/pos` + `tests/err`，c/native 双后端）。`tests/pos/ir_*.nc` 属 2.0 IR 线（PB 分支），不在 1.0 发布门禁内。err 用例自 v1.0.2（PA-19）起在四个后端下均执行，`m2a`~`m2d` 四条 M2 静态检查用例与 `deref_bounds`（`.(T)` 类型化解引用）、`structof_bad_member`（从属查询内置函数）、`void_subscript`（通用 `void` 指针裸下标检查）、`len_unknown`（`len()` 静态不可知的报错口径）共八条经 `xmake.lua` 的 `IR_ERR_SKIP` 在 IR 后端跳过（IR 前端无所有权/借用检查，只支持裸 `p.()`，且未实现从属/位域内置函数与 `.(T)` 相关检查）。`ownerof`（从属查询 + 位域偏移）、`deref_slice`（后缀链解引用 + 切片 + 数组退化）与 `len_builtin`（`len()` 三类取值）未列入 `IR_SUBSET`，在 IR 后端按「IR 子集未覆盖」自动跳过。`is` 模式匹配由 `tests/pos/pattern.nc` 覆盖，该用例含 `is _` 通配符分支（v1.0.2 / PA-15 起，四后端输出一致）；`is <identifier>` 变量绑定仍无用例（对应上表 ⚠️ 项）。门禁（v1.0.2 / PA-28 后）：`xmake test --all` → c / native 各 **24 PASS / 0 FAIL / 5 SKIP**，ir-c / ir-native 各 **6 PASS / 0 FAIL / 19 SKIP**。
 
 ---
 
@@ -160,4 +172,5 @@ A 后端把 `sizeof` / `typeof` / `alignof` / `offsetof` / `bitoffsetof` / `viso
 | 从属查询 / 位域偏移内置函数（§2.3，BNF v2.4） | A 后端已实现三参 `structof`/`unionof`/`holdof` 与 `bitoffsetof`（PA-22，见上表） | **未接入**：PB `parse_primary` 只把 `sizeof`/`typeof`/`alignof`/`offsetof`/`visof` 分派给 `parse_builtin_kw()`（PB parser.c:1905–1909），`structof`/`unionof`/`holdof`/`bitoffsetof` 落入默认分支；PB `irparse.c` 亦无对应实现。1.0 线的 PA-22 实现需回灌 PB 后 2.0 线才可声称支持 |
 | 指针后缀链与切片（§5.1，BNF v2.5） | A 后端已实现 `.(T)` 通用后缀链、`p[]` 空下标、切片读/写、`T[n]=malloc(T[n])` 退化、多维声明（PA-25，见上表） | **未接入**：PB `parser.c` 解引用仍是独立的 `parse_deref_chain` 路径（无 `[]` 空下标、无切片读/写回、无数组退化），PB `irparse.c` 同样无对应实现。1.0 线的 PA-25 代码生成需回灌 PB 后 2.0 线才可声称支持 |
 | `len(x)` 逻辑长度（§2.3，BNF v2.6） | A 后端（c/native）三类全实现并在静态不可知时报错（PA-27，见上表） | **部分**：PB `irparse.c` 由 `ve[]` 表实现数组/字符串/切片三类，但实参静态不可知时返回 0、不发前端错误；PB `parser.c`（A 方案）**完全没有 `len` 分支**，`len(x)` 会把 `len` 当普通函数输出到 C，错误延迟到 tcc 链接期。1.0 线的 PA-27 实现需回灌 PB |
-| 测试覆盖 | 1.0 门禁 23P/0F/5S（含 PA-18 ~ PA-22、PA-25、PA-27 八条 err 用例；IR 侧 5P/0F/19S） | `xmake test --all` 全矩阵（c/native/ir-c/ir-native），见 `ROADMAP.md` 里程碑「验收」行 |
+| `else if` 递归形式（§6 `<if-stmt>`，BNF） | 双前端一致：A 后端 `parse_if_stmt`、IR 前端 `ir_if_stmt` 递归（PA-28，见上表） | **IR 侧仍缺**：PB `parser.c:1577` 的 A 后端分支已支持，但 PB `irparse.c:2014` 的 `else` 分支仍无条件调 `ir_block`，`else if` 在 ir-c / ir-native 报 `expected '{', got 'if'`；1.0 线的 PA-28 修复需回灌 PB |
+| 测试覆盖 | 1.0 门禁 24P/0F/5S（含 PA-18 ~ PA-22、PA-25、PA-27 八条 err 用例；IR 侧 6P/0F/19S） | `xmake test --all` 全矩阵（c/native/ir-c/ir-native），见 `ROADMAP.md` 里程碑「验收」行 |

@@ -1768,6 +1768,30 @@ static void ir_block(CompilerState *cs)
     skip_newlines(cs);
 }
 
+static void ir_if_stmt(CompilerState *cs)
+{
+    /* `<if-stmt> ::= "if" <expr> <block> [ "else" (<if-stmt> | <block>) ]`（BNF）：
+       else 后接 `if` 时递归本函数，多级分支共用同一条 JZ/JMP 链 */
+    next_tok(cs);                        /* consume 'if' */
+    int c = ir_expr(cs);
+    int l_else = ir_new_label(F);
+    int l_end = ir_new_label(F);
+    ir_emit(F, IR_JZ, -1, c, -1, 0);
+    F->ins[F->ins_count - 1].label = l_else;
+    ir_block(cs);
+    ir_emit(F, IR_JMP, -1, -1, -1, 0);
+    F->ins[F->ins_count - 1].label = l_end;
+    ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+    F->ins[F->ins_count - 1].label = l_else;
+    if (cur_tok(cs) == TOK_ELSE) {
+        next_tok(cs);
+        if (cur_tok(cs) == TOK_IF) ir_if_stmt(cs);
+        else ir_block(cs);
+    }
+    ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+    F->ins[F->ins_count - 1].label = l_end;
+}
+
 static void ir_stmt(CompilerState *cs)
 {
     TokenType t = cur_tok(cs);
@@ -1809,23 +1833,7 @@ static void ir_stmt(CompilerState *cs)
         return;
     }
     if (t == TOK_IF) {
-        next_tok(cs);
-        int c = ir_expr(cs);
-        int l_else = ir_new_label(F);
-        int l_end = ir_new_label(F);
-        ir_emit(F, IR_JZ, -1, c, -1, 0);
-        F->ins[F->ins_count - 1].label = l_else;
-        ir_block(cs);
-        ir_emit(F, IR_JMP, -1, -1, -1, 0);
-        F->ins[F->ins_count - 1].label = l_end;
-        ir_emit(F, IR_LABEL, -1, -1, -1, 0);
-        F->ins[F->ins_count - 1].label = l_else;
-        if (cur_tok(cs) == TOK_ELSE) {
-            next_tok(cs);
-            ir_block(cs);
-        }
-        ir_emit(F, IR_LABEL, -1, -1, -1, 0);
-        F->ins[F->ins_count - 1].label = l_end;
+        ir_if_stmt(cs);
     } else if (t == TOK_SWITCH) {
         /* C 风格：switch (expr) { case e: stmts... [default: stmts] }
          * 单遍布局（延迟绑定）：
