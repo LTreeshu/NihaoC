@@ -260,7 +260,7 @@ ptr2 void[] = &ptr       // pointer-to-pointer
 ptr = ptr2.()            // one-level dereference; type may be omitted for void
 variable = ptr2[].(i32)  // two-level dereference
 
-ptr3 void[][] ?= &ptr2    // pointer-to-pointer-to-pointer
+ptr3 void[][] = &ptr2     // pointer-to-pointer-to-pointer
 ptr2 = ptr3.()            // one-level dereference
 ptr  = ptr3[].()          // two-level dereference
 variable = ptr3[][].(i32) // three-level dereference
@@ -1567,4 +1567,4 @@ All of it is enforced statically — no runtime garbage collector, no runtime co
 | Compile-time  | `cooking` `align` `static_assert` |
 | Introspection | `sizeof` `typeof` `alignof` `offsetof` `bitoffsetof` `holdof` `structof` `unionof` `visof` `malloc` |
 | Literals      | `true` `false` |
-| Operators     | `+ - * / % ++ -- == != < > <= >= && \|\| ! & \| ^ ~ << >> = += -= *= /= %= &= \|= ^= <<= >>= -> . .( ?. ?( ?= ? : :: , .. # ; ( ) [ ] { }` |
+| Operators     | `+ - * / % ++ -- == != < > <= >= && \|\| ! & \| ^ ~ << >> = += -= *= /= %= &= \|= ^= <<= >>= -> . .( ?. ?( ? : :: , .. # ; ( ) [ ] { }` |

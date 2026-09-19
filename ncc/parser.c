@@ -477,7 +477,7 @@ static int is_expr_continuer(TokenType t)
         case TOK_LE: case TOK_GE: case TOK_LOGICAL_AND: case TOK_LOGICAL_OR:
         case TOK_BITWISE_AND: case TOK_BITWISE_OR: case TOK_BITWISE_XOR:
         case TOK_LEFT_SHIFT: case TOK_RIGHT_SHIFT: case TOK_QUESTION:
-        case TOK_ASSIGN: case TOK_SAFE_ASSIGN:
+        case TOK_ASSIGN:
         case TOK_PLUS_ASSIGN: case TOK_MINUS_ASSIGN: case TOK_STAR_ASSIGN:
         case TOK_SLASH_ASSIGN: case TOK_PERCENT_ASSIGN:
         case TOK_INCREMENT: case TOK_DECREMENT:
@@ -1462,7 +1462,7 @@ void parse_statement(CompilerState *cs)
                 if (is_type_begin(nt) || nt == TOK_VOID || nt == TOK_IDENTIFIER) {
                     /* name Type / name UserType -> declaration */
                     parse_declaration(cs);
-                } else if (nt == TOK_ASSIGN || nt == TOK_SAFE_ASSIGN) {
+                } else if (nt == TOK_ASSIGN) {
                     /* name = expr: assignment if already declared,
                      * otherwise a type-inferred declaration */
                     if (sym_find(cs, cs->parser.lex->tok_str)) {
@@ -2389,8 +2389,7 @@ static void parse_assign(CompilerState *cs, int line)
     TokenType t = cur_tok(cs);
     if (cs->parser.lex->line_num != line) return;
     switch (t) {
-        case TOK_ASSIGN:
-        case TOK_SAFE_ASSIGN: {
+        case TOK_ASSIGN: {
             Symbol *lhs = cs->parser.last_ident;
             /* LHS must be writable (not frozen by an active borrow) */
             if (lhs && lhs->kind == SYM_VARIABLE) {
@@ -2412,6 +2411,16 @@ static void parse_assign(CompilerState *cs, int line)
                     }
                 }
             }
+            parse_assign(cs, line);
+            break;
+        }
+        case TOK_SAFE_ASSIGN: {
+            /* '?=' 已从语法移除：普通 '=' 本身就执行可见性兼容性检查（§12.1），
+             * 无需专用"安全赋值"记号。词法保留该 token，语法层拒绝。 */
+            nihao_error(cs, "'?=' is not part of the grammar; use '=' "
+                            "(every assignment is checked for visibility compatibility)");
+            next_tok(cs);
+            cgen_raw(" = ");
             parse_assign(cs, line);
             break;
         }

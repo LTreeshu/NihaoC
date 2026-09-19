@@ -28,7 +28,7 @@
 | 验收 | PB `xmake test --all` 全矩阵（c/native/ir-c/ir-native）73 PASS / 0 FAIL / 26 SKIP | ✅ |
 | C | ir-c 输出质量：保留变量名（vreg_name 接入 ir.h/ir.c/irparse.c，ir_to_c 用 vrid 输出可读名；结构体直出待 B 真实布局） | ✅ |
 | 发布 v1.0.1 | 1.0.x 指针语法收敛（移除 `T*` 具名声明与一元 `*` 解引用）+ Linux/WSL 平台修复（PA-9）+ `is` 模式匹配规范定案 + §12 矩阵文档统一（2026-09-03，tag → `75c59cc`） | ✅ |
-| 发布 v1.0.2 | 1.0.x `is` 移除 `=>` 单语句形式（PA-13，双前端）+ `is _` 通配符补全（PA-15，双前端）+ 循环体外 `is` 前端守卫（PA-18，A 后端 `while_depth`）+ `do` 体内 `is` 在 IR 前端拒绝（PA-19）+ `codegen.c` 死代码全链清理（PA-14）+ xmake PATH 探测与含空格 TCC 目录修复 + BNF v2.1/v2.2 收敛 + TODO 分层 + 文档-实现全量核对；门禁 c/native 各 14P/0F/5S，`main` 已重新对齐为 `PA` 镜像；遗留 PA-16（`is` 多子句 fallthrough 缺口）登记待决策 | 🟡 待 tag |
+| 发布 v1.0.2 | 1.0.x `is` 移除 `=>` 单语句形式（PA-13，双前端）+ `is _` 通配符补全（PA-15，双前端）+ 循环体外 `is` 前端守卫（PA-18，A 后端 `while_depth`）+ `do` 体内 `is` 在 IR 前端拒绝（PA-19）+ `?=` 安全赋值记号移除（PA-20，BNF v2.3）+ `codegen.c` 死代码全链清理（PA-14）+ xmake PATH 探测与含空格 TCC 目录修复 + BNF v2.1/v2.2/v2.3 收敛 + TODO 分层 + 文档-实现全量核对；门禁 c/native 各 15P/0F/5S，`main` 已重新对齐为 `PA` 镜像；遗留 PA-16（`is` 多子句 fallthrough 缺口）登记待决策 | 🟡 待 tag |
 
 ## 二、当前代码架构
 

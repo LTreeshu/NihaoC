@@ -79,8 +79,7 @@
 ###### Reserved Operators
 
 - `&` – address‑of operator
-- `=` – assignment operator
-- `?=` – safe assignment operator (with pointer checking)
+- `=` – assignment operator (every assignment performs the visibility-compatibility check, i.e. the former "safe assignment" semantics)
 - `.` – struct/union member access
 - `.()` – void pointer dereference
 - `.(type)` – typed dereference (with built‑in out‑of‑bounds check)

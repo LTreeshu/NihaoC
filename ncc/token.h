@@ -109,7 +109,7 @@
     KeywordDef(".(",       2, TOK_DOT_PAREN)          /**< `.(` NihaoC pointer dereference operator `.()`  */   \
     /* Other operators */ \
     KeywordDef("=>",       2, TOK_FAT_ARROW)          /**< `=>` fat arrow — 词法保留，语法不使用（is 单语句形式已移除，BNF v2.2）  */   \
-    KeywordDef("?=",       2, TOK_SAFE_ASSIGN)        /**< `?=` NihaoC safe assignment operator (with pointer checking)  */   \
+    KeywordDef("?=",       2, TOK_SAFE_ASSIGN)        /**< `?=` 词法保留，语法不使用：普通 `=` 已执行全部可见性检查（BNF v2.3 / §12.1）  */   \
     KeywordDef("?",        1, TOK_QUESTION)           /**< `?` question mark part of conditional (ternary) operator  */   \
     KeywordDef(":",        1, TOK_COLON)              /**< `:` colon part of conditional (ternary) operator or label suffix  */   \
     KeywordDef(",",        1, TOK_COMMA)              /**< `,` comma operator  */   \

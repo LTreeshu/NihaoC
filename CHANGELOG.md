@@ -4,7 +4,7 @@
 
 ## [v1.0.2] — 2026-09-19（待 tag）
 
-1.0 冻结线的规范合规与代码卫生版本，无新增语言特性（`is _` 通配符属补全文档已承诺的既有语法，非新特性）。
+1.0 冻结线的规范合规与代码卫生版本，无新增语言特性（`is _` 通配符属补全文档已承诺的既有语法，非新特性）；两处语法收敛为**移除冗余记号**——`is` 的 `=>` 单语句形式（PA-13）与 `?=` 安全赋值（PA-20），二者在实现中均无独立语义。
 
 - **`is` 移除 `=>` 单语句形式（PA-13，用户可见语法变更）**：`is <pattern> => <statement>` 全线下线，`is` 只保留块形式 `is <pattern> { ... }`。C 后端 `parser.c` 的 `parse_is_stmt` 删除 `TOK_FAT_ARROW` 分支（改报 `expected '{' after 'is' pattern`）；IR 前端 `irparse.c` 同分支删除（双前端与 BNF v2.2 一致，错误路径吞 token 防死循环）；`tests/pos/ir_is.nc` 清理 `=>` 用例。`=>` 仍由 lexer 识别为 `TOK_FAT_ARROW`（词法保留，语法不使用），`token.h` 注释同步。
 - **`codegen.c` 死代码全链清理**：删除早期直出 C 的后端 `ncc/codegen.c`（507 行，已由 `cgen.c` + `parser.c` 管线取代）及其调用链——`linker.c` 相关 120 行、`ncc.h` 84 行声明与枚举、`ncc.c` 4 行后端注册；`ncc/xmake.lua` 的 `add_files` 去掉 `codegen.c`。
@@ -15,11 +15,12 @@
 - **`is _` 通配符补全（规范合规）**：1.0 线 A 后端 `parse_is_stmt` 原先把 `_` 当普通标识符输出到 C（tcc 报 `'_' undeclared`），现补恒匹配分支（生成 `if (1)`，与 2.0 线同源实现）；IR 前端 `irparse.c` 同步补 `_` 分支（不发比较与 JZ，块直接执行）。`tests/pos/pattern.nc` 增加通配符用例并更新 `.expect`，c/native/ir-c/ir-native 四后端输出一致。（PA-15）
 - **`is` 循环体外守卫（规范合规，用户可见报错变更）**：BNF §6 规定 `is` 仅配合 `while` 循环体，但 1.0 线 A 后端把 `TOK_IS` 挂在通用语句分支（`parser.c:1335` 旧位置），循环体外写 `is` 会被前端接受、错误延迟到 C 编译期才由 tcc 报 `'__is_val' undeclared`。现加 `while_depth` 计数守卫（`TOK_WHILE` 体内递增/退出时递减），循环体外（含 `do` 体、函数顶层、模块层）的 `is` 由前端即时报 `'is' pattern match only valid inside while loop body`，与 IR 前端既有守卫（`is_val_vreg < 0`）口径统一。新增 `tests/err/is_outside_while.nc` 覆盖。（PA-18）
 - **`do` 体内 `is` 在 IR 前端拒绝（规范合规）**：IR 前端 `TOK_WHILE || TOK_DO` 分支此前无条件把条件值写入 `is_val_vreg`（守卫变量 `is_do` 算了却未使用），导致 `do cond { is pat { ... } }` 在 ir-c / ir-native 下被接受，与 BNF §6 / 中英 §6.1「`do` 不支持 `is`」相反（A 后端经 PA-18 已拒绝）。现 `do` 分支置 `is_val_vreg = -1`，体内 `is` 报 `ir: 'is' pattern match only valid inside while loop body`（文案去掉 `while/do` 的 `/do`），与 PB-27.1 对齐。新增 `tests/err/is_in_do_body.nc`。测试框架同步收紧：err 用例改为仅 `IR_ERR_SKIP` 列出的 M2 四条（`m2a`~`m2d`）在 IR 后端跳过，其余 err 用例四后端均执行。同项续做：A 后端进入 `do` 体前把 `while_depth` 清零、退出恢复，使嵌套在 `while` 内的 `do` 也拒绝 `is`（原会静默匹配外层条件值），与 IR 前端对齐；`tests/err/is_in_do_body.nc` 增加该嵌套情形。**文档理由句修正**：BNF §6 与中英 §6.1 原写「`do` 不支持 `is`，因为 `do` 先执行块再判断条件」——与实现相反（本语言 `do cond { ... }` 与 `while` 同为前测循环，A 后端生成 `while (cond) { body }`）。现改为陈述为规范规定（`is` 只绑定 `while`，`do` 是否纳入留待 2.0 定案），不再使用错误的因果论证。（PA-19）
+- **`?=` 安全赋值记号从语法移除（PA-20，用户可见语法变更）**：文档曾把 `?=` 列为"安全赋值操作符（带指针检查）"，但 1.0 线实现里 `?=` 与 `=` 走完全同一条分支（声明、语句窥探、赋值三处共用），没有任何额外检查——因为普通 `=` 本身就无条件执行 §12.1 可见性兼容性检查。故 `?=` 是**纯冗余记号**且制造"只有 `?=` 才安全"的误解。现从语法移除：`parser.c` 的 `parse_assign` 不再与 `=` 共用分支，`case TOK_SAFE_ASSIGN` 即时报错 `'?=' is not part of the grammar; use '=' (every assignment is checked for visibility compatibility)`；`is_expr_continuer` 与语句窥探分支同样只认 `TOK_ASSIGN`。词法保留 `TOK_SAFE_ASSIGN`（lexer 仍识别，与 `=>` 同处理）。BNF 升级 **v2.3**：§1.4 运算符与 `<assign-op>` 去掉 `"?="`、说明改为词法保留、附录删除"安全赋值"行；中英 §5.1 多级指针示例与 §12 设计说明同步改写为"每次赋值都做可见性检查"，两份语法元素表移除 `?=` 行并给 `=` 补注。新增 `tests/err/safe_assign_removed.nc`（`.expect` 只取 `'?='` 子串，同时匹配 A 后端的专门文案与 IR 前端的通用 unexpected token）。IR 前端自始无 `?=` 分支，行为即为拒绝，无需改动。**PB 线仍接受 `?=`，待回灌**（见 `IMPLEMENTATION_STATUS.md`「2.0 线（PB）差异」）。
 - **`is` 多子句 fallthrough 缺口（已登记未修）**：文档 R 规则"首个匹配者执行（无 fallthrough）"在两线均未实现——多个 is-clause 生成并列 `if`，条件重叠时会连续执行（`is _` 恒匹配使该问题更易触发）。属既有语义缺陷，需改动 `is` 控制流生成方式，未纳入 v1.0.2；详见 `docs/IMPLEMENTATION_STATUS.md`。（PA-16）
-- **PA TODO 处理完毕**：PA-1 ~ PA-15、PA-17 ~ PA-19 全部 `[x]`；唯余 PA-16（上述 fallthrough 缺口）登记待决策，不纳入本版。
+- **PA TODO 处理完毕**：PA-1 ~ PA-15、PA-17 ~ PA-20 全部 `[x]`；唯余 PA-16（上述 fallthrough 缺口）登记待决策，不纳入本版。
 - **已知缺口（登记于 `docs/IMPLEMENTATION_STATUS.md`）**：1.0 线 A 后端 `is <identifier>` 变量绑定为"按值比较"而非绑定（2.0 线覆盖）；函数参数可见性前缀仍统一按 `VIS_DEFAULT` 处理；IR 后端不做所有权/借用检查。
 - **共享文档 PA↔PB 双向同步（2026-09-19）**：以 `merge-base 7d4c652` 三方合并把本版本成果同步进 PB（PB 侧 `37a112a`），并把 PB 侧更新的 4 项回灌本线——① 中英 §5.1 指针声明节定案表述（"隐式推断声明"，原"双支持"自 v1.0.1 起过时）；② BNF `<array-size>` 细目 + 动态数组写法三条说明 + `<is-clause>`/`<pattern>` 注释；③ `VERSIONING_ROADMAP.md` 的 2.0 进展条目（阶段1 类型化指针、PB-26 M2 移植、ir-c 变量名保留已由 `[ ]` 转 `[x]`）与 A 方案独占文件清单残留的 `codegen.c` 修正；④ `IMPLEMENTATION_STATUS.md` 增补「2.0 线（PB）差异」节并修正 `pattern.nc` 覆盖描述。`docs/LEGACY_CODEGEN.md` 归档文档一并纳入共享集。同步后两条线共享文档一致（`TODO-PA.md` / `TODO-PB.md` 为分支专属，不计入）。
-- **回归验证**：c / native 双后端各 **14P / 0F / 5S**、ir-c / ir-native 各 **3P / 0F / 12S**（0 FAIL，含 PA-18/PA-19 两条新 err 用例），跨后端一致性检查全部通过；examples 6/7 编译运行（`06_cooking` 为 2.0 预览，预期不通过）；`pattern.nc` 经 ir-c / ir-native 实测输出与全量后端一致。
+- **回归验证**：c / native 双后端各 **15P / 0F / 5S**、ir-c / ir-native 各 **4P / 0F / 12S**（0 FAIL，含 PA-18/PA-19/PA-20 三条新 err 用例），跨后端一致性检查全部通过；examples 6/7 编译运行（`06_cooking` 为 2.0 预览，预期不通过）；`pattern.nc` 经 ir-c / ir-native 实测输出与全量后端一致。
 
 ## [v1.0.1] — 2026-09-03
 

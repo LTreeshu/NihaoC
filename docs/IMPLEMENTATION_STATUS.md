@@ -40,6 +40,7 @@
 | 裸标识符赋值检查 | 完整实现 | parser.c:1026–1033（声明初始化）、2407–2412（表达式赋值） | ✅ 已实现 |
 | 表达式级检查 | 仅检查裸标识符 | parser.c:1026–1033、2407–2412 | ⚠️ 部分实现 |
 | IR 后端所有权检查 | 无 | irparse.c | ⚠️ 未实现（2.0 范围，PB-26/PB-29 已覆盖） |
+| `?=` 安全赋值记号 | 已从语法移除（BNF v2.3）：A 后端 `case TOK_SAFE_ASSIGN` 显式拒绝并提示改用 `=`；IR 前端无该分支，词法 token 落入通用"unexpected token"报错 | lexer.c:613（词法保留）、parser.c:2417–2426（语法拒绝） | ✅ 已按规范移除（PA-20） |
 
 > `vis_check_assign()` 仅在赋值右侧为**单个裸标识符**时触发。`x = y + 1` 或 `x = malloc(...)` 等表达式形式的赋值不经过传递矩阵检查。IR 后端（irparse.c）仅记录可见性值用于 `visof()` 查询，不执行所有权/借用检查。
 
@@ -87,6 +88,7 @@
 | tests/err/m2d_invalid.nc | 失效源不可读 | ✅ |
 | tests/err/is_outside_while.nc | 循环体外 `is` 前端拒绝 | ✅（v1.0.2 / PA-18 新增，四后端） |
 | tests/err/is_in_do_body.nc | `do` 体内 `is` 前端拒绝 | ✅（v1.0.2 / PA-19 新增，四后端） |
+| tests/err/safe_assign_removed.nc | `?=` 已移除，赋值处拒绝 | ✅（v1.0.2 / PA-20 新增，四后端） |
 | tests/pos/borrow.nc | `flow`→`var` 借用 + 解冻 | ✅ |
 | tests/pos/flow.nc | `flow` 块级自动释放 | ✅ |
 | tests/pos/transfer.nc | `flow` 返回值所有权转移 | ✅ |
@@ -110,4 +112,5 @@
 | `__is_val` 类型 | `int` 固定 | **类型感知**，等于 `while` 条件表达式类型（PB-27.7） |
 | 循环体外使用 `is` | A 后端 `while_depth` 守卫即时报错（parser.c:1341–1350，v1.0.2 / PA-18）+ IR 前端 `is_val_vreg < 0` 报错 | 双前端均拒绝：IR 前端由 PB-27.1 先落地，**A 后端守卫尚未从 1.0 线回灌**（PB `parser.c` 的 `case TOK_IS` 仍为通用分支、无守卫） |
 | 多个 `is-clause` 无 fallthrough | ⚠️ 未实现（PA-16 登记待决策） | **同样未实现**（并列 `if` / 独立比较跳转），待与 PA-16 一并决策 |
-| 测试覆盖 | 1.0 门禁 14P/0F/5S（含 PA-18/PA-19 两条 err 用例，四后端执行） | `xmake test --all` 全矩阵（c/native/ir-c/ir-native），见 `ROADMAP.md` 里程碑「验收」行 |
+| `?=` 安全赋值记号 | 已从语法移除，A 后端显式拒绝（PA-20，BNF v2.3） | **仍接受**：PB `parser.c` 在声明（498）、语句窥探（1544）、赋值（2505）三处把 `?=` 与 `=` 同路处理，`token.h:112` 注释亦未更新；移除需回灌 PB（与 `while_depth` 守卫同批） |
+| 测试覆盖 | 1.0 门禁 15P/0F/5S（含 PA-18/PA-19/PA-20 三条 err 用例，四后端执行） | `xmake test --all` 全矩阵（c/native/ir-c/ir-native），见 `ROADMAP.md` 里程碑「验收」行 |
