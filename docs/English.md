@@ -560,7 +560,7 @@ if i < 3 {
 | `Struct(f1, f2)` | type match + field destructuring | binds each field | `is Point(x, y) { ... }` |
 | `Variant(pat)` | ADT tag match + sub-pattern | binds payload | `is Some(v) { ... }` |
 
-> **Implementation status**: the A backend (c/native) currently supports five pattern kinds — integer literal, negative integer, closed range `lo..hi`, enum variant, and visibility enum. The `_` wildcard and `<identifier>` variable binding are **not** yet implemented in the A backend (`<identifier>` compares by value); struct destructuring and ADT variant destructuring are reserved syntax. See `IMPLEMENTATION_STATUS.md` for the item-by-item mapping.
+> **Implementation status (1.0 release line, ≤ v1.0.2)**: the A backend (c/native) supports five pattern kinds — integer literal, negative integer, closed range `lo..hi`, enum variant, and visibility enum. The `_` wildcard and `<identifier>` variable binding are **not** implemented on the 1.0 line (`<identifier>` compares by value); struct destructuring and ADT variant destructuring are reserved syntax. The 2.0 line (PB) has added the `_` wildcard. See `IMPLEMENTATION_STATUS.md` for the item-by-item mapping.
 
 #### Semantic Rules
 
