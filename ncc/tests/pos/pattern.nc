@@ -11,5 +11,13 @@ func main() {
         }
         break
     }
+    /* 通配符模式：is _ 恒匹配循环条件值 */
+    w i32 = 9
+    while w -= 1 {
+        is _ {
+            puts("wild ok")
+            break
+        }
+    }
     puts("pattern ok")
 }
