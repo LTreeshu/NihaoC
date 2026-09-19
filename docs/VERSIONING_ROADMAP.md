@@ -14,7 +14,7 @@
 | **2.0** | B（irparse.c → IR → 多后端） | 下一代：平台中立 IR、多架构汇编、可优化 | 持续演进 → 就绪后接管 |
 
 两条线**共享**：lexer.c / token.h / ncc.h / sym.c / type.c / vis.c / stdlib.c / linker.c / module.c 与测试框架（xmake.lua）。
-两条线**独占**：A=parser.c/codegen.c/cgen.c/native.c；B=irparse.c/ir.c/ir_to_c.c/ir_backend.c/ir_x86_64.c/ir_riscv64.c/ir_arm64.c/ir_loongarch64.c。
+两条线**独占**：A=parser.c/cgen.c/native.c；B=irparse.c/ir.c/ir_to_c.c/ir_backend.c/ir_x86_64.c/ir_riscv64.c/ir_arm64.c/ir_loongarch64.c。
 
 ---
 
@@ -22,7 +22,7 @@
 
 ### 1.1 功能闭环（编译正确性）
 
-- [x] **指针声明语法决策 + 实现**（8/19 PA 分支定案并落地）：**隐式推断 + 显式声明双支持**——`p = &x` 自动推断为指向 x 的指针类型；`p T* = &x` 显式声明亦合法（parse_type 原有 `*` 支持 + cgen TYPE_POINTER 输出具名指针 `T*`）。同时修复 infer_init_type 契约（`Name = expr` 推断此前被 `=` 卡住恒落 int32，`s = "hello"` 曾误推 int）与 IR 层 `->` 成员偏移缺 ×8 的隐藏 bug。A 方案 `->` 链式/复合赋值全部可用
+- [x] **指针声明语法决策 + 实现**（8/19 PA 分支定案并落地，1.0.x 收敛为**隐式推断声明**）：`p = &x` 自动推断为指向 x 的指针类型；具名指针 `T*` 显式声明已移除（parse_type 的 `*` 指针构造分支删除），解引用统一为 `.()` / `. (T)` / `->`。同时修复 infer_init_type 契约（`Name = expr` 推断此前被 `=` 卡住恒落 int32，`s = "hello"` 曾误推 int）与 IR 层 `->` 成员偏移缺 ×8 的隐藏 bug。A 方案 `->` 链式/复合赋值全部可用
 - [x] **全量语法回归盘点**（8/30）：38 个 pos 用例 A 方案可编译 **32/38**——IR_SUBSET 24 例全部可编译，不可编译 6 例均为因子集语法（切片/多返回/编译期等 IR-only 特性）
 - [x] **A 方案已知 bug 清零**（8/30）：c/native 全量回归 **12P / 0F / 5S**（ir_arrow 转正后 6S→5S）；交叉验证期间暴露并修复 IR 层 `->` 成员偏移缺 ×8 的隐藏 bug（四后端输出 md5 一致）
 - [x] **动态数组暂缓确认**（8/30）：`[N...]` 固定容量不自动增长、`[...]` 仅声明/索引语义已写入 BNF.md/Chinese.md/English.md；增长留 2.0
@@ -32,7 +32,8 @@
 - [x] **CLI 完善收尾**（8/30）：`debug` 子命令 A 方案视角核查通过（`--ir` 正常输出 IR 视图）；`-run` Windows 报错文案明确；错误消息"外壳中文 + 正文英文"符合 1.0 定位
 - [x] **构建单一入口确认**（8/30）：xmake 唯一构建入口；Makefile 标 LEGACY 且 test 目标已删除，21 个旧语法用例（`const main()` 等）随 test/ 目录清理（git rm）
 - [x] **P3 卫生**（8/30）：test/ 生成二进制（a.out / a.out.c）清理；codegen.c（507 行）死代码面评估——`parse_function_full`/`parse_statement_full`/`gen_function_prologue_full`/`gen_if_statement`/`gen_while_loop` 无外部调用，`type_check_statement` 仅被 `parse_function_full` 引用，全文件无对外入口（现役路径为 main → cgen.c/native.c）；与 cgen.c 职责边界：codegen=遗留全量生成器、cgen=现役生成器，**1.0 不重构，仅记录**
-- [ ] **linker.c 职责注释**（当前仅 default 后端使用，1.0 文档化即可）
+- [x] **P3 卫生落实**（9/1）：上述 codegen.c 死代码面已落地清理（-980 行，见 docs/LEGACY_CODEGEN.md）；A 方案独占 = parser.c/cgen.c/native.c
+- [x] **linker.c 职责注释**（9/1）：现仅承担 `link` 库声明收集（linker_init/link_add_library），generate_* 已随 codegen 链删除，头部注释更新
 
 ### 1.3 发布准备
 
@@ -54,21 +55,22 @@
 
 ## 2. B 方案 2.0 演进清单
 
-### 阶段 1：类型化指针模型（立项，~100 行，P0）
+### 阶段 1：类型化指针模型（✅ 2026-08-31 完成，PB 分支）
 
-- [ ] `p = &标量` 记录类型（pt[] 表扩展到标量，或引入完整指针类型表）
-- [ ] 指针算术边界（p+1 语义？1.0 决策若补了 A 方案指针声明，语义以此为准）
+- [x] `p = &标量` 记录类型（pt[] 表扩展：`PT_SCALAR(-2-code)` 标量编码，聚合索引 >=0 / 标量 < -1 / -1 非指针三分区）
+- [x] 指针算术边界（p+1 语义：×8 槽宽缩放，与数组寻址一致；链式 p+k+1 保持字节语义——NihaoC 无 C 连续指针算术，语义已文档化）
 - [x] ir_arrow.nc 从 IR_ONLY 转正为 IR_SUBSET（8/19 PA 分支：A 方案指针声明落地 + IR 层 `->` 偏移 ×8 修复后，四后端一致）
+- [x] 类型化解引用：`.() = e` 写（按指向类型 coerce/TRUNC）、`.() op= e` 复合（LOAD→类型协调→op→截断→STORE）、`.() read` 浮点标记（f64/f32 → double vreg）；一元 `*p` 已于 2026-09-04 收敛移除（等价能力由 `.()` 提供）——新用例 ir_ptr2.nc（IR_SUBSET）四后端一致，WSL Linux 实测输出一致
 
 ### 阶段 2：产品能力补齐（A 方案能力平移，P0-P1）
 
-- [ ] **M2 静态检查移植**（所有权/借用状态机——A 方案早期实现，2.0 重构进 IR 层；err 测试从 SKIP 转正）
+- [x] **M2 静态检查移植（2026-09-04 完成，PB-26）**：所有权/借用状态机移植进 IR 层（irparse.c），参数前缀 `flow/var/const/static` 记录 `vvis`；调用点 M2 所有权检查生效，`err/m2a..m2e` 在 ir-c/ir-native 双后端转正为 PASS（详见 TODO.md PB-26）
 - [ ] **link/use 跨文件**（module.c 语义接入 IR 前端，单文件模型 → 模块化）
 - [ ] **布局内置函数**（structof/unionof/holdof/bitoffsetof——需真实内存布局替代 8 字节槽模型）
 
 ### 阶段 3：质量与性能（P1-P2）
 
-- [ ] **ir-c 输出质量**：平铺槽 `tN` 风格 → 可读 C（变量名保留/结构体直出）——2.0 产品化最大风险点
+- [x] **ir-c 输出质量：变量名保留（2026-09-05 完成，PB 阶段3 C 项）**：`IrFn` 新增 `vreg_name` 表（ir.h），`ir_new_vreg` 同步增长（ir.c），`var_declare` 在基 vreg 写入源码名（irparse.c，变量与参数均经此登记）；`ir_to_c` 构建 `vrid` 标识符表（有名用源码名、无名用 `tN`），局部变量声明与全部指令操作数引用均输出可读名。`xmake test --all` 全矩阵 0 FAIL、跨后端一致性一致。**结构体直出（真实结构体类型代替平铺 8 字节槽）依赖阶段 2 B 项「真实内存布局」，留待 B 完成后补**——届时 ir_to_c 可直出 `struct T { ... }` 并复用真实偏移。
 - [ ] **native 寄存器分配**（PB-15 决策的长期项：全栈槽保底已敲定，live range/spill 参考 LLVM RegAllocGreedy）
 - [ ] 汇编后端转正评估：riscv64/arm64/loongarch64 从"仅验汇编生成"→ 真编译（需交叉工具链环境）
 

@@ -266,7 +266,7 @@ ptr  = ptr3[].()          // two-level dereference
 variable = ptr3[][].(i32) // three-level dereference
 ```
 
-> **Pointer declaration syntax (decided 2026-08-19: implicit inference + explicit declaration both supported)**
+> **Pointer declaration syntax (decided 2026-08-19: implicit inference declaration)**
 >
 > - **Implicit inference**: `p = &x` auto-infers `p` as a pointer to `x`'s type (no type name needed).
 
