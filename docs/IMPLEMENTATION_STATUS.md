@@ -18,6 +18,7 @@
 | 失效变量不可读 | `vis_check_usable()` | vis.c:127–136 | ✅ 已实现 |
 | 冻结变量不可写 | `vis_check_writable()` | vis.c:139–148 | ✅ 已实现 |
 | 赋值检查编排 | `vis_check_assign()` | vis.c:154–198 | ✅ 已实现 |
+| `flow → flow`（同一指针的所有权转移，§12.1 允许） | 检查先行：`vis_check_assign` 在右侧代码生成**之前**就把源标记为 `BS_INVALID`（`vis_update_source`），随后右侧裸标识符输出时又被可用性检查判为"已失效"，于是 `flow neu void = ptr`（parser.c:1100–1112 声明式）与 `neu = ptr`（parser.c:2831–2844 赋值式）**两种写法均即时报 `'ptr' is invalidated: its ownership has been moved`**；借用形态（`flow → var` / `flow → const`）不受影响 | parser.c:1109、2155、2840，vis.c:96–98、127–136 | ⚠️ 检查顺序缺陷（v1.0.2 / PA-30 探针发现）：文档承诺的 flow→flow 转移在 1.0 线写不出来，中英 §14.2 示例的该行亦因此编译不过（该示例其余部分通过）。登记 `TODO-PA.md` PA-33 待决策 |
 
 > 本矩阵不适用于函数返回值接收：返回值没有可冻结/可解冻的源变量，规则由 §7.3 单独约束且更严格，见下文「调用方接收规则（§7.3）」。
 
@@ -85,7 +86,7 @@
 
 ---
 
-## 内置查询函数（§2.3，BNF v2.4 / v2.6）
+## 内置查询与输出内建（§2.3 / §2.3.1，BNF v2.4 / v2.6）
 
 A 后端把 `sizeof` / `typeof` / `alignof` / `offsetof` / `bitoffsetof` / `visof` / `structof` / `unionof` / `holdof` 作为**关键字 token**处理，统一由 `parse_builtin_kw()` 分派（`parse_primary` 的 `switch` 进入，parser.c:2114）；标识符路径的内置函数表看不到这些关键字。`len` 与之相反，走 `parse_primary` 的标识符内置函数表（parser.c:2169–2190）。
 
@@ -96,6 +97,8 @@ A 后端把 `sizeof` / `typeof` / `alignof` / `offsetof` / `bitoffsetof` / `viso
 | `bitoffsetof(T, m)` 位域位偏移 | 按声明顺序的位布局：以前置非位域成员为锚点，用 C 自身 `offsetof`/`sizeof` 求存储单元起点，再累加整单元与单元内位；对齐以基类型 `sizeof` 近似（基本整型 `align == size`）；目标非位域、基类型宽度未知、同一组成员存储类型不一致均报错 | parser.c:1798–1876 | ✅ 已实现（v1.0.2 / PA-22，c/native）。IR 前端未实现 |
 | `alignof(T)` 类型对齐 | 编译期由编译器算出对齐值并把**字面量**输出到 C（不再依赖 C 的 `_Alignof`）：数组递归取元素对齐、结构体/联合体取最宽非位域成员对齐、`void` 按通用指针计 8、其余类型取声明对齐（`parse_type` 的栈上 `CType.align` 为 0 时回落到 `type_default_align(kind)`）| parser.c:1714–1721 与 2205–2211（两处分派）、type.c:71–102（`type_align`）、ncc.h:400（原型）| ✅ 已实现（v1.0.2 / PA-24，c/native）。IR 前端仍按 IR 槽模型对任何 `alignof` 固定返回 8（`irparse.c:759`），2.0 布局待对齐 |
 | 聚合体成员列表分隔符 | 成员以**空白**分隔（`Point struct { x i32 y i32 }`），逗号被拒绝（`expected member name, got ','`） | parser.c:103（成员解析） | ✅ 与 BNF 一致（v1.0.2 / PA-23）：文档 4 处示例原用逗号分隔，已改回空白分隔，语法与实现均未改动 |
+| `print` 两种形态（§2.3.1） | 实参首 token 为字符串字面量 → **C `printf` 直通**（格式符与参数须自行匹配，不自动换行，多余参数不拼接）；否则 → `printf("%lld\n", (long long)expr)`，即按十进制整数打印该值并换行（对指针实参打印其地址整数值） | parser.c:2301–2320 | ✅ 已实现且文档已定义（v1.0.2 / PA-30 补 §2.3.1 口径）。IR 前端**未内建** `print`（直出成未定义符号，链接期报错），2.0 待做 |
+| `puts` 输出字符串（§2.3.1） | C `puts` 直通：实参须为字符串指针，自动补换行；把整型（`p.(i32)`）传给 `puts` 会按地址解引用，运行期崩溃或乱码 | parser.c:2321–2335（`puts`/`printf` 普通直通调用） | ✅ 双前端一致（v1.0.2 / PA-30 补文档口径；文档 5 处 `puts(整型)` 示例已改为 `print(整型)`） |
 
 ---
 
@@ -135,6 +138,7 @@ A 后端把 `sizeof` / `typeof` / `alignof` / `offsetof` / `bitoffsetof` / `viso
 | `flow` 动态分配 + 自动释放 | 块退出时自动 free | parser.c:1573–1585 | ✅ 已实现 |
 | `flow` 返回值所有权转移 | `ownership_transferred` 标志 | parser.c:1468–1478 | ✅ 已实现 |
 | `static` 静态存储 | C `static` 关键字 | cgen | ✅ 已实现 |
+| `flow` 绑定字符串字面量 | `flow s char[] = "abc"` 生成 `char* s = "abc";`，块退出时照常 `free(s)`（与动态分配走同一条自动释放路径），即**释放静态字面量**；实测该用例运行后无任何输出（缓冲区在运行期中止时丢失），同一代码改用 `const` / `static` 接收字面量则正常 | parser.c:1113 起的初值登记、1573–1585（块退出释放） | ⚠️ 运行期缺陷（v1.0.2 / PA-30 探针发现）：文档未出现该写法（中英 §2.2 的 `char[] = "Hello"` 为 `var` 与无修饰局部，§3/§7 的字面量绑定均为 `static`，无 `flow` 形态），登记 `TODO-PA.md` PA-32 待决策 |
 
 > `const` 的存储期区分（模块级静态 / 块级自动）由 C 后端编译器的自然语义实现——ncc 不显式区分两种 `const`，但生成的 C 代码中，文件作用域 `const` 自然获得静态存储期，块作用域 `const` 自然获得自动存储期。`vis_check_transfer()` 对两种 `const` 一视同仁。
 
@@ -163,11 +167,12 @@ A 后端把 `sizeof` / `typeof` / `alignof` / `offsetof` / `bitoffsetof` / `viso
 | tests/pos/alignof_builtin.nc | `alignof()` 编译期对齐：标量、`void` 通用指针=8、结构体/联合体取最宽成员、嵌套结构体、数组取元素对齐 | ✅（v1.0.2 / PA-24 新增，c/native；未列入 `IR_SUBSET`，IR 后端自动跳过） |
 | tests/pos/slice_str_infer.nc | 切片赋值的字符串右值（含偏移切片与结尾 NUL）、`talk = xiaoming.say` 取成员类型、`result = calc(10, 20)` 取函数指针返回类型 | ✅（v1.0.2 / PA-26 新增，c/native；未列入 `IR_SUBSET`，IR 后端自动跳过） |
 | tests/err/slice_str_overflow.nc | 字符串右值放不下切片区间时前端报错（`strlen+1 > b-a+1`） | ✅（v1.0.2 / PA-26 新增，c/native；IR 前端无 `.(T)`，经 `IR_ERR_SKIP` 跳过） |
+| tests/pos/print_forms.nc | `print` 两种形态（`print("fmt %s\n", s)` 的 printf 直通与 `print(expr)` 的整型打印）+ `puts` 字符串直通 | ✅（v1.0.2 / PA-30 新增，c/native；IR 前端未内建 `print`，未列入 `IR_SUBSET` 自动跳过） |
 | tests/pos/borrow.nc | `flow`→`var` 借用 + 解冻 | ✅ |
 | tests/pos/flow.nc | `flow` 块级自动释放 | ✅ |
 | tests/pos/transfer.nc | `flow` 返回值所有权转移 | ✅ |
 
-> 上表为 1.0 发布集（`tests/pos` + `tests/err`，c/native 双后端）。`tests/pos/ir_*.nc` 属 2.0 IR 线（PB 分支），不在 1.0 发布门禁内。err 用例自 v1.0.2（PA-19）起在四个后端下均执行，`m2a`~`m2d` 四条 M2 静态检查用例与 `deref_bounds`（`.(T)` 类型化解引用）、`structof_bad_member`（从属查询内置函数）、`void_subscript`（通用 `void` 指针裸下标检查）、`len_unknown`（`len()` 静态不可知的报错口径）与 `slice_str_overflow`（切片赋值的字符串右值容量检查）共九条经 `xmake.lua` 的 `IR_ERR_SKIP` 在 IR 后端跳过（IR 前端无所有权/借用检查，只支持裸 `p.()`，且未实现从属/位域内置函数与 `.(T)` 相关检查）。`ownerof`（从属查询 + 位域偏移）、`deref_slice`（后缀链解引用 + 切片 + 数组退化）、`len_builtin`（`len()` 三类取值）、`alignof_builtin`（`alignof()` 编译期对齐）与 `slice_str_infer`（字符串右值切片赋值 + 成员/调用类型推断）未列入 `IR_SUBSET`，在 IR 后端按「IR 子集未覆盖」自动跳过。`is` 模式匹配由 `tests/pos/pattern.nc` 覆盖，该用例含 `is _` 通配符分支（v1.0.2 / PA-15 起，四后端输出一致）；`is <identifier>` 变量绑定仍无用例（对应上表 ⚠️ 项）。门禁（v1.0.2 / PA-26 后）：`xmake test --all` → c / native 各 **27 PASS / 0 FAIL / 5 SKIP**，ir-c / ir-native 各 **6 PASS / 0 FAIL / 22 SKIP**。
+> 上表为 1.0 发布集（`tests/pos` + `tests/err`，c/native 双后端）。`tests/pos/ir_*.nc` 属 2.0 IR 线（PB 分支），不在 1.0 发布门禁内。err 用例自 v1.0.2（PA-19）起在四个后端下均执行，`m2a`~`m2d` 四条 M2 静态检查用例与 `deref_bounds`（`.(T)` 类型化解引用）、`structof_bad_member`（从属查询内置函数）、`void_subscript`（通用 `void` 指针裸下标检查）、`len_unknown`（`len()` 静态不可知的报错口径）与 `slice_str_overflow`（切片赋值的字符串右值容量检查）共九条经 `xmake.lua` 的 `IR_ERR_SKIP` 在 IR 后端跳过（IR 前端无所有权/借用检查，只支持裸 `p.()`，且未实现从属/位域内置函数与 `.(T)` 相关检查）。`ownerof`（从属查询 + 位域偏移）、`deref_slice`（后缀链解引用 + 切片 + 数组退化）、`len_builtin`（`len()` 三类取值）、`alignof_builtin`（`alignof()` 编译期对齐）、`slice_str_infer`（字符串右值切片赋值 + 成员/调用类型推断）与 `print_forms`（`print` 两种形态，IR 前端未内建 `print`）未列入 `IR_SUBSET`，在 IR 后端按「IR 子集未覆盖」自动跳过。`is` 模式匹配由 `tests/pos/pattern.nc` 覆盖，该用例含 `is _` 通配符分支（v1.0.2 / PA-15 起，四后端输出一致）；`is <identifier>` 变量绑定仍无用例（对应上表 ⚠️ 项）。门禁（v1.0.2 / PA-30 后）：`xmake test --all` → c / native 各 **28 PASS / 0 FAIL / 5 SKIP**，ir-c / ir-native 各 **6 PASS / 0 FAIL / 23 SKIP**。
 
 ---
 
@@ -185,7 +190,7 @@ A 后端把 `sizeof` / `typeof` / `alignof` / `offsetof` / `bitoffsetof` / `viso
 | 反向范围 `lo > hi` 校验 | ⚠️ 未实现 | **IR 前端已实现**（irparse.c:2259–2261 编译期报错）；A 后端 `parser.c` 仍不校验 |
 | `__is_val` 类型 | `int` 固定 | **类型感知**，等于 `while` 条件表达式类型（PB-27.7） |
 | 结构体数组成员 | **A 后端可编译可运行**：`T struct { n char[8] a i32 }` 与省略长度的 `name char[]` 均接受（PA-23 探针） | **IR 前端拒绝**：任何数组类型成员都报 `ir: expected member name`（`char[8]` 与 `char[]` 同），标量成员正常。标量-only 结构体两前端一致 |
-| `print` 内建 | A 后端把 `print(...)` 转发为 C `printf(...)`（第一参数即格式串，多余参数不自动拼接） | **IR 前端未内建 `print`**：作为未知函数直出，链接期报 `undefined symbol 'print'`（ir-native 为 `__imp_print`）；IR 侧仅 `puts` 可用，故 `IR_SUBSET` 用例一律用 `puts` |
+| `print` 内建（§2.3.1） | A 后端两种形态（v1.0.2 / PA-30 已在文档定稿口径）：首实参为字符串字面量 → 转发 C `printf(...)`（格式符须自配，不自动换行/拼接）；否则 → `printf("%lld\n", (long long)expr)` 按整数打印（`print(200)` 输出 `200`，`print(指针)` 输出地址整数值） | **IR 前端未内建 `print`**：作为未知函数直出，链接期报 `undefined symbol 'print'`（ir-native 为 `__imp_print`）；IR 侧仅 `puts` 可用，故 `IR_SUBSET` 用例一律用 `puts`。PB 侧文档尚无 §2.3.1 口径，`tests/pos/print_forms.nc` 可作 2.0 接入时的回归用例 |
 | 循环体外使用 `is` | A 后端 `while_depth` 守卫即时报错（parser.c:1496–1503，v1.0.2 / PA-18）+ IR 前端 `is_val_vreg < 0` 报错 | 双前端均拒绝：IR 前端由 PB-27.1 先落地，**A 后端守卫尚未从 1.0 线回灌**（PB `parser.c` 的 `case TOK_IS` 仍为通用分支、无守卫） |
 | 多个 `is-clause` 无 fallthrough | ⚠️ 未实现（PA-16 登记待决策） | **同样未实现**（并列 `if` / 独立比较跳转），待与 PA-16 一并决策 |
 | `?=` 安全赋值记号 | 已从语法移除，A 后端显式拒绝（PA-20，BNF v2.3） | **仍接受**：PB `parser.c` 在声明（498）、语句窥探（1544）、赋值（2505）三处把 `?=` 与 `=` 同路处理，`token.h:112` 注释亦未更新；移除需回灌 PB（与 `while_depth` 守卫同批） |
@@ -197,4 +202,4 @@ A 后端把 `sizeof` / `typeof` / `alignof` / `offsetof` / `bitoffsetof` / `viso
 | `alignof(T)` 类型对齐（§2.3） | A 后端编译期算出对齐值并输出字面量，不再依赖 C 的 `_Alignof`（PA-24，见上表） | **未回灌**：PB `parser.c` 两处仍生成 `_Alignof(T)`，在 tcc 下链接期报 `undefined symbol '_Alignof'`；PB `irparse.c` 按 IR 槽模型对所有 `alignof` 固定返回 8（`irparse.c:759` 注释），非真实类型对齐 |
 | `else if` 递归形式（§6 `<if-stmt>`，BNF） | 双前端一致：A 后端 `parse_if_stmt`、IR 前端 `ir_if_stmt` 递归（PA-28，见上表） | **IR 侧仍缺**：PB `parser.c:1577` 的 A 后端分支已支持，但 PB `irparse.c:2014` 的 `else` 分支仍无条件调 `ir_block`，`else if` 在 ir-c / ir-native 报 `expected '{', got 'if'`；1.0 线的 PA-28 修复需回灌 PB |
 | 切片赋值的字符串右值与推断声明取值（§5.1.4 / §5.1.5，BNF v2.7） | A 后端支持 `p[a..b] = "abc"` 按字节复制（含结尾 `\0`、超容量报错），且 `v = s.m` / `v = fp(a)` 的推断声明分别取成员类型（数组成员退化为指针）与被调返回类型（PA-26，见上表） | **未回灌**：PB `parser.c` 完全没有切片赋值（无 `rhs_was_slice` 分支，见上「指针后缀链与切片」行），`infer_init_type`（PB parser.c:576）的标识符分支仍是 `memcpy(out, s->type)` 配 `out->sym = s`——成员访问把变量符号当类型符号用、调用取函数类型而非返回类型；PB `irparse.c` 亦无对应路径。1.0 线的 PA-26 修复需回灌 PB，`tests/pos/slice_str_infer.nc` 与 `tests/err/slice_str_overflow.nc` 可作回归用例 |
-| 测试覆盖 | 1.0 门禁 27P/0F/5S（含 PA-18 ~ PA-22、PA-25 ~ PA-27 九条 err 用例；IR 侧 6P/0F/22S） | `xmake test --all` 全矩阵（c/native/ir-c/ir-native），见 `ROADMAP.md` 里程碑「验收」行 |
+| 测试覆盖 | 1.0 门禁 28P/0F/5S（含 PA-18 ~ PA-22、PA-25 ~ PA-27 九条 err 用例；IR 侧 6P/0F/23S） | `xmake test --all` 全矩阵（c/native/ir-c/ir-native），见 `ROADMAP.md` 里程碑「验收」行 |

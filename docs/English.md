@@ -48,6 +48,26 @@ NiHao is a new statically compiled language designed for system-level programmin
 > non-literal bounds, …) the front end reports an error immediately; the `ir-*` backends
 > already cover the three cases but return 0 when the length is not statically known.
 
+#### 2.3.1 Output Built-ins (`print` / `puts`)
+
+- `puts(s)` — prints a NUL-terminated string and appends a newline; the argument **must be a string
+  pointer** (`char*` / `char[]`). It is not "print any value": handing an integer (e.g. `p.(i32)`)
+  to `puts` makes the C library dereference that number as an address, crashing or emitting garbage.
+- `print(x)` — when the argument is **not** a string literal: prints the value as a decimal integer
+  followed by a newline (the value, not the address).
+- `print("fmt", a, b, ...)` — when the argument **is** a string literal: forwarded verbatim to C
+  `printf`. The first argument is the C format string, so the conversions (`%d` / `%s` / `%lld` …),
+  their count and their types are the caller's responsibility; extra arguments are **not**
+  concatenated and no newline is added. Hence `print("[LOG] ", msg)` emits only `[LOG] ` (the `msg`
+  is dropped); the correct form is `print("[LOG] %s\n", msg)`.
+
+> The two forms are distinguished statically by the first argument token (literal → `printf`
+> passthrough, otherwise → integer print), so `print(buf)` with `buf` a string variable prints its
+> address as an integer, not its contents — use `puts` to print strings.
+> Scope: `print` is provided by the A backend on the 1.0 line; the `ir-*` backends (2.0 line) do not
+> have it built in (it is emitted as an undefined symbol and fails at link time), so tests meant to
+> run on every backend use `puts` only. `puts` is a plain C library passthrough on both lines.
+
 ### 2.4 Keyword Reference
 
 - `alias` — type alias
@@ -769,7 +789,7 @@ func greet() {
 
 // no return value, with parameters
 func log(msg char[]) {
-    print("[LOG] ", msg)
+    print("[LOG] %s\n", msg)   // format-string form, see §2.3.1
 }
 
 // returns a non-pointer type
@@ -1417,8 +1437,8 @@ func modify(var val void) {
 }
 
 func inspect(const val void) {
-    puts("Inspecting value: ")
-    puts(val.(i32))
+    print("Inspecting value: ")
+    print(val.(i32))           // integer form, see §2.3.1
 }
 
 flow create_ptr() void {
@@ -1460,7 +1480,7 @@ func main() {
     flow q void = malloc(i32)
     q.(i32) = 1100
     modify(q)             // q frozen; mutated inside
-    puts(q.(i32))         // prints 200
+    print(q.(i32))          // prints 200 (integer form, §2.3.1)
     inspect(q)            // q frozen (read-only)
 
     // chained calls (nested borrows)
@@ -1473,7 +1493,7 @@ func main() {
 
     // return values
     flow p2 void = create_ptr()  // receives ownership
-    puts(p2.(i32))          // 100
+    print(p2.(i32))         // 100
     // p2 auto-freed
 
     // nested scopes
@@ -1489,7 +1509,7 @@ func main() {
         }                        // o ends; n unfrozen
         n.(i32) = 900
     }                            // n ends; m unfrozen
-    puts(m.(i32))                // 900
+    print(m.(i32))                 // 900
 }
 ```
 
@@ -1519,7 +1539,7 @@ The following table excerpts the key pointer operations and shows the compiler's
 | `const o = n`                                            | assignment (`_var` → `_const`)| source `n` is `_var` (mutable borrow); `var→const` = read-only borrow | **`n` frozen** (until `o`'s scope ends); `o` is a read-only borrow.                                     |
 | `// o.(i32) = 700` (comment)<br>`// n.(i32) = 800` (comment)| attempted writes           | `o` read-only; `n` frozen because of `o`; neither mutable       | compiler errors at the commented positions if uncommented.                                                |
 | `n.(i32) = 900`                                          | write                       | `o`'s scope ended; `n` unfrozen; `n` is a mutable borrow and may write | analysis passes; `n` may modify the pointed-to data (owned by `m`).                                     |
-| `puts(m.(i32))`                                          | read                        | `n`'s scope ended; `m` unfrozen; `m` owns memory, readable      | analysis passes; reads value 900.                                                                        |
+| `print(m.(i32))`                                         | read                        | `n`'s scope ended; `m` unfrozen; `m` owns memory, readable      | analysis passes; reads value 900.                                                                        |
 
 ---
 
