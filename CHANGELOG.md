@@ -2,6 +2,42 @@
 
 版本号遵循 [Semantic Versioning](https://semver.org)。本文件记录 NihaoC 编译器（`ncc/`）的里程碑与版本变更。
 
+## [v1.0.2] — 2026-09-19（待 tag）
+
+1.0 冻结线的规范合规与代码卫生版本，无新增语言特性（`is _` 通配符属补全文档已承诺的既有语法，非新特性）。
+
+- **`is` 移除 `=>` 单语句形式（PA-13，用户可见语法变更）**：`is <pattern> => <statement>` 全线下线，`is` 只保留块形式 `is <pattern> { ... }`。C 后端 `parser.c` 的 `parse_is_stmt` 删除 `TOK_FAT_ARROW` 分支（改报 `expected '{' after 'is' pattern`）；IR 前端 `irparse.c` 同分支删除（双前端与 BNF v2.2 一致，错误路径吞 token 防死循环）；`tests/pos/ir_is.nc` 清理 `=>` 用例。`=>` 仍由 lexer 识别为 `TOK_FAT_ARROW`（词法保留，语法不使用），`token.h` 注释同步。
+- **`codegen.c` 死代码全链清理**：删除早期直出 C 的后端 `ncc/codegen.c`（507 行，已由 `cgen.c` + `parser.c` 管线取代）及其调用链——`linker.c` 相关 120 行、`ncc.h` 84 行声明与枚举、`ncc.c` 4 行后端注册；`ncc/xmake.lua` 的 `add_files` 去掉 `codegen.c`。
+- **构建修复（用户可见）**：`xmake.lua` PATH 探测的 `gmatch` 模式误把盘符冒号当分隔符切开（`D:\...` 被截断）导致编译器探测失败；同时修正含空格 TCC 安装目录的参数引号处理。
+- **BNF 收敛入文档**：v2.1 记录指针语法收敛（一元 `*` 解引用移除，解引用统一 `.()` / `.(T)` / `->`）；v2.2 重写 `<pattern>`（通配符 / 整数 / 负整数 / 闭区间 `lo..hi` / 枚举变体 / 可见性枚举 / 结构体解构与 ADT 变体解构（预留）/ 标识符），`<is-stmt>` 从 `<statement>` 移除、`while` 体内 `is-clause` 与 `do` 不支持 `is` 口径对齐，中英 §6.1/§13.3 与语法元素表同步。
+- **TODO 分层拆分**：`TODO.md` 拆为 `ROADMAP.md`（跨分支里程碑与通用待办）+ `TODO-PA.md`（1.0 冻结线专属）+ `TODO-PB.md`（2.0 IR 线专属），并建立共享文档跨分支同步规则。
+- **文档-实现全量一致性核对**：PB-27 子项状态回填、PB-29 `ret_vis` 检查条件表述修正（`ret_vis > VIS_VAR` 恒假 → 显式 `∈ {CONST, FLOW, STATIC}`）、ROADMAP 架构图清除已删除的 `ir_to_native.c` 引用、VERSIONING_ROADMAP 阶段 2 重复条目去重、`ncc.h` 后端注释与 `set_version` 对齐。
+- **`is _` 通配符补全（规范合规）**：1.0 线 A 后端 `parse_is_stmt` 原先把 `_` 当普通标识符输出到 C（tcc 报 `'_' undeclared`），现补恒匹配分支（生成 `if (1)`，与 2.0 线同源实现）；IR 前端 `irparse.c` 同步补 `_` 分支（不发比较与 JZ，块直接执行）。`tests/pos/pattern.nc` 增加通配符用例并更新 `.expect`，c/native/ir-c/ir-native 四后端输出一致。（PA-15）
+- **`is` 多子句 fallthrough 缺口（已登记未修）**：文档 R 规则"首个匹配者执行（无 fallthrough）"在两线均未实现——多个 is-clause 生成并列 `if`，条件重叠时会连续执行（`is _` 恒匹配使该问题更易触发）。属既有语义缺陷，需改动 `is` 控制流生成方式，未纳入 v1.0.2；详见 `docs/IMPLEMENTATION_STATUS.md`。（PA-16）
+- **PA TODO 处理完毕**：PA-1 ~ PA-15 全部 `[x]`；唯余 PA-16（上述 fallthrough 缺口）登记待决策，不纳入本版。
+- **已知缺口（登记于 `docs/IMPLEMENTATION_STATUS.md`）**：1.0 线 A 后端 `is <identifier>` 变量绑定为"按值比较"而非绑定（2.0 线覆盖）；函数参数可见性前缀仍统一按 `VIS_DEFAULT` 处理；IR 后端不做所有权/借用检查。
+- **回归验证**：c / native 双后端各 **12P / 0F / 5S**（0 FAIL），examples 6/7 编译运行（`06_cooking` 为 2.0 预览，预期不通过）；`pattern.nc` 经 ir-c / ir-native 实测输出与全量后端一致。
+
+## [v1.0.1] — 2026-09-03
+
+1.0.x 首个补丁版本：指针语法收敛 + Linux 平台修复 + 规范文档定案。
+
+- **移除带 `*` 的指针语法形式（与 BNF/文档一致）**：删除具名指针类型声明 `T*`（如 `p T* = &x`）与一元 `*` 解引用（`*p` 读/写/复合 `*p op=`）；指针解引用统一收敛为 `.()` / `.(T)` / `->`。`void` 通用指针、`void[n]` 指针数组、隐式推断 `p = &x` 与乘法 `*` / `*=` 均保留（属不同语义，非指针语法）。
+- **编译器（A 方案 parser.c）**：`parse_type` 删除 `TOK_STAR` 指针构造分支（仅保留 `[]` 数组后缀，并修正 `while` 条件避免 `*` 死循环）；`parse_unary` 删除一元 `*` 解引用分支（落入默认报错）。内部 `TYPE_POINTER` 类型与 `cgen.c` 的 `T*`/`void*` 文本映射**保留**（生成可编译 C 的前提，与用户输入语法无关）。
+- **示例与测试同步改写**：`examples/04_pointer.nc`、`tests/pos/ir_ptr.nc`、`ir_ptr2.nc`、`ir_slice.nc` 的 `*p` / `*(&x)` / `*p op=` 全部改为 `.()` 形式；复合 `*p += e` 展开为 `p.() = p.() + e`（双后端兼容写法）。
+- **回归验证**：c/native 双后端 **13P / 0F / 5S**（0 FAIL），`examples/04_pointer.nc` 运行输出 `deref write ok` / `addr deref ok`。
+- **B 方案（PB）待办登记**：`irparse.c` 仍支持一元 `*p`（读/写/复合 RMW）且 `.() op=` 缺失，已登记 `TODO.md` 专项二 PB-25（移除一元 `*p` + 补 `.() op=`，本次 PB 不实现）。
+- **`is` 模式匹配规范定案（仅文档）**：`is` 仅配合 `while`（`do` 不支持）、移除 `=>` 箭头形式；BNF 重写 pattern 产生式；中英 §6.1 新增模式匹配子节（语义表 + R1–R4）。语法实现变更落在 v1.0.2（PA-13）。
+- **§12 指针传递矩阵文档统一**：合并 §12.1+§12.2 为单一 §12.1（4×4 矩阵为主、16 条枚举为辅）；§12.3→§12.2 重编号；新建 `docs/IMPLEMENTATION_STATUS.md` 规范-实现对应表。
+
+### Linux 平台修复（2026-08-31 WSL 实测，PA-9）
+
+- `xmake.lua`：os.exec 在 Linux 不走 shell（`|| true` 被当作程序参数）→ Linux 分支显式 `/bin/sh -c` 包装；非 Windows 跳过 p0_link target 与 ir-native 测试
+- `cgen.c`：c_type_name 三处 static buf 重叠写（递归调用 src==dst，Linux glibc 损坏输出）→ 独立 `char tmp[256]` 拷贝
+- `native.c`：源码构建 libtcc.so 未导出 `tcc_install_dir`（隐式声明 int 截断指针）→ 非 Windows 硬编码 `/usr/local/lib/tcc`
+- `native.c`：`-run` 内存执行误判 `tcc_relocate(s, NULL)` 返回值（NULL 语义为"返回所需内存大小"，>0 即成功）→ 改为直接 `tcc_run`（内部自动 relocate）
+- 构建依赖：libtcc.so 内部符号（sym_push 等）与 ncc 重名被 ELF 符号插值劫持 → 以 `make libtcc.so LDFLAGS="-fPIC -Wl,-Bsymbolic"` 重新构建安装
+
 ## [v1.0.0] — 2026-08-31
 
 **首个对外版本（A 方案产品线）**。A 方案（parser → C 文本 → tcc）功能闭环，特性冻结，只修 bug/文档。
@@ -10,7 +46,7 @@
 
 - 全量语法回归 **12P / 0F / 5S**（c/native 双后端一致）
 - 指针声明语法定案：**隐式推断声明**（`p = &x` 自动推断为指向 x 的指针）；`->` 指针成员访问（链式/复合赋值）；1.0.x 起具名指针 `T*` 显式声明与一元 `*` 解引用已移除，解引用统一 `.()` / `.(T)` / `->`
-- 三元 `?:`、`is pat => stmt` 单语句匹配（`=>` 新 token）、goto/label
+- 三元 `?:`、`is pat => stmt` 单语句匹配（`=>` 新 token；已于 1.0.2 / PA-13 与 2.0 / PB-27.6 移除，`is` 只保留块形式）、goto/label
 - struct/union/enum（嵌套、位域、嵌套初始化列表、整体拷贝）、数组/动态数组（固定容量）、切片、多返回值（命名 struct 返回，C 机制）
 - 存储期与所有权（const/static/flow/var + 借用状态机）、cooking 编译期（常量/函数/static_assert）、len()、visof()
 - 后端 `-backend=native`：libtcc 进程内编译执行；`-run` 内存执行（Linux only）
@@ -22,22 +58,6 @@
 - examples/ 示例集 7 例（6 例 1.0 可编译运行，06_cooking 为 2.0 预览）
 - 语言规格冻结：BNF v2.0 终校（`=>`/`->` 补全）+ 中英语法元素表核对；1.0.x 起 `T*` 具名指针与一元 `*` 解引用已从 BNF 移除
 - **双平台验证（Windows + Linux/WSL Ubuntu-24.04）**：c/native 全量回归 0 FAIL（12P/0F）+ examples 6/6 双后端一致；`-run` 内存执行 Linux 实测通过
-
-### 1.0.x 指针语法收敛（2026-09-03）
-
-- **移除带 `*` 的指针语法形式（与 BNF/文档一致）**：删除具名指针类型声明 `T*`（如 `p T* = &x`）与一元 `*` 解引用（`*p` 读/写/复合 `*p op=`）；指针解引用统一收敛为 `.()` / `.(T)` / `->`。`void` 通用指针、`void[n]` 指针数组、隐式推断 `p = &x` 与乘法 `*` / `*=` 均保留（属不同语义，非指针语法）。
-- **编译器（A 方案 parser.c）**：`parse_type` 删除 `TOK_STAR` 指针构造分支（仅保留 `[]` 数组后缀，并修正 `while` 条件避免 `*` 死循环）；`parse_unary` 删除一元 `*` 解引用分支（落入默认报错）。内部 `TYPE_POINTER` 类型与 `cgen.c` 的 `T*`/`void*` 文本映射**保留**（生成可编译 C 的前提，与用户输入语法无关）。
-- **示例与测试同步改写**：`examples/04_pointer.nc`、`tests/pos/ir_ptr.nc`、`ir_ptr2.nc`、`ir_slice.nc` 的 `*p` / `*(&x)` / `*p op=` 全部改为 `.()` 形式；复合 `*p += e` 展开为 `p.() = p.() + e`（双后端兼容写法）。
-- **回归验证**：c/native 双后端 **13P / 0F / 5S**（0 FAIL），`examples/04_pointer.nc` 运行输出 `deref write ok` / `addr deref ok`。
-- **B 方案（PB）待办登记**：`irparse.c` 仍支持一元 `*p`（读/写/复合 RMW）且 `.() op=` 缺失，已登记 `TODO.md` 专项二 PB-25（移除一元 `*p` + 补 `.() op=`，本次 PB 不实现）。
-
-### Linux 平台修复（2026-08-31 WSL 实测）
-
-- `xmake.lua`：os.exec 在 Linux 不走 shell（`|| true` 被当作程序参数）→ Linux 分支显式 `/bin/sh -c` 包装；非 Windows 跳过 p0_link target 与 ir-native 测试
-- `cgen.c`：c_type_name 三处 static buf 重叠写（递归调用 src==dst，Linux glibc 损坏输出）→ 独立 `char tmp[256]` 拷贝
-- `native.c`：源码构建 libtcc.so 未导出 `tcc_install_dir`（隐式声明 int 截断指针）→ 非 Windows 硬编码 `/usr/local/lib/tcc`
-- `native.c`：`-run` 内存执行误判 `tcc_relocate(s, NULL)` 返回值（NULL 语义为"返回所需内存大小"，>0 即成功）→ 改为直接 `tcc_run`（内部自动 relocate）
-- 构建依赖：libtcc.so 内部符号（sym_push 等）与 ncc 重名被 ELF 符号插值劫持 → 以 `make libtcc.so LDFLAGS="-fPIC -Wl,-Bsymbolic"` 重新构建安装
 
 ### 明确留给 2.0
 

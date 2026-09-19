@@ -39,9 +39,9 @@
 
 - [x] **examples/ 示例集**（8/30）：7 例已建（hello/fib/struct/pointer/string/cooking/multiret）+ README 对照表；**6 例 1.0 可编译验证通过**（c/native 编译+运行）；期间暴露并修复 A 方案 `p.()` 解引用类型 bug（此前硬编码 `(*(void**)p)` → 现按符号指针 ref 输出 `(*(int32_t*)p)`）；06_cooking 标注 2.0 预览（IR_ONLY 子集语法）
 - [x] **README 更新**（8/31）：安装小节（xmake + tcc 依赖探测与获取）、CLI 命令一览表、后端表标注 1.0/2.0 范围（c/native = 1.0 正式支持；ir-* = 2.0 预览）、-run Linux only 说明
-- [x] **语言规格冻结**（8/31，1.0.x 收敛）：BNF v2.0 终校完成——补 `=>`（TOK_FAT_ARROW）词法、`->` 指针成员访问 postfix 规则；Chinese/English 补指针声明（隐式推断）；具名指针 `T*` 显式声明已移除，语法元素表核对通过（`=>`/`->` 已含）；multireturn 无残留。**注**：`=>` 单语句匹配形式后于 2.0 规范移除（PA-13 / PB-27.6，BNF v2.2），`->` 保留
+- [x] **语言规格冻结**（8/31）：BNF v2.0 终校完成——补 `=>`（TOK_FAT_ARROW）词法、`->` 指针成员访问 postfix 规则、`T*` 具名指针 pointer-type 规则；Chinese/English 补指针声明双支持（隐式推断 + 显式声明）；语法元素表核对通过（`=>`/`->` 已含）；multireturn 无残留。**注**：1.0.x 起 `T*` 具名指针声明与一元 `*` 解引用已移除（解引用统一 `.()`/`.(T)`/`->`）；2.0 起 `=>` 单语句匹配形式已移除（PA-13 / PB-27.6，BNF v2.2），`=>` 保留词法但语法不使用；`->` 保留
 - [x] **版本与发布**（8/31）：CHANGELOG.md 建立（M0→M4→1.0 里程碑条目）；`v1.0.0` tag 已本地创建（未推送，见 §3.2）
-- [x] **Linux 实测（PA-9，2026-08-31 WSL Ubuntu-24.04 完成）**：`-run` 内存执行修复（tcc_relocate(NULL) 语义误判→直接 tcc_run）、libtcc.so `-Bsymbolic` 重建（符号插值劫持）、SysV 调用约定（x87 浮点）；c/native 各 12P/0F/6S + examples 6/6 双后端一致——**Windows + Linux 双平台验证通过**（1.0 范围已含 Linux）
+- [x] **Linux 实测（PA-9，2026-08-31 WSL Ubuntu-24.04 完成）**：`-run` 内存执行修复（tcc_relocate(NULL) 语义误判→直接 tcc_run）、libtcc.so `-Bsymbolic` 重建（符号插值劫持）、SysV 调用约定（x87 浮点）；c/native 各 12P/0F/5S + examples 6/6 双后端一致——**Windows + Linux 双平台验证通过**（1.0 范围已含 Linux）
 
 ### 1.4 明确留给 2.0（1.0 不做）
 
@@ -103,6 +103,7 @@ v2.0.0  = PB 就绪（阶段 3 达标）→ 合入 main → tag（届时 main �
 
 - tag 命名：`v<major>.<minor>.<patch>`，提交信息带 `release:` 前缀
 - 1.x 期间 main 与 PA 保持同步（PA 是开发源，main 是发布镜像）
+- tag 台账：`v1.0.0` → `2036fba`（2026-08-31，annotated）、`v1.0.1` → `75c59cc`（2026-09-03，lightweight）；`v1.0.2` 于 2026-09-19 发布准备就绪待 tag（内容见 `CHANGELOG.md` 与 `GIT_CONVENTIONS.md` §5）
 
 ### 3.3 工作流
 
@@ -148,6 +149,6 @@ hotfix：   PA 分支修 bug → 合 main（tag v1.0.x）→ 同步共享文件�
 ## 4. 决策点（已全部确认）
 
 1. **1.0 指针声明语法**：✅ 已定案（8/19 PA 分支，1.0.x 收敛为**隐式推断声明**）——`p = &x` 自动推断为指向 x 的指针类型；具名指针 `T*` 显式声明已移除，解引用统一为 `.()` / `. (T)` / `->`
-2. **1.0 发布范围**：✅ 已定（2026-08-31）——**包含 Linux 实测**：WSL Ubuntu-24.04 双平台验证通过（c/native 各 12P/0F/6S + examples 6/6 + `-run` 修复），见 PA-9；1.0 范围生效 Windows + Linux
+2. **1.0 发布范围**：✅ 已定（2026-08-31）——**包含 Linux 实测**：WSL Ubuntu-24.04 双平台验证通过（c/native 各 12P/0F/5S + examples 6/6 + `-run` 修复），见 PA-9；1.0 范围生效 Windows + Linux
 3. **examples 优先级**：✅ 已定——hello/fib/struct/pointer/string/cooking/multiret 7 例已建（6 例 1.0 可编译运行，06_cooking 标注 2.0 预览）
 4. **分支计划采纳**：✅ 已落账——`docs/GIT_CONVENTIONS.md` 分支语义与 §3 对齐（main/PA/PB 职责、版本化 v1.0.0/v1.0.x/v2.0.0、共享文件同步规则）；`[AI]` 提交标签与推送授权制已写入
