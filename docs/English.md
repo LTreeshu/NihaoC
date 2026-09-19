@@ -1209,8 +1209,8 @@ modify(q)    // q frozen (mutable borrow)
 inspect(q)   // q frozen (read-only borrow)
 ```
 
-> **Implementation status**: The current compiler (ncc) parses parameter attribute prefixes but does not enforce the corresponding borrow semantics (parser.c:870–874).
-> All parameters are internally treated as `var` (VIS_DEFAULT). Parameter ownership/borrow checking will be completed in a future release.
+> **Implementation status**: On the 1.0 line (≤ v1.0.2) the compiler parses parameter attribute prefixes but does not enforce the corresponding borrow semantics — every parameter is treated as `var`; ownership/borrow checks on parameter prefixes land on the 2.0 line (PB-26). See the "Function parameters (§12.2)" table in `IMPLEMENTATION_STATUS.md` for exact code locations.
+> The check is not back-ported to the frozen 1.0 line; the 2.0 line implements and verifies it (PB-26).
 > See [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md) for details.
 
 ### Return values
