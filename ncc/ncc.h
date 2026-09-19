@@ -282,6 +282,7 @@ struct CompilerState {
     
     /* Parser state */
     ParserState parser;
+    int while_depth;              /* >0 表示处于 while 循环体内，`is` 仅此上下文合法 */
     
     /* Symbol tables */
     TokenSym **table_ident;

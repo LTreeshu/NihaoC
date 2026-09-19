@@ -1213,7 +1213,9 @@ void parse_statement(CompilerState *cs)
             cgen_line(";");
             /* 条件检查必须在 body 前（修复 do-while 语义 bug） */
             cgen_line("if (!__is_val) break;");
+            cs->while_depth++;
             parse_statement(cs);           /* body */
+            cs->while_depth--;
             cgen_dedent();
             cgen_line("}");
             cgen_dedent();
@@ -1333,6 +1335,13 @@ void parse_statement(CompilerState *cs)
             break;
 
         case TOK_IS:
+            /* `is` 模式匹配仅配合 while 循环体（BNF §6）：块形式，无单语句。
+             * 循环体外没有 __is_val 可匹配，前端直接拒绝而非留到 C 编译期。 */
+            if (cs->while_depth == 0) {
+                nihao_error(cs, "'is' pattern match only valid inside while loop body");
+                next_tok(cs);
+                break;
+            }
             parse_is_stmt(cs);
             break;
 

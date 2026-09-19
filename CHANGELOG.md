@@ -13,11 +13,12 @@
 - **TODO 分层拆分**：`TODO.md` 拆为 `ROADMAP.md`（跨分支里程碑与通用待办）+ `TODO-PA.md`（1.0 冻结线专属）+ `TODO-PB.md`（2.0 IR 线专属），并建立共享文档跨分支同步规则。
 - **文档-实现全量一致性核对**：PB-27 子项状态回填、PB-29 `ret_vis` 检查条件表述修正（`ret_vis > VIS_VAR` 恒假 → 显式 `∈ {CONST, FLOW, STATIC}`）、ROADMAP 架构图清除已删除的 `ir_to_native.c` 引用、VERSIONING_ROADMAP 阶段 2 重复条目去重、`ncc.h` 后端注释与 `set_version` 对齐。
 - **`is _` 通配符补全（规范合规）**：1.0 线 A 后端 `parse_is_stmt` 原先把 `_` 当普通标识符输出到 C（tcc 报 `'_' undeclared`），现补恒匹配分支（生成 `if (1)`，与 2.0 线同源实现）；IR 前端 `irparse.c` 同步补 `_` 分支（不发比较与 JZ，块直接执行）。`tests/pos/pattern.nc` 增加通配符用例并更新 `.expect`，c/native/ir-c/ir-native 四后端输出一致。（PA-15）
+- **`is` 循环体外守卫（规范合规，用户可见报错变更）**：BNF §6 规定 `is` 仅配合 `while` 循环体，但 1.0 线 A 后端把 `TOK_IS` 挂在通用语句分支（`parser.c:1335` 旧位置），循环体外写 `is` 会被前端接受、错误延迟到 C 编译期才由 tcc 报 `'__is_val' undeclared`。现加 `while_depth` 计数守卫（`TOK_WHILE` 体内递增/退出时递减），循环体外（含 `do` 体、函数顶层、模块层）的 `is` 由前端即时报 `'is' pattern match only valid inside while loop body`，与 IR 前端既有守卫（`is_val_vreg < 0`）口径统一。新增 `tests/err/is_outside_while.nc` 覆盖（IR 后端按既有规则跳过静态检查用例）。（PA-18）
 - **`is` 多子句 fallthrough 缺口（已登记未修）**：文档 R 规则"首个匹配者执行（无 fallthrough）"在两线均未实现——多个 is-clause 生成并列 `if`，条件重叠时会连续执行（`is _` 恒匹配使该问题更易触发）。属既有语义缺陷，需改动 `is` 控制流生成方式，未纳入 v1.0.2；详见 `docs/IMPLEMENTATION_STATUS.md`。（PA-16）
-- **PA TODO 处理完毕**：PA-1 ~ PA-15、PA-17 全部 `[x]`；唯余 PA-16（上述 fallthrough 缺口）登记待决策，不纳入本版。
+- **PA TODO 处理完毕**：PA-1 ~ PA-15、PA-17、PA-18 全部 `[x]`；唯余 PA-16（上述 fallthrough 缺口）登记待决策，不纳入本版。
 - **已知缺口（登记于 `docs/IMPLEMENTATION_STATUS.md`）**：1.0 线 A 后端 `is <identifier>` 变量绑定为"按值比较"而非绑定（2.0 线覆盖）；函数参数可见性前缀仍统一按 `VIS_DEFAULT` 处理；IR 后端不做所有权/借用检查。
 - **共享文档 PA↔PB 双向同步（2026-09-19）**：以 `merge-base 7d4c652` 三方合并把本版本成果同步进 PB（PB 侧 `37a112a`），并把 PB 侧更新的 4 项回灌本线——① 中英 §5.1 指针声明节定案表述（"隐式推断声明"，原"双支持"自 v1.0.1 起过时）；② BNF `<array-size>` 细目 + 动态数组写法三条说明 + `<is-clause>`/`<pattern>` 注释；③ `VERSIONING_ROADMAP.md` 的 2.0 进展条目（阶段1 类型化指针、PB-26 M2 移植、ir-c 变量名保留已由 `[ ]` 转 `[x]`）与 A 方案独占文件清单残留的 `codegen.c` 修正；④ `IMPLEMENTATION_STATUS.md` 增补「2.0 线（PB）差异」节并修正 `pattern.nc` 覆盖描述。`docs/LEGACY_CODEGEN.md` 归档文档一并纳入共享集。同步后两条线共享文档一致（`TODO-PA.md` / `TODO-PB.md` 为分支专属，不计入）。
-- **回归验证**：c / native 双后端各 **12P / 0F / 5S**（0 FAIL），examples 6/7 编译运行（`06_cooking` 为 2.0 预览，预期不通过）；`pattern.nc` 经 ir-c / ir-native 实测输出与全量后端一致。
+- **回归验证**：c / native 双后端各 **13P / 0F / 5S**（0 FAIL，含 PA-18 新增 err 用例），examples 6/7 编译运行（`06_cooking` 为 2.0 预览，预期不通过）；`pattern.nc` 经 ir-c / ir-native 实测输出与全量后端一致。
 
 ## [v1.0.1] — 2026-09-03
 

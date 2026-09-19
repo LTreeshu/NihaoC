@@ -37,8 +37,8 @@
 
 | 规范要求 | 编译器实现 | 对应代码 | 状态 |
 |---------|----------|---------|------|
-| 裸标识符赋值检查 | 完整实现 | parser.c:1026–1033（声明初始化）、2393–2400（表达式赋值） | ✅ 已实现 |
-| 表达式级检查 | 仅检查裸标识符 | parser.c:1026–1033、2393–2400 | ⚠️ 部分实现 |
+| 裸标识符赋值检查 | 完整实现 | parser.c:1026–1033（声明初始化）、2404–2411（表达式赋值） | ✅ 已实现 |
+| 表达式级检查 | 仅检查裸标识符 | parser.c:1026–1033、2404–2411 | ⚠️ 部分实现 |
 | IR 后端所有权检查 | 无 | irparse.c | ⚠️ 未实现（2.0 范围，PB-26/PB-29 已覆盖） |
 
 > `vis_check_assign()` 仅在赋值右侧为**单个裸标识符**时触发。`x = y + 1` 或 `x = malloc(...)` 等表达式形式的赋值不经过传递矩阵检查。IR 后端（irparse.c）仅记录可见性值用于 `visof()` 查询，不执行所有权/借用检查。
@@ -49,8 +49,8 @@
 
 | 规范要求 | 编译器实现 | 对应代码 | 状态 |
 |---------|----------|---------|------|
-| `is` 仅配合 `while`（块形式） | `parse_is_stmt` 只在 while 体内调用 | parser.c:1102–1168（调用点 1336） | ✅ 已实现 |
-| `do` 不支持 `is` | `TOK_DO` 走 `parse_statement` 通用体，不识别 is-clause | parser.c:1223 | ✅ 已实现（隐式） |
+| `is` 仅配合 `while`（块形式） | A 后端 `while_depth` 计数守卫：`case TOK_IS` 在循环体外直接报错；IR 前端 `is_val_vreg < 0` 守卫 | parser.c:1216–1218、1337–1346、irparse.c:2022–2025 | ✅ 已实现（v1.0.2 补 A 后端守卫，PA-18） |
+| `do` 不支持 `is` | `TOK_DO` 走 `parse_statement` 通用体，不识别 is-clause | parser.c:1225 | ✅ 已实现（隐式） |
 | `is <int-literal>` / `is -<int>` | `== v` / `== -v` | parser.c:1121–1133 | ✅ 已实现 |
 | `is lo..hi` 闭区间 | `>= lo && __is_val <= hi` | parser.c:1128–1138 | ✅ 已实现 |
 | `is <visibility-enum>` | 比较 `NH_*` 常量 | parser.c:1140–1156 | ✅ 已实现 |
@@ -69,7 +69,7 @@
 | 规范要求 | 编译器实现 | 对应代码 | 状态 |
 |---------|----------|---------|------|
 | `const` 模块级静态 / 块级自动 | C 后端自然实现 | parser.c:1009–1011 | ✅ 隐式实现 |
-| `flow` 动态分配 + 自动释放 | 块退出时自动 free | parser.c:1405–1416 | ✅ 已实现 |
+| `flow` 动态分配 + 自动释放 | 块退出时自动 free | parser.c:1414–1426 | ✅ 已实现 |
 | `flow` 返回值所有权转移 | `ownership_transferred` 标志 | parser.c:1307–1317 | ✅ 已实现 |
 | `static` 静态存储 | C `static` 关键字 | cgen | ✅ 已实现 |
 
@@ -85,6 +85,7 @@
 | tests/err/m2b_const_flow.nc | `const`→`flow` 禁止 | ✅ |
 | tests/err/m2c_frozen.nc | 冻结源不可写 | ✅ |
 | tests/err/m2d_invalid.nc | 失效源不可读 | ✅ |
+| tests/err/is_outside_while.nc | 循环体外 `is` 前端拒绝 | ✅（v1.0.2 / PA-18 新增） |
 | tests/pos/borrow.nc | `flow`→`var` 借用 + 解冻 | ✅ |
 | tests/pos/flow.nc | `flow` 块级自动释放 | ✅ |
 | tests/pos/transfer.nc | `flow` 返回值所有权转移 | ✅ |
@@ -106,6 +107,6 @@
 | `is _` 通配符 | v1.0.2 补全（PA-15） | PB-27.5 先于 1.0 线完成（parser.c + irparse.c 双前端） |
 | 反向范围 `lo > hi` 校验 | ⚠️ 未实现 | **IR 前端已实现**（irparse.c:2259–2261 编译期报错）；A 后端 `parser.c` 仍不校验 |
 | `__is_val` 类型 | `int` 固定 | **类型感知**，等于 `while` 条件表达式类型（PB-27.7） |
-| 循环体外使用 `is` | A 后端按 `if` 展开，不报错 | IR 前端报错拒绝（PB-27.1）；A 后端与 1.0 相同仍按 `if` 展开 |
+| 循环体外使用 `is` | A 后端 `while_depth` 守卫即时报错（parser.c:1337–1346，v1.0.2 / PA-18）+ IR 前端 `is_val_vreg < 0` 报错 | 双前端均拒绝：IR 前端由 PB-27.1 先落地，**A 后端守卫尚未从 1.0 线回灌**（PB `parser.c` 的 `case TOK_IS` 仍为通用分支、无守卫） |
 | 多个 `is-clause` 无 fallthrough | ⚠️ 未实现（PA-16 登记待决策） | **同样未实现**（并列 `if` / 独立比较跳转），待与 PA-16 一并决策 |
-| 测试覆盖 | 1.0 门禁 12P/0F/5S | `xmake test --all` 全矩阵（c/native/ir-c/ir-native），见 `ROADMAP.md` 里程碑「验收」行 |
+| 测试覆盖 | 1.0 门禁 13P/0F/5S（含 PA-18 err 用例） | `xmake test --all` 全矩阵（c/native/ir-c/ir-native），见 `ROADMAP.md` 里程碑「验收」行 |
