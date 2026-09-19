@@ -2026,7 +2026,10 @@ static void ir_stmt(CompilerState *cs)
         }
         int l_done = ir_new_label(F);
         TokenType pt = cur_tok(cs);
-        if (pt == TOK_MINUS) {
+        if (pt == TOK_IDENTIFIER && strcmp(cs->parser.lex->tok_str, "_") == 0) {
+            /* 通配符 `_`：恒匹配——不发比较与 JZ，块由下方统一入口处理 */
+            next_tok(cs);
+        } else if (pt == TOK_MINUS) {
             next_tok(cs);
             if (cur_tok(cs) == TOK_INT_CONST) {
                 long long v = -(long long)cs->parser.lex->tok_val.i;

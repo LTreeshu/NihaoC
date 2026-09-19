@@ -1,6 +1,6 @@
 # 方案 A — libtcc native 后端待办（PA 分支）
 
-> 更新日期：2026-09-19（PA-1 ~ PA-14 全部完成，1.0 冻结线待办清零；v1.0.2 发布准备就绪待 tag）
+> 更新日期：2026-09-19（PA-1 ~ PA-15 全部完成；PA-16 为已登记的既有语义缺口，不纳入 v1.0.2；v1.0.2 发布准备就绪待 tag）
 > 本文件为 PA 分支（1.0 冻结线）专属待办。通用里程碑与跨分支待办见 `ROADMAP.md`。
 > PA 分支处于冻结维护态，仅接受规范合规修复与代码卫生项。
 
@@ -30,3 +30,5 @@
 - [x] **PA-12 A 方案 1.0 发布（2026-08-31 完成）**：门禁验证 ✅（c/native 各 12P/0F/5S + examples 6/6，Windows）；Linux 实测 ✅（PA-9，c/native 各 12P/0F/6S + examples 6/6 + `-run` 修复）；README 更新 ✅（安装/CLI/后端表 1.0/2.0 范围）；BNF v2.0 终校 ✅（`=>`/`->`/`T*` 补全，中英文档同步）；CHANGELOG.md 建立 ✅；本地 `v1.0.0` tag ✅（commit `2036fba`，合 main + push 由 ltree 决定，2026-08-31 已授权执行）。发布后 PA 分支进入冻结维护态
 - [x] **PA-13 `is` 移除 `=>` 箭头形式（2026-09-15 完成，v1.0.2 收口）**：文档已删除单语句 `=>` 形式，C 后端 parser.c parse_is_stmt 的 TOK_FAT_ARROW 分支移除；IR 前端 irparse.c 的同分支于 2026-09-19 一并移除（双前端与 BNF v2.2 一致，错误路径吞 token 防死循环），只保留块形式 `is <pattern> { ... }`。测试文件 ir_is.nc 同步清理 `=>` 用例。token.h 注释改为"`=>` 词法保留、语法不使用"。属规范合规，允许在冻结线执行
 - [x] **PA-14 清理废弃死代码（2026-09-15 起，2026-09-17 全链收官，冻结例外·代码卫生）**：parser.c 的 `parse_statement_full` / `parse_function_full` / `compile_file_full`（共 199 行）已废弃且无调用点，删除。ncc.h 对应声明同步移除。2026-09-17 续：删除早期直出 C 后端 `ncc/codegen.c`（507 行，已被 cgen.c + parser.c 管线取代）及其调用链——linker.c 120 行、ncc.h 84 行、ncc.c 4 行注册、xmake.lua add_files 条目
+- [x] **PA-15 `is _` 通配符补全（2026-09-19 完成，v1.0.2）**：BNF v2.2 `<pattern>` 首项即通配符 `_`，但 1.0 线 A 后端 `parse_is_stmt` 未处理（`_` 被当作普通标识符按值比较，符号表无 `_` 时行为不确定），IR 前端 `irparse.c` 同样缺失（PB 线 parser.c 已实现，属分支漂移）。补全方式与 PB 一致：`_` 分支提前返回，A 后端 emits `if (1)` 恒真、IR 前端跳过比较与 JZ，块体仍走原有 `{ ... }` 入口；非块形式报错。`tests/pos/pattern.nc` 新增 `is _` 用例并断言输出（`wild ok` / `pattern ok`），c/native/ir-c/ir-native 四后端输出一致。属规范合规（文档已承诺该模式），允许在冻结线执行
+- [ ] **PA-16 `is` 多子句 fallthrough 缺口（已登记，未修）**：BNF/中英文档规定多个 `is-clause`「首个匹配者执行、无 fallthrough」，但 A 后端当前为每个子句生成并列独立 `if`，条件重叠时多个子句都会执行；IR 前端同理（每子句独立比较+跳转，块末无 jmp 到合并出口）。修复需改动 `is` 控制流生成方式（子句块末补 jmp 出口或改判为 else-if 链），会影响冻结线上既有语义与回归基线，**不纳入 v1.0.2**，待 ltree 决策后另立版本处理

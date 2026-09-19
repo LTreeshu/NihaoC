@@ -19,7 +19,7 @@
 - 三条分支均从同一稳定点分出（当前基于 `main` 的 `04f1435`）。
 - 功能/修复先落在对应的 `PA` 或 `PB` 分支，验证通过后再视需要合回 `main`。
 - 新增命名分支时遵循 `feature/<name>`、`fix/<name>`、`docs/<name>` 命名；以 `PA`/`PB` 为主分支的工作，直接提交到对应分支即可。
-- 分支与 `origin` 保持一致：新建分支后执行 `git push -u origin <branch>` 建立上游跟踪（`--set-upstream-to`）。
+- 分支与 `origin` 保持一致：新建分支后建立上游跟踪（`git push -u origin <branch>` 或 `git branch --set-upstream-to`）——**推送本身受 §3.1 门禁约束，需所有者授权**；无网络或未获授权时，用本地 `git config branch.<name>.remote/merge` 建立跟踪即可。
 
 ### 版本化与发布
 - `v1.0.0`：`PA` 通过发布门禁（c/native 全量 0 FAIL + examples 全跑通）→ 合入 `main` → tag `v<major>.<minor>.<patch>`（`release:` 前缀）。
@@ -43,29 +43,55 @@
 
 ## 三、推送规则 | Push Rules
 
-- **推送动作由仓库所有者决定**：AI 代理仅在获得明确授权后执行 `git push`。
-- AI 代理负责：准备好提交、设置上游跟踪（`-u`）、保持分支与远端同步就绪，但**不擅自推送**。
-- 常规推送流程：`git push`（已跟踪分支）或 `git push -u origin <branch>`（首次推送新建分支）。
+### 3.1 硬性约束：禁止自动推送
+
+**任何写入远端的操作都必须由仓库所有者（ltree）逐次明确授权后执行。这是不可绕过、不可推断的门禁。**
+
+以下操作一律**禁止代理自行执行**，无论是否处于自动批准 / bypass / yolo 权限模式：
+
+- `git push`（含 `-u`、`--follow-tags`、`--atomic`）
+- `git push --force` / `--force-with-lease`（改写已推送历史，风险最高）
+- `git push origin <tag>` / `git push --tags`（发布 tag）
+- 通过平台 CLI/API 触发远端写入：`gh pr create`、GitLink/GitHub 合并请求、release 上传、CI 手动触发等
+
+允许且不需要授权的**纯本地**操作：`git add` / `commit` / `merge` / `cherry-pick` / `rebase`（未推送的提交）/ `stash` / 本地 `git tag`（创建，但不推送）。
+
+### 3.2 什么才算授权
+
+- 授权必须是**当前会话内、针对具体动作与具体引用**的明确要求（例："推送 main 和 PA"、"打 v1.0.2 tag 并推上去"）。
+- **不得从间接措辞推断**：如"提交并同步""做好发布准备""合到 main"等只授权到本地提交/合并为止；是否推送由所有者另行决定。
+- **一次授权只对当次有效**：上一次同意推送 `main`，不等于同意下次推送或推送 tag。
+- 授权范围不扩展：同意普通推送不等于同意 force-push；同意推送分支不等于同意推送 tag。
+- 拿不准时**停下来询问**，不要先做。
+
+### 3.3 常规流程（已获授权后）
+
+- 常规推送：`git push`（已跟踪分支）或 `git push -u origin <branch>`（首次推送新建分支）。
 - 推送前确认：`git status` 干净、目标分支已切到、`git log` 核对待推送提交。
 - 冲突/分叉时：先 `git fetch` + `git pull --rebase` 整合，再推送。
+- 改写已推送历史（force-push）前必须逐条列出受影响分支并取得确认，推送后校验远端与本地一致。
 
 ---
 
 ## 四、流程速查 | Quick Reference
 
 ```bash
-# 新建分支并建立上游跟踪
+# 新建分支并建立上游跟踪（推送需 §3.1 授权）
 git switch -c <branch>
-git push -u origin <branch>
+git push -u origin <branch>     # ← 需所有者授权
 
 # 提交（AI 代理必须加 [AI] 标签）
 git add <files>
 git commit -m "[AI] <描述>"
 
-# 推送（推送由所有者决定/授权）
-git push
+# 推送（推送由所有者决定/授权；未授权时停在本地提交）
+git push                        # ← 需所有者授权
 
-# 与远端同步
+# 发布 tag（本地创建免授权，推送需授权）
+git tag -a v1.0.2 -m "release: v1.0.2 ..."
+git push origin v1.0.2          # ← 需所有者授权
+
+# 与远端同步（只读，无需授权）
 git fetch
 git pull --rebase
 ```

@@ -560,7 +560,7 @@ if i < 3 {
 | `Struct(f1, f2)` | type match + field destructuring | binds each field | `is Point(x, y) { ... }` |
 | `Variant(pat)` | ADT tag match + sub-pattern | binds payload | `is Some(v) { ... }` |
 
-> **Implementation status (1.0 release line, ≤ v1.0.2)**: the A backend (c/native) supports five pattern kinds — integer literal, negative integer, closed range `lo..hi`, enum variant, and visibility enum. The `_` wildcard and `<identifier>` variable binding are **not** implemented on the 1.0 line (`<identifier>` compares by value); struct destructuring and ADT variant destructuring are reserved syntax. The 2.0 line (PB) has added the `_` wildcard. See `IMPLEMENTATION_STATUS.md` for the item-by-item mapping.
+> **Implementation status (1.0 release line, ≥ v1.0.2)**: the A backend (c/native) supports integer literal, negative integer, closed range `lo..hi`, enum variant, visibility enum, and the `_` wildcard (completed in v1.0.2, on both the A backend and the IR backend). Differences from this table: `<identifier>` compares **by value** rather than binding a new variable; struct destructuring and ADT variant destructuring remain reserved syntax. Multiple `is-clause`s still compile to parallel `if` statements, so "first match wins (no fallthrough)" is not yet implemented. See `IMPLEMENTATION_STATUS.md` for the item-by-item mapping.
 
 #### Semantic Rules
 

@@ -4,7 +4,7 @@
 
 ## [v1.0.2] — 2026-09-19（待 tag）
 
-1.0 冻结线的规范合规与代码卫生版本，无新增语言特性。
+1.0 冻结线的规范合规与代码卫生版本，无新增语言特性（`is _` 通配符属补全文档已承诺的既有语法，非新特性）。
 
 - **`is` 移除 `=>` 单语句形式（PA-13，用户可见语法变更）**：`is <pattern> => <statement>` 全线下线，`is` 只保留块形式 `is <pattern> { ... }`。C 后端 `parser.c` 的 `parse_is_stmt` 删除 `TOK_FAT_ARROW` 分支（改报 `expected '{' after 'is' pattern`）；IR 前端 `irparse.c` 同分支删除（双前端与 BNF v2.2 一致，错误路径吞 token 防死循环）；`tests/pos/ir_is.nc` 清理 `=>` 用例。`=>` 仍由 lexer 识别为 `TOK_FAT_ARROW`（词法保留，语法不使用），`token.h` 注释同步。
 - **`codegen.c` 死代码全链清理**：删除早期直出 C 的后端 `ncc/codegen.c`（507 行，已由 `cgen.c` + `parser.c` 管线取代）及其调用链——`linker.c` 相关 120 行、`ncc.h` 84 行声明与枚举、`ncc.c` 4 行后端注册；`ncc/xmake.lua` 的 `add_files` 去掉 `codegen.c`。
@@ -12,9 +12,11 @@
 - **BNF 收敛入文档**：v2.1 记录指针语法收敛（一元 `*` 解引用移除，解引用统一 `.()` / `.(T)` / `->`）；v2.2 重写 `<pattern>`（通配符 / 整数 / 负整数 / 闭区间 `lo..hi` / 枚举变体 / 可见性枚举 / 结构体解构与 ADT 变体解构（预留）/ 标识符），`<is-stmt>` 从 `<statement>` 移除、`while` 体内 `is-clause` 与 `do` 不支持 `is` 口径对齐，中英 §6.1/§13.3 与语法元素表同步。
 - **TODO 分层拆分**：`TODO.md` 拆为 `ROADMAP.md`（跨分支里程碑与通用待办）+ `TODO-PA.md`（1.0 冻结线专属）+ `TODO-PB.md`（2.0 IR 线专属），并建立共享文档跨分支同步规则。
 - **文档-实现全量一致性核对**：PB-27 子项状态回填、PB-29 `ret_vis` 检查条件表述修正（`ret_vis > VIS_VAR` 恒假 → 显式 `∈ {CONST, FLOW, STATIC}`）、ROADMAP 架构图清除已删除的 `ir_to_native.c` 引用、VERSIONING_ROADMAP 阶段 2 重复条目去重、`ncc.h` 后端注释与 `set_version` 对齐。
-- **PA TODO 清零**：PA-1 ~ PA-14 全部 `[x]`，1.0 冻结线无待办。
-- **已知缺口（登记于 `docs/IMPLEMENTATION_STATUS.md`）**：1.0 线 A 后端 `is _` 通配符与 `is <identifier>` 变量绑定为"已定义、待实现"（当前按值比较；2.0 线已覆盖）；函数参数可见性前缀仍统一按 `VIS_DEFAULT` 处理；IR 后端不做所有权/借用检查。
-- **回归验证**：c / native 双后端各 **12P / 0F / 5S**（0 FAIL），examples 6/7 编译运行（`06_cooking` 为 2.0 预览，预期不通过）；IR→C 对 `tests/pos/ir_is.nc` 生成正常。
+- **`is _` 通配符补全（规范合规）**：1.0 线 A 后端 `parse_is_stmt` 原先把 `_` 当普通标识符输出到 C（tcc 报 `'_' undeclared`），现补恒匹配分支（生成 `if (1)`，与 2.0 线同源实现）；IR 前端 `irparse.c` 同步补 `_` 分支（不发比较与 JZ，块直接执行）。`tests/pos/pattern.nc` 增加通配符用例并更新 `.expect`，c/native/ir-c/ir-native 四后端输出一致。（PA-15）
+- **`is` 多子句 fallthrough 缺口（已登记未修）**：文档 R 规则"首个匹配者执行（无 fallthrough）"在两线均未实现——多个 is-clause 生成并列 `if`，条件重叠时会连续执行（`is _` 恒匹配使该问题更易触发）。属既有语义缺陷，需改动 `is` 控制流生成方式，未纳入 v1.0.2；详见 `docs/IMPLEMENTATION_STATUS.md`。（PA-16）
+- **PA TODO 处理完毕**：PA-1 ~ PA-15 全部 `[x]`；唯余 PA-16（上述 fallthrough 缺口）登记待决策，不纳入本版。
+- **已知缺口（登记于 `docs/IMPLEMENTATION_STATUS.md`）**：1.0 线 A 后端 `is <identifier>` 变量绑定为"按值比较"而非绑定（2.0 线覆盖）；函数参数可见性前缀仍统一按 `VIS_DEFAULT` 处理；IR 后端不做所有权/借用检查。
+- **回归验证**：c / native 双后端各 **12P / 0F / 5S**（0 FAIL），examples 6/7 编译运行（`06_cooking` 为 2.0 预览，预期不通过）；`pattern.nc` 经 ir-c / ir-native 实测输出与全量后端一致。
 
 ## [v1.0.1] — 2026-09-03
 
