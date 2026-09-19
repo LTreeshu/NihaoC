@@ -2,7 +2,8 @@
 
 本文档记录 NihaoC 语言规范（Chinese.md / English.md）中各项指针安全规则与编译器（ncc）实际实现的对应状态。
 
-> 更新日期：2026-09-19（对应 1.0 冻结线 v1.0.2）。表内 `parser.c` / `vis.c` 行号基于该时点的 1.0 代码现态，仅作导航用。
+> 更新日期：2026-09-19。本表主体以 **1.0 冻结线（v1.0.2）** 的现态书写，行号基于该时点 `PA`/`main` 的 `parser.c` / `vis.c` / `irparse.c`，仅作导航用。
+> **PB（2.0 线）差异集中在文末「2.0 线（PB）差异」一节**：`vis.c` 的矩阵实现两侧同源（行号一致），`parser.c` / `irparse.c` 行号与部分状态不同。
 
 ---
 
@@ -88,4 +89,23 @@
 | tests/pos/flow.nc | `flow` 块级自动释放 | ✅ |
 | tests/pos/transfer.nc | `flow` 返回值所有权转移 | ✅ |
 
-> 上表为 1.0 发布集（`tests/pos` + `tests/err`，c/native 双后端）。`tests/pos/ir_*.nc` 属 2.0 IR 线（PB 分支），不在 1.0 发布门禁内。`is` 模式匹配由 `tests/pos/pattern.nc` 覆盖，`is _` 通配符与标识符绑定模式当前无 1.0 用例（对应上表 ⚠️ 项）。
+> 上表为 1.0 发布集（`tests/pos` + `tests/err`，c/native 双后端）。`tests/pos/ir_*.nc` 属 2.0 IR 线（PB 分支），不在 1.0 发布门禁内。`is` 模式匹配由 `tests/pos/pattern.nc` 覆盖，该用例含 `is _` 通配符分支（v1.0.2 / PA-15 起，四后端输出一致）；`is <identifier>` 变量绑定仍无用例（对应上表 ⚠️ 项）。
+
+---
+
+## 2.0 线（PB）差异
+
+以下为 PB 与上表（1.0 现态）不同的条目，行号基于 PB `8079ad0`：
+
+| 条目 | 1.0 线（上表） | 2.0 线（PB）现态 |
+|------|---------------|-----------------|
+| §12.2 `flow`/`var`/`const` 参数前缀 | 前缀被忽略，统一 `VIS_DEFAULT`（parser.c:864–868、879） | **已实现**：`param->vis = pv` 记录前缀（parser.c:934），调用点 `vis_check_call_arg()` 执行 M2 检查（parser.c:2125）；IR 前端由 `vvis` 状态机等价实现（irparse.c，PB-26） |
+| 返回值可见性前缀（§12.3 后半） | 无 | **已实现**：`ret_vis` 调用点检查（parser.c:1105）+ IR 侧 PB-29（含 PB-29.1 六条禁止路径 err 用例） |
+| 检查范围表「IR 后端所有权检查」 | ⚠️ 未实现 | **已实现**（PB-26/M2 移植进 irparse.c，err 用例 m2a~m2d 在 ir-c/ir-native 下同样拒绝） |
+| `is` 各模式行号 | parser.c:1102–1168 | parser.c:1194–1258（`_` 通配符 1201/`if (1)` 1204；错误信息 `expected block after 'is' pattern` 1258）；`is` 块由 irparse.c:2234 起的 `_` 分支处理 |
+| `is _` 通配符 | v1.0.2 补全（PA-15） | PB-27.5 先于 1.0 线完成（parser.c + irparse.c 双前端） |
+| 反向范围 `lo > hi` 校验 | ⚠️ 未实现 | **IR 前端已实现**（irparse.c:2259–2261 编译期报错）；A 后端 `parser.c` 仍不校验 |
+| `__is_val` 类型 | `int` 固定 | **类型感知**，等于 `while` 条件表达式类型（PB-27.7） |
+| 循环体外使用 `is` | A 后端按 `if` 展开，不报错 | IR 前端报错拒绝（PB-27.1）；A 后端与 1.0 相同仍按 `if` 展开 |
+| 多个 `is-clause` 无 fallthrough | ⚠️ 未实现（PA-16 登记待决策） | **同样未实现**（并列 `if` / 独立比较跳转），待与 PA-16 一并决策 |
+| 测试覆盖 | 1.0 门禁 12P/0F/5S | `xmake test --all` 全矩阵（c/native/ir-c/ir-native），见 `ROADMAP.md` 里程碑「验收」行 |
