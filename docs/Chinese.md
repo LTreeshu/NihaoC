@@ -551,7 +551,7 @@ if i < 3 {
 | `Struct(f1, f2)` | 类型匹配 + 字段解构 | 绑定各字段 | `is Point(x, y) { ... }` |
 | `Variant(pat)` | ADT tag 匹配 + 子模式 | 绑定载荷 | `is Some(v) { ... }` |
 
-> **实现状态**：A 后端（c/native）当前支持整数字面量、负整数、闭区间 `lo..hi`、枚举变体、可见性枚举五类模式；`_` 通配符与 `<identifier>` 变量绑定尚未在 A 后端实现（`<identifier>` 按值比较），结构体解构与 ADT 变体解构为预留语法。逐项对应关系见 `IMPLEMENTATION_STATUS.md`。
+> **实现状态（1.0 发布线，≤ v1.0.2）**：A 后端（c/native）支持整数字面量、负整数、闭区间 `lo..hi`、枚举变体、可见性枚举五类模式；`_` 通配符与 `<identifier>` 变量绑定尚未在 1.0 线实现（`<identifier>` 按值比较），结构体解构与 ADT 变体解构为预留语法。2.0 线（PB）已补齐 `_` 通配符。逐项对应关系见 `IMPLEMENTATION_STATUS.md`。
 
 #### 语义规则
 

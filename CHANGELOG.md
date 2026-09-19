@@ -13,7 +13,7 @@
 - **TODO 分层拆分**：`TODO.md` 拆为 `ROADMAP.md`（跨分支里程碑与通用待办）+ `TODO-PA.md`（1.0 冻结线专属）+ `TODO-PB.md`（2.0 IR 线专属），并建立共享文档跨分支同步规则。
 - **文档-实现全量一致性核对**：PB-27 子项状态回填、PB-29 `ret_vis` 检查条件表述修正（`ret_vis > VIS_VAR` 恒假 → 显式 `∈ {CONST, FLOW, STATIC}`）、ROADMAP 架构图清除已删除的 `ir_to_native.c` 引用、VERSIONING_ROADMAP 阶段 2 重复条目去重、`ncc.h` 后端注释与 `set_version` 对齐。
 - **PA TODO 清零**：PA-1 ~ PA-14 全部 `[x]`，1.0 冻结线无待办。
-- **已知缺口（登记于 `docs/IMPLEMENTATION_STATUS.md`）**：A 后端 `is _` 通配符与 `is <identifier>` 变量绑定为"已定义、待实现"（当前按值比较）；函数参数可见性前缀仍统一按 `VIS_DEFAULT` 处理；IR 后端不做所有权/借用检查。
+- **已知缺口（登记于 `docs/IMPLEMENTATION_STATUS.md`）**：1.0 线 A 后端 `is _` 通配符与 `is <identifier>` 变量绑定为"已定义、待实现"（当前按值比较；2.0 线已覆盖）；函数参数可见性前缀仍统一按 `VIS_DEFAULT` 处理；IR 后端不做所有权/借用检查。
 - **回归验证**：c / native 双后端各 **12P / 0F / 5S**（0 FAIL），examples 6/7 编译运行（`06_cooking` 为 2.0 预览，预期不通过）；IR→C 对 `tests/pos/ir_is.nc` 生成正常。
 
 ## [v1.0.1] — 2026-09-03
