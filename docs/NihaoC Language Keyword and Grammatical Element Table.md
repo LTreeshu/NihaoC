@@ -81,7 +81,7 @@
 - `&` – address‑of operator
 - `=` – assignment operator
 - `?=` – safe assignment operator (with pointer checking)
-- `=>` – fat arrow: single‑statement form of `is <pattern> => <statement>`
+- `=>` – lexically reserved (historical single-statement form of `is <pattern> => <statement>`); removed in 2.0 (PB-27.6) — `is` keeps only the block form
 - `.` – struct/union member access
 - `.()` – void pointer dereference
 - `.(type)` – typed dereference (with built‑in out‑of‑bounds check)

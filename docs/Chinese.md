@@ -1141,10 +1141,10 @@ func invalid() {
 ```nihao
 func debug_vis(ptr void) {
     while visof(ptr) {
-        is _flow => puts("动态指针")
-        is _static => puts("静态指针")
-        is _var => puts("可变借用")
-        is _const => puts("只读借用")
+        is _flow { puts("动态指针") }
+        is _static { puts("静态指针") }
+        is _var { puts("可变借用") }
+        is _const { puts("只读借用") }
         break
     }
 }

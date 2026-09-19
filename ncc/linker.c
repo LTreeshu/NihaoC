@@ -15,7 +15,7 @@
  *        - parser.c（A 方案 / 默认后端链路 parser→cgen）：解析 `link`
  *          指令时调 link_add_library（唯一现役写入点）。
  *        - ncc.c:346 的 CLI 直接声明入口已注释停用（改由文件内 `link` 指令）。
- *      ⚠ IR 后端链路（irparse.c → ir_to_c.c / ir_to_native.c）当前【不】
+ *      ⚠ IR 后端链路（irparse.c → ir_to_c.c / ir_backend.c + ir_<arch>.c）当前【不】
  *        调用本模块——`link` 指令在 IR 双后端下尚未生效；该能力属 2.0
  *        阶段 2「link/use 跨文件」项（路线图 A），届时再接入 irparse。
  *

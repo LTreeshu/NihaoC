@@ -57,6 +57,19 @@
 - **测试同步改写**：`ir_ptr2.nc` 复合解引用改为 `p.() += 2` / `pd.() += 1.0` / `pc.() += 1` / `p.() *= 3` / `p.() -= 10`（含 int/double/narrow/mul/sub），四后端一致 0 FAIL；`ir_ptr.nc`/`ir_slice.nc` 保持通过。
 - **回归验证**：`xmake test --all` 全矩阵（c/native/ir-c/ir-native）**0 FAIL**，`ir_ptr`/`ir_ptr2`/`ir_slice` 四后端一致。
 
+### 2.0 M2 能力平移：参数前缀 + 返回值可见性（2026-09-04 / 09-10 / 09-12，PB-26 / PB-29）
+
+- **PB-26 参数前缀（2026-09-04）**：函数参数声明支持 `flow/var/const/static` 可见性前缀，记录到变量表 `vvis`；调用点按参数前缀执行 M2 所有权/借用检查（冻结/失效状态机），`err/m2a..m2e` 系列用例在 ir-c/ir-native 双后端转正 PASS。
+- **PB-29 返回值可见性前缀（2026-09-10，§12.3 后半段）**：函数声明 `func name(...) [vis] ret_type` 解析返回前缀到 `IrFn.ret_vis`（IR 端）/`Symbol.ret_vis`（cgen 端）；调用点声明赋值按 `ir_vis_transfer(ret_vis, decl_vis)` 检查所有权转移；cgen 端 `flow/const/static` 返回生成 `void*` 签名。新增用例 `pos/return_flow.nc`、`pos/static_param_share.nc`、`pos/struct_param_prefix.nc`、`err/m2f_retflow.nc`。
+- **PB-29.1 错误路径补全（2026-09-12）**：`m2f_retflow` 六条禁止路径全覆盖（`flow→static`、`const→flow/static/var`、`static→flow/var` 等），拆分为 6 个独立 err 用例。
+
+### 2.0 `is` 模式匹配升级（2026-09-16，PB-27，规范定案 2026-09-01）
+
+- **Bug 修复**：`do` 循环内 `is` 拒绝（不再设置 `__is_val`，防静默匹配外层 while）；畸形模式 `is -` / `is 5..` 强制校验后续 token；反向范围 `is 5..2` 编译期报错（lo≤hi）；irparse 冗余 `VIS_*` 宏删除，与 `ncc.h` Visibility 枚举统一（`VIS_UNDEF=0/VIS_CONST=1/VIS_FLOW=2/VIS_STATIC=3/VIS_VAR=4`，`VIS_DEFAULT` 全代码更名 `VIS_VAR`）。
+- **模式扩展**：通配符 `_` 恒匹配（IR 与 A 端 parse_is_stmt 同步支持）；`__is_val` 类型感知（新增 `emit_is_cmp_with_const`，double 条件走 `IR_FCMP`，不再硬编码 int）；清理重复不可达可见性分支；**移除 `is <pat> => <stmt>` 单语句形式**（A 端 PA-13 已于 09-15 移除，`=>` 保留词法识别但语法不使用，见 BNF v2.2）。
+- **附带修正**：PB-29 M2 返回检查条件 `ret_vis > VIS_VAR`（VIS_VAR=4 恒假）改为显式 `== CONST/FLOW/STATIC`。
+- **回归**：`xmake test` 全矩阵 0 FAIL（c/native 19P/0F/6S；ir-c/ir-native 13P/0F/8S）；`err/m2f_retflow*` 6 条禁止路径全 PASS。
+
 ## [M4] — CLI 工具链
 
 - `nihao init/build/run/debug/lex` 子命令；`debug <file> --ir` 三地址码 dump

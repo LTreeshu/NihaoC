@@ -1,6 +1,6 @@
 # 方案 B — IR 中间层待办（PB 分支）
 
-> 更新日期：2026-09-07
+> 更新日期：2026-09-19
 > 本文件为 PB 分支（2.0 IR 演进线）专属待办。通用里程碑与跨分支待办见 `ROADMAP.md`。
 > 2026-08-29 起仓库分支化：B 方案开发在 `PB` 分支（见 `docs/GIT_CONVENTIONS.md`）。
 
@@ -34,7 +34,7 @@
 - [x] **PB-5 存储期属性 + visof（2026-08-06 完成）**：变量声明前缀 `const/static/flow/var`（记录可见性到变量表 vvis）；`visof(x)` 编译期查询（visof 是关键字 TOK_VISOF，返回 NH_* 常量 0-4）；可见性枚举常量 `_undef/_const/_flow/_static/_var` 作表达式常量；`is _flow` 等可见性模式（比较 is_val == NH_*）+ 标识符/枚举模式。用例 ir_vis.nc（IR_ONLY）双后端通过。
 - [x] **P1 全量 parser 关键字内置函数缺口（2026-08-06 修复，A 方案可用）**：新增 `parse_builtin_kw()` 在 parse_primary 分派 TOK_SIZEOF/TOK_TYPEOF/TOK_ALIGNOF/TOK_OFFSETOF/TOK_VISOF（含 `_undef/_const/_flow/_static/_var` 可见性枚举常量 case、parse_is_stmt 可见性模式 token 分支）；cgen 补 `#include <stddef.h>`（offsetof 宏）。**顺带修复全量 parser 语句边界缺陷**：函数体内无 NEWLINE token，`f()\n*p = 1` 的 `*` 会被上句乘法循环吞掉 → 表达式 binop 链（multiplicative→assign 全部 12 层）传起始行号参数，换行即语句边界（与 IR 前端同方案）。新增 A 方案用例 malloc_demo.nc（malloc + `.()` 解引用）c/native 后端通过
 - [x] **PB-6 内置函数（2026-08-06 完成，核心 5 个）**：`sizeof(type/expr)`（类型大小表 i8=1..f64=8、聚合=成员数*8 槽模型、数组=size*N）、`typeof`（映射为 sizeof）、`alignof`（IR 槽模型返回 8）、`offsetof(Type,member)`（成员序*8，union 0）、`malloc(Type[ N ])`（编译期定大小 → 调用外部 malloc，动态分配 + 指针读写验证）。用例 ir_builtin.nc（IR_ONLY）双后端通过。剩余：structof/unionof/holdof/bitoffsetof（需真实内存布局，IR 8 字节槽模型不支持，报错）、`*p op= e` 复合赋值解引用。另发现：sizeof/typeof/alignof/offsetof 是关键字 token，**全量 parser（parser.c）的 identifier 字符串比较分支永远走不到**（与 TOK_VISOF 同问题，记 P1）
-- [x] **PB-7 控制流补齐（全部完成 2026-08-06）**：for（init;cond;step，step 记录重放）、break/continue（循环栈）、do（while 别名，前测循环）、is 模式匹配（匹配循环条件值，支持 `-1` / `0..50` 闭区间；配套新增**表达式级赋值** `x += 1` / `x++` 使 `while x += 1 { is -1 {...} }` 可用）、switch（C 风格 `switch(e){ case e: ... default: ... }`，延迟绑定 JZ 布局，break 跳出 switch / continue 非法）。用例 ir_switch.nc（IR_ONLY）双后端通过。**is 可见性模式（2026-08-29 完成）**：`is _flow` 等（TOK__FLOW/_STATIC 等，比较 is_val == NH_*）+ 标识符/枚举模式，ir_is.nc IR_SUBSET 四后端一致。**`is pat => stmt` 单语句形式（2026-08-30 完成）**：新增 `=>` token（TOK_FAT_ARROW，lexer `=` case 最长匹配）、irparse is 分支单语句（ir_stmt 递归）、parser.c parse_is_stmt 修正（原误查 TOK_ARROW `->` 从未生效，改 TOK_FAT_ARROW + parse_statement）、ir_is.nc 增补负数/区间 `=>` 用例——四后端一致 55 PASS 0 FAIL。
+- [x] **PB-7 控制流补齐（全部完成 2026-08-06）**：for（init;cond;step，step 记录重放）、break/continue（循环栈）、do（while 别名，前测循环）、is 模式匹配（匹配循环条件值，支持 `-1` / `0..50` 闭区间；配套新增**表达式级赋值** `x += 1` / `x++` 使 `while x += 1 { is -1 {...} }` 可用）、switch（C 风格 `switch(e){ case e: ... default: ... }`，延迟绑定 JZ 布局，break 跳出 switch / continue 非法）。用例 ir_switch.nc（IR_ONLY）双后端通过。**is 可见性模式（2026-08-29 完成）**：`is _flow` 等（TOK__FLOW/_STATIC 等，比较 is_val == NH_*）+ 标识符/枚举模式，ir_is.nc IR_SUBSET 四后端一致。**`is pat => stmt` 单语句形式（2026-08-30 完成，2026-09-01 规范定案移除）**：新增 `=>` token（TOK_FAT_ARROW，lexer `=` case 最长匹配）、irparse is 分支单语句（ir_stmt 递归）、parser.c parse_is_stmt 修正（原误查 TOK_ARROW `->` 从未生效，改 TOK_FAT_ARROW + parse_statement）、ir_is.nc 增补负数/区间 `=>` 用例——四后端一致 55 PASS 0 FAIL。**注**：该形式后按 2.0 规范移除——IR 端 PB-27.6（2026-09-16 前落地）、A 端 PA-13（parser.c 现已无 TOK_FAT_ARROW 分支，仅块形式）；`=>` 保留词法识别但语法不使用。
 - [x] **P1 全量 switch/case（2026-08-07 完成）**——parse_statement 加 TOK_SWITCH 分支，生成 C 原生 switch（case 表达式须编译期常量），每个 case 后自动 break（NihaoC 无 fallthrough 语义）；break 天然跳出。P0 综合用例 p0_case.nc（IR_SUBSET）四后端一致通过
 - [x] **PB-8 多返回值、函数指针、多变量声明（全部完成 2026-08-07）**：多变量声明 `var {a=0,b=1} i8`——ir_stmt 前缀后 `{` 走 ir_multi_decl（收集 name=init 对 → 类型/聚合/数组 → 逐个 var_declare+MOV），无前缀 `{` 仍是块语句（无冲突）；用例 ir_multi.nc。**顺带补齐 &&/|| 短路逻辑层**（ir_logical_and/or，JZ/JNZ 跳转跳过右侧求值）。**函数指针最小集**——新指令 `IR_CALLI`（dst=call *(a)）：ir_to_c 生成 `((int64_t (*)())tN)(args)`，ir_to_native 生成 `movq slot(a),%rax; call *%rax`；声明 `fp void(i32,i32) i32 = add2`（声明分支跳过函数指针类型参数列表+返回类型）；函数名引用 → IR_LD_ADDR sym（取函数地址）；变量后跟 `(` → 间接调用。用例 ir_fptr.nc。**多返回值（struct 返回 sret 机制）**——命名结构体返回：`func f() Result`（IrFn.is_mr，隐藏 out-param `_mr_ret` 注入 var 表头部第 0 槽）；`return {e0,e1,...}` 聚合返回（STORE 到 *_mr_ret+k*8 + bare RET）；调用 `v Result = f()`（malloc 连续缓冲 → PARAM 缓冲+参数 → CALL → 缓冲值偏移 LOAD → 拷贝到聚合槽，last_mr_buf 标记）；成员访问复用 struct 机制。⚠️ `multireturn` 关键字已于 2026-08-08 移除（设计澄清：多返回=命名 struct，非关键字），用例 ir_mr.nc 改用 `Result struct`。三用例均 IR_ONLY 双后端通过
 - [x] **PB-9 编译期（2026-08-19 收官）**：`static_assert(expr,"msg")` 编译期断言——`ir_const_expr` 常量折叠求值链（int 字面量/一元 -!~/四则取模/比较/&&/||/括号/enum 常量/sizeof(type)/visof(x)/可见性枚举/编译期变量），失败时报 `static_assert failed: msg`；`cooking { ... }` 编译期块（顶层+函数内）；**编译期变量表（完成）**：`const NAME [TYPE] = expr` 存 ct_vars（跨块共享、重复声明报错），static_assert/编译期表达式可用，**运行时引用折叠为常量**；`align N { ... }` 对齐块跳过。**编译期函数调用 cooking-call（2026-08-19 完成）**：`const NAME(p1,p2) = expr` 宏式展开——mark buf_ptr 截表达式源文本，调用 NAME(args) 时参数名词边界替换为实参字面量 → 临时 lexer（lexer_init+lexer_next）求值再恢复；支持嵌套/组合/ct 变量参与。用例 ir_cook.nc（IR_ONLY）双后端通过
@@ -85,18 +85,18 @@
 
 ### is 模式匹配升级（2.0，2026-09-01 规范定案）
 
-- [ ] **PB-27 `is` 模式匹配全量对齐新规范**（依据 docs：`is` 仅配合 `while`、移除 `=>`、模式扩展、结构体/ADT 预留；`__is_val` 类型等于 while 条件类型，R1–R4 见 Chinese.md §6.1）：
+- [x] **PB-27 `is` 模式匹配全量对齐新规范**（依据 docs：`is` 仅配合 `while`、移除 `=>`、模式扩展、结构体/ADT 预留；`__is_val` 类型等于 while 条件类型，R1–R4 见 Chinese.md §6.1）（**PB-27.1~5/7/8/9 完成于 2026-09-16 提交 d1c1418；PB-27.6 完成于 irparse.c 现态（is 分支已无 TOK_FAT_ARROW）**；PB-27.10~12 依赖类型系统演进，未排期）：
   - **Bug 修复**
-    - [ ] PB-27.1 `do` 内 `is` 拒绝（对齐 do 不支持 is，避免静默匹配外层 while 的 `__is_val`）
-    - [ ] PB-27.2 畸形模式 `is -` / `is 5..` 强制校验下一 token，否则报错（irparse.c:2029-2061）
-    - [ ] PB-27.3 VAR/UNDEF 数值与 C 后端统一为同一套（irparse.c:215-220；PA 冻结线不补 cgen，跨后端一致性以 IR 侧为准并在测试中固化）
-    - [ ] PB-27.4 反向范围 `is 5..2` 编译期检查 lo≤hi，否则警告/报错（irparse.c:2052）
+    - [x] PB-27.1 `do` 内 `is` 拒绝（对齐 do 不支持 is，避免静默匹配外层 while 的 `__is_val`）——循环体解析加 is_do 守卫，do 不再设置 is_val_vreg（d1c1418）
+    - [x] PB-27.2 畸形模式 `is -` / `is 5..` 强制校验下一 token，否则报错（irparse.c，d1c1418）
+    - [x] PB-27.3 VAR/UNDEF 数值与 C 后端统一为同一套（删 irparse.c 冗余 VIS_* 宏，改用 ncc.h 枚举，d1c1418）
+    - [x] PB-27.4 反向范围 `is 5..2` 编译期检查 lo≤hi，否则报错（d1c1418）
   - **模式扩展**
-    - [ ] PB-27.5 通配符 `_` 支持（irparse.c:2130，跳过比较恒匹配）
-    - [ ] PB-27.6 移除 `=>` 箭头形式（irparse.c:2138；token.h TOK_FAT_ARROW 在 is 中的使用）
-    - [ ] PB-27.7 `__is_val` 类型感知，不再硬编码 int（i64/指针/float 条件不截断）
-    - [ ] PB-27.8 清理重复不可达可见性分支（irparse.c:2116-2129）
-    - [ ] PB-27.9 `ncc.h` Visibility 枚举补 `VIS_VAR`（ncc.h:61-67，PB-27.3 前置）
+    - [x] PB-27.5 通配符 `_` 支持（恒匹配不 emit 条件跳转，d1c1418；A 端 parser.c parse_is_stmt 同步支持）
+    - [x] PB-27.6 移除 `=>` 箭头形式（irparse.c is 分支已无 TOK_FAT_ARROW；A 端 PA-13）
+    - [x] PB-27.7 `__is_val` 类型感知，不再硬编码 int（emit_is_cmp_with_const helper，double 走 IR_FCMP，d1c1418）
+    - [x] PB-27.8 清理重复不可达可见性分支（d1c1418）
+    - [x] PB-27.9 `ncc.h` Visibility 枚举补 `VIS_VAR`（VIS_VAR=4 替换 VIS_DEFAULT，全代码重命名，d1c1418）
   - **依赖类型系统演进（先不排期，纳入 2.0 待办）**
     - [ ] PB-27.10 结构体解构模式 `is Point(x, y)`（前置：类型感知模式匹配框架）
     - [ ] PB-27.11 ADT / 带载荷枚举变体 `is Some(v)`（前置：语言先支持 ADT 类型）
@@ -107,7 +107,7 @@
 
 - [x] **PB-29 返回值可见性前缀 + 调用点 M2 所有权转移（§12.3 后半段，2026-09-10 完成）**：补齐 B 方案返回类型可见性前缀与调用点 M2 检查（PB-26 完成参数位；本项完成返回位）：
   - **返回类型前缀 `flow|var|const|static`**：函数声明 `func name(...) [vis] ret_type` 解析可见性前缀，记录到 `IrFn.ret_vis`（IR 端）与 `Symbol.ret_vis`（cgen 端）；无前缀 = `VIS_VAR` 默认（C 风格"新值"语义）。
-  - **声明赋值 M2 检查**（peek RHS 是 `IDENTIFIER(` → 调用表达式）：按 `ir_vis_transfer(ret_vis, decl_vis)` 判定所有权转移合法性；**仅 `ret_vis > VIS_VAR` 才检查**（默认 var = "新值"语义，`malloc`/`create` 等默认 var 返回不参与转移，避免破坏 IR_SUBSET 矩阵里 `flow a = malloc(i32)` 这类合法写法）。
+  - **声明赋值 M2 检查**（peek RHS 是 `IDENTIFIER(` → 调用表达式）：按 `ir_vis_transfer(ret_vis, decl_vis)` 判定所有权转移合法性；**仅 callee 显式声明 `ret_vis ∈ {VIS_CONST, VIS_FLOW, VIS_STATIC}` 才检查**（2026-09-16 d1c1418 修正——原条件 `ret_vis > VIS_VAR` 因 VIS_VAR=4 为最大值恒假；默认 var = "新值"语义，`malloc`/`create` 等默认 var 返回不参与转移，避免破坏 IR_SUBSET 矩阵里 `flow a = malloc(i32)` 这类合法写法）。
   - **cgen 返回类型生成**：`Symbol.ret_vis ∈ {flow/const/static}` 时 `cret = "void*"`（让 C 函数签名合法，避免参数/返回类型不匹配编译错）。
   - **测试**：新增 `pos/struct_param_prefix.nc`（IR_ONLY，2 断言；struct × flow/var/const 前缀）、`pos/static_param_share.nc`（IR_SUBSET，4 断言；static 参数共享，函数局部 static + 延迟赋值规避 C "static 局部+函数 init 非法"）、`pos/return_flow.nc`（IR_SUBSET，4 断言；`flow→flow` 转移 + `static→const` 转移）、`err/m2f_retflow.nc`（3 错误用例，`flow→static` 禁止，报"target lifetime"）。
   - **回归**：`xmake test --all` 全矩阵（c/native/ir-c/ir-native）**0 FAIL**；四后端一致。

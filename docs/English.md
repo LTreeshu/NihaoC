@@ -1150,10 +1150,10 @@ Runtime visibility checks (in debug mode) can be queried via `visof`:
 ```nihao
 func debug_vis(ptr void) {
     while visof(ptr) {
-        is _flow => puts("dynamic pointer")
-        is _static => puts("static pointer")
-        is _var => puts("mutable borrow")
-        is _const => puts("read-only borrow")
+        is _flow { puts("dynamic pointer") }
+        is _static { puts("static pointer") }
+        is _var { puts("mutable borrow") }
+        is _const { puts("read-only borrow") }
         break
     }
 }

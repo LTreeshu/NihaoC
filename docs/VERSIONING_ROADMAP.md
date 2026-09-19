@@ -39,7 +39,7 @@
 
 - [x] **examples/ 示例集**（8/30）：7 例已建（hello/fib/struct/pointer/string/cooking/multiret）+ README 对照表；**6 例 1.0 可编译验证通过**（c/native 编译+运行）；期间暴露并修复 A 方案 `p.()` 解引用类型 bug（此前硬编码 `(*(void**)p)` → 现按符号指针 ref 输出 `(*(int32_t*)p)`）；06_cooking 标注 2.0 预览（IR_ONLY 子集语法）
 - [x] **README 更新**（8/31）：安装小节（xmake + tcc 依赖探测与获取）、CLI 命令一览表、后端表标注 1.0/2.0 范围（c/native = 1.0 正式支持；ir-* = 2.0 预览）、-run Linux only 说明
-- [x] **语言规格冻结**（8/31，1.0.x 收敛）：BNF v2.0 终校完成——补 `=>`（TOK_FAT_ARROW）词法、`->` 指针成员访问 postfix 规则；Chinese/English 补指针声明（隐式推断）；具名指针 `T*` 显式声明已移除，语法元素表核对通过（`=>`/`->` 已含）；multireturn 无残留
+- [x] **语言规格冻结**（8/31，1.0.x 收敛）：BNF v2.0 终校完成——补 `=>`（TOK_FAT_ARROW）词法、`->` 指针成员访问 postfix 规则；Chinese/English 补指针声明（隐式推断）；具名指针 `T*` 显式声明已移除，语法元素表核对通过（`=>`/`->` 已含）；multireturn 无残留。**注**：`=>` 单语句匹配形式后于 2.0 规范移除（PA-13 / PB-27.6，BNF v2.2），`->` 保留
 - [x] **版本与发布**（8/31）：CHANGELOG.md 建立（M0→M4→1.0 里程碑条目）；`v1.0.0` tag 已本地创建（未推送，见 §3.2）
 - [x] **Linux 实测（PA-9，2026-08-31 WSL Ubuntu-24.04 完成）**：`-run` 内存执行修复（tcc_relocate(NULL) 语义误判→直接 tcc_run）、libtcc.so `-Bsymbolic` 重建（符号插值劫持）、SysV 调用约定（x87 浮点）；c/native 各 12P/0F/6S + examples 6/6 双后端一致——**Windows + Linux 双平台验证通过**（1.0 范围已含 Linux）
 
@@ -65,8 +65,6 @@
 ### 阶段 2：产品能力补齐（A 方案能力平移，P0-P1）
 
 - [x] **M2 静态检查移植（2026-09-04 完成，PB-26）**：所有权/借用状态机移植进 IR 层（irparse.c），参数前缀 `flow/var/const/static` 记录 `vvis`；调用点 M2 所有权检查生效，`err/m2a..m2e` 在 ir-c/ir-native 双后端转正为 PASS（详见 TODO.md PB-26）
-- [ ] **link/use 跨文件**（module.c 语义接入 IR 前端，单文件模型 → 模块化）
-- [ ] **布局内置函数**（structof/unionof/holdof/bitoffsetof——需真实内存布局替代 8 字节槽模型）
 - [ ] **link/use 跨文件**（module.c 语义接入 IR 前端，单文件模型 → 模块化）
 - [ ] **布局内置函数**（structof/unionof/holdof/bitoffsetof——需真实内存布局替代 8 字节槽模型）
 

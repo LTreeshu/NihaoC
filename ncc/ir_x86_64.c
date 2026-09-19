@@ -18,7 +18,7 @@ static const char *x64_int_arg_regs[] = { "%rdi", "%rsi", "%rdx", "%rcx", "%r8",
 static const char *x64_fp_arg_regs[]  = { "%xmm0", "%xmm1", "%xmm2", "%xmm3", NULL };
 
 /* ============================================================
- * x86-64 后端（阶段 1：从 ir_to_native.c 迁移，符合 TargetBackend 接口）
+ * x86-64 后端（阶段 1：从前身 ir_to_native.c〔已删除〕迁移，符合 TargetBackend 接口）
  *
  * 约定：
  *  - 全栈槽：vreg N 在 rbp-stride*(N+1)（槽向下生长）
