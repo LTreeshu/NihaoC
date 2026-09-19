@@ -5,7 +5,7 @@
 > - 以 [`Chinese.md`](./Chinese.md)（中文语法规范）为唯一语义标准，与编译器实现（`ncc/lexer.c`、`ncc/parser.c`、`ncc/token.h`）保持一致。
 > - 记号（terminals）一律使用双引号字符串；非终结符使用 `<...>` 尖括号表示。
 > - 约定：`::=` 定义；`|` 选择；`[ x ]` 可选（0 或 1 次）；`{ x }` 重复（0 或多次）；`( x | y )` 分组。
-> - 版本：v2.1（2026-09-15 修订，指针语法收敛：一元 `*` 解引用移除，解引用统一 `.()`/`.(T)`/`->`，PA/PB 双前端对齐）。
+> - 版本：v2.2（2026-09-19 修订：`is <pattern> => <statement>` 单语句形式移除——`=>` 保留词法但语法不使用，`is` 只保留块形式且仅配合 `while` 循环体，PA-13 / PB-27.6 双前端对齐）。上一版 v2.1（2026-09-15，指针语法收敛：一元 `*` 解引用移除，解引用统一 `.()`/`.(T)`/`->`）。
 
 ---
 
@@ -68,7 +68,6 @@
                    | "&=" | "|=" | "^=" | "<<=" | ">>="
                    | "->" | "." | ".(" | "?." | "?(" | "?=" | "?"
                    | ":" | "::" | "," | ".." | "#"
-                   | "=>"
 
 <delimiter>      ::= "(" | ")" | "[" | "]" | "{" | "}" | ";" | "\n"
 
@@ -77,7 +76,8 @@
 
 > 说明：
 > - `.()`：指针解引用操作（`.()` 内可写目标类型，也可省略）。
-> - `->`：指针成员访问（`p->field`，等价 `p.()->field`；8/19 起 A 方案与 IR 层双线支持）。
+> - `->`：指针成员访问（`p->field`，等价 `p.()` 解引用；8/19 起 A 方案与 IR 层双线支持）。
+> - `=>`：词法保留（TOK_FAT_ARROW 仍由 lexer 识别），但语法**不使用**——`is <pattern> => <statement>` 单语句形式已移除（v2.2，PA-13 / PB-27.6），`is` 只保留块形式（见 §6）。
 > - `?.` / `?(`：安全成员访问 / 安全解引用（带可见性/边界检查）。
 > - `?=`：安全赋值。
 > - `..`：数组/切片范围 `[start..end]`。
@@ -282,21 +282,20 @@
 <for-step>       ::= <identifier> <assign-op> <expr>
                    | <identifier> "++" | <identifier> "--"
 
-<while-stmt>     ::= "while" <expr> <block-stmt>
-                   | "while" <expr> <block-stmt> { <is-clause> }    (* 带模式匹配 *)
+<while-stmt>     ::= "while" <expr> "{" { <statement> | <is-clause> } "}"    (* 循环体内可含 is 模式匹配 *)
 
-<do-stmt>        ::= "do" <expr> <block-stmt>
+<do-stmt>        ::= "do" <expr> <block-stmt>    (* do 不支持 is：is 仅配合 while *)
 
 <is-clause>      ::= "is" <pattern> <block-stmt>
 
 <pattern>        ::= "_"                                (* 通配符 *)
                    | <int-literal>                      (* 整数字面量 *)
                    | "-" <int-literal>                  (* 负整数字面量 *)
-                   | <int-literal> ".." <int-literal>   (* 闭区间范围 *)
+                   | <int-literal> ".." <int-literal>   (* 闭区间范围，编译期校验 lo ≤ hi *)
                    | <enum-variant>                     (* 枚举变体 *)
                    | <visibility-enum>                  (* 可见性枚举 *)
-                   | <struct-destructure>               (* 结构体解构 *)
-                   | <adt-destructure>                  (* ADT 变体解构 — 预留 *)
+                   | <struct-destructure>               (* 结构体解构 — 预留，PB-27.10 *)
+                   | <adt-destructure>                  (* ADT 变体解构 — 预留，PB-27.11 *)
                    | <identifier>                       (* 变量绑定 *)
 
 <struct-destructure> ::= <struct-name> "(" <field-pattern> { "," <field-pattern> } ")"
@@ -317,13 +316,13 @@
 ```
 
 > 说明：
-> - `is` 模式匹配**仅**用于 `while` 循环体内，不可独立使用。循环条件表达式的值赋给隐式变量 `__is_val`，`is` 对其进行匹配。`do` 不支持 `is`，因为 `do` 先执行块再判断条件，`__is_val` 的语义容易产生混乱。
+> - `is` 模式匹配**仅**用于 `while` 循环体内，不可独立使用。循环条件表达式的值赋给隐式变量 `__is_val`（类型感知，等于条件类型，PB-27.7），`is` 对其进行匹配。`do` 不支持 `is`，因为 `do` 先执行块再判断条件，`__is_val` 的语义容易产生混乱。
 > - 合法模式：通配符 `_`、整数字面量（含负整数）、闭区间范围 `lo..hi`、枚举变体、可见性枚举（`_flow` 等）、结构体解构（预留）、ADT 变体解构（预留）、标识符变量绑定。
 > - 标识符消歧：裸标识符若为已知枚举变体（编译器符号表可查）则按值匹配，否则视为变量绑定。
 > - 匹配顺序：多个 `is-clause` 按源码顺序求值，首个匹配者执行（无 fallthrough）。
 > - 结构体解构和 ADT 变体解构为预留语法，待类型系统支持后实现。
 > - `while var1 += 1 { ... }`：循环条件允许赋值表达式。
-> - `do <expr> { ... }`：条件在块外（求值后执行块），区别于 C 的 do-while。
+> - `do <expr> { ... }`：条件在块外（求值后执行块），区别于 C 的 do-while；`do` 不支持 `is`（避免静默匹配外层 while 的条件值）。
 > - 标签 `name:` 与 goto 配套：函数内先定义或后定义均可（跳转目标延迟解析）；IR 与全量实现一致（2026-08-19）。
 
 ---
@@ -419,13 +418,13 @@
 | 解引用 `.()`、安全解引用 `?(`、`?.` | §5 postfix |
 | 指针成员访问 `p->field` | §5 postfix |
 | 安全赋值 `?=` | §5 assign |
-| 范围 `..` | §5 postfix |
+| 范围 `..`（切片/区间模式） | §5 postfix / §6 |
 | 多变量声明 `var {a=0,b=1} i8` | §4 |
 | 复合赋值 `+=` 等 | §5 |
 | 三元 `?:`、逻辑/位运算 | §5 |
 | 内置函数 sizeof/typeof/…/visof/malloc | §5 |
 | if/else、switch/case、for/while/do、break/continue/goto | §6 |
-| `is` 模式匹配（循环内） | §6 |
+| `is` 模式匹配（仅 while 循环体，块形式；含 `_` 通配/区间/可见性/标识符模式，解构预留） | §6 |
 | 函数属性 `[[inline]]` 等、原型 `;` | §7 |
 | cooking 编译期、static_assert | §8 |
 | align 对齐块 | §8 |
