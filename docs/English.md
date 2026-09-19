@@ -27,7 +27,7 @@ NiHao is a new statically compiled language designed for system-level programmin
 
 - `typeof(type)` — type inspection, returns the type
 - `sizeof(type)` — size inspection, returns the size
-- `alignof(type)` — alignment inspection, returns the alignment size
+- `alignof(type)` — alignment inspection, returns the alignment size (compile-time constant: an array takes its element alignment, a struct/union takes the widest member alignment, `void` counts as the generic pointer with 8)
 - `offsetof(type,member)` — returns the byte offset of a member
 - `bitoffsetof(type,member)` — returns the bit offset of a bit-field member (declaration-order bit layout model, compile-time constant)
 - `structof(type,member,ptr)` — ownership inspection: recovers the base address of the enclosing **struct** from the member address `ptr`, returns `void*`

@@ -245,6 +245,8 @@
 <builtin-call>   ::= "sizeof" "(" <type-name> ")"
                    | "typeof" "(" <type-name> ")"
                    | "alignof" "(" <type-name> ")"
+                     (* alignof(T)：编译期对齐常量。数组取元素对齐、结构体/联合体取最宽成员对齐、
+                        void 按通用指针计 8；1.0 线由编译器自行算出并输出字面量（不依赖 C 的 _Alignof） *)
                    | "offsetof" "(" <type-name> "," <identifier> ")"
                    | "bitoffsetof" "(" <type-name> "," <identifier> ")"
                      (* bitoffsetof(T, m)：位域成员 m 在 T 中的位偏移（按声明顺序的位布局模型，编译期常量） *)

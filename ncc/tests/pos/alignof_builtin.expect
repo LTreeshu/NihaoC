@@ -1,0 +1,9 @@
+align u8 ok
+align i32 ok
+align f64 ok
+align void-ptr ok
+align struct ok
+align nested ok
+align union ok
+align array ok
+align chararr ok

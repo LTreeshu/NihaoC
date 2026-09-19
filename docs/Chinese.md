@@ -22,7 +22,7 @@ NiHao 是一种新型静态编译语言，专为系统级编程和高性能应�
 
 - `typeof(type)` 类型判断 返回类型
 - `sizeof(type)` 长度判断 返回长度
-- `alignof(type)` 对齐判断 返回对齐长度
+- `alignof(type)` 对齐判断 返回对齐长度（编译期常量：数组取元素对齐，结构体/联合体取最宽成员对齐，`void` 按通用指针计 8）
 - `offsetof(type,member)` 返回成员字节偏移
 - `bitoffsetof(type,member)` 返回位域成员的位偏移（按声明顺序的位布局模型，编译期常量）
 - `structof(type,member,ptr)` 从属判断：由成员地址 `ptr` 反推所属**结构体**首地址，返回 `void*`

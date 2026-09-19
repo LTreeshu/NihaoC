@@ -1668,7 +1668,7 @@ static void parse_builtin_kw(CompilerState *cs, TokenType kw)
     if (kw == TOK_ALIGNOF) {
         CType tmp;
         parse_type(cs, &tmp);
-        cgen_raw("_Alignof(%s)", c_type_name(&tmp));
+        cgen_raw("%u", type_align(&tmp));
         if (cur_tok(cs) != TOK_RPAREN) nihao_error(cs, "expected ')' in alignof");
         else next_tok(cs);
         return;
@@ -2159,7 +2159,7 @@ static void parse_primary(CompilerState *cs)
                 if (strcmp(name, "alignof") == 0) {
                     CType tmp;
                     parse_type(cs, &tmp);
-                    cgen_raw("_Alignof(%s)", c_type_name(&tmp));
+                    cgen_raw("%u", type_align(&tmp));
                     expect(cs, TOK_RPAREN);
                     break;
                 }
