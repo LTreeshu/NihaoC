@@ -555,6 +555,9 @@ static const char *c_decay_suffix(CType *t)
     return buf;
 }
 
+/* 聚合体成员查找（定义在内置函数段） */
+static Symbol *agg_member_sym(Symbol *owner, const char *name);
+
 /* Heuristic C type for a type-inferred variable initializer.
  * Returns 1 if the RHS first token gave a usable hint. */
 /* 推断初始化表达式的类型。
@@ -589,8 +592,51 @@ static int infer_init_type(CompilerState *cs, CType *out)
         case TOK_IDENTIFIER: {
             Symbol *s = sym_find(cs, cs->parser.lex->tok_str);
             if (s && s->type) {
+                /* f(x) / cb(x)：RHS 是调用，类型取返回类型而非函数类型 */
+                LexerState *lx = cs->parser.lex;
+                lx->peek_valid = 0;
+                lexer_peek(lx);
+                int is_call = (lx->peek_tok == TOK_LPAREN);
+                lx->peek_valid = 0;
+                if (is_call && s->type->kind == TYPE_FUNC) {
+                    if (s->type->next) {
+                        memcpy(out, s->type->next, sizeof(CType));
+                    } else {
+                        out->kind = TYPE_VOID;
+                    }
+                    return 1;
+                }
                 memcpy(out, s->type, sizeof(CType));
-                out->sym = s;
+                /* 聚合体成员须保留标签符号，否则 c_type_name 会输出变量名 */
+                out->sym = (s->type->kind == TYPE_STRUCT ||
+                            s->type->kind == TYPE_UNION) ? s->type->sym : s;
+                /* `x.m`：RHS 是成员访问，类型取成员类型而非聚合体本身。
+                 * 两 token 前瞻用 LexerState 副本做，不动主词法器状态。 */
+                if (!is_call) {
+                    LexerState tmp = *lx;
+                    lexer_next(&tmp);               /* '.' */
+                    if (tmp.tok == TOK_DOT) {
+                        lexer_next(&tmp);           /* 成员名 */
+                        Symbol *owner = (s->type->kind == TYPE_STRUCT ||
+                                         s->type->kind == TYPE_UNION)
+                                            ? s->type->sym : NULL;
+                        Symbol *m = agg_member_sym(owner, tmp.tok_str);
+                        if (m && m->type) {
+                            if (m->type->kind == TYPE_ARRAY && m->type->ref) {
+                                /* 数组成员退化为指针：`char[9]` -> `char*` */
+                                out->kind = TYPE_POINTER;
+                                out->size = 8;
+                                CType *ref = type_new(cs, m->type->ref->kind);
+                                memcpy(ref, m->type->ref, sizeof(CType));
+                                ref->sym = m->type->ref->sym;
+                                out->ref = ref;
+                            } else {
+                                memcpy(out, m->type, sizeof(CType));
+                            }
+                            return 1;
+                        }
+                    }
+                }
                 return 1;
             }
             out->kind = TYPE_POINTER;
@@ -2735,13 +2781,31 @@ static void parse_assign(CompilerState *cs, int line)
                 int sl_indent = 0;
                 char *sl = cgen_take_prefix(cs, lmark, &sl_indent);
                 next_tok(cs);                     /* '=' */
+                if (cur_tok(cs) == TOK_STRING_LITERAL) {
+                    /* 字符串右值 `p[a..b] = "abc"`：按字节复制字面量（含结尾 NUL），
+                       闭区间右界 b 即最后一个可写字节，故须 strlen <= b-a */
+                    const char *lit = cs->parser.lex->tok_str;
+                    size_t llen = lit ? strlen(lit) : 0;
+                    if (cs->parser.slice_len_known &&
+                        (long long)llen > cs->parser.slice_len) {
+                        nihao_error(cs, "string needs %u bytes with terminator, "
+                                        "slice holds %lld",
+                                    (unsigned)(llen + 1), cs->parser.slice_len + 1);
+                    }
+                    cgen_raw("%*smemcpy(%s, \"%s\", %u)", sl_indent, "",
+                             sl, lit ? lit : "", (unsigned)(llen + 1));
+                    next_tok(cs);
+                    cs->parser.rhs_was_slice = 0;
+                    cs->parser.slice_lmark = -1;
+                    break;
+                }
                 if (cur_tok(cs) != TOK_LBRACE) {
-                    nihao_error(cs, "slice assignment expects a value list: "
-                                     "p[a..b] = {v0, v1, ...}");
+                    nihao_error(cs, "slice assignment expects a value list or a "
+                                     "string literal: p[a..b] = {v0, v1, ...}");
                 }
                 cgen_raw("%*s(", sl_indent, "");
                 int k = 0;
-                if (cur_tok(cs) == TOK_LBRACE) next_tok(cs);
+                next_tok(cs);                     /* '{' */
                 skip_newlines(cs);
                 while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF) {
                     if (k > 0) cgen_raw(", ");

@@ -278,7 +278,7 @@ variable = ptr3[][].(i32) // three-level dereference
 
 > **Pointer declaration syntax (decided 2026-08-19: implicit inference declaration)**
 >
-> - **Implicit inference**: `p = &x` auto-infers `p` as a pointer to `x`'s type (no type name needed).
+> - **Implicit inference**: `p = &x` auto-infers `p` as a pointer to `x`'s type (no type name needed). When the right-hand side is a member access `v = s.m`, the inferred type is member `m`'s own type (an array member decays to a pointer); when it is a call `v = f(a)` or `v = fp(a)`, the inferred type is the return type of the callee (or of the function pointer).
 
 > - **`->` pointer member access**: `p->field` is equivalent to `p.()->field`; chained `p->a->b` and compound assignment `p->n += 1` are supported (aligned in both A-plan and IR layers since 2026-08-19).
 
@@ -309,6 +309,7 @@ arry[1..3] = {20,30,40}
 > - **Empty subscript `p[]`**: one level of dereference, equivalent to `p.()` with the type omitted; it keeps participating in the postfix chain (`p3[][].(i32)`).
 > - **Slice read `p[a..b]`**: the value is "a pointer to element `a`". Assigning it to an array variable copies element-by-element up to that array's declared size; a type-inferred declaration `s = p[a..b]` instead yields a pointer view of the element type (no copy) and `s.()` is element `a`. When both bounds are literals the backend records `b-a` for `len(s)` (§2.3). Omitting the start bound is written `p[..b]` and equals `p[0..b]`, with length `b`.
 > - **Slice assignment `p[a..b] = {v0, v1, ...}`**: writes back element by element starting at `a`; the value list decides how many elements are written.
+> - **String right-hand side `p[a..b] = "abc"`**: copies the literal **byte by byte**, terminator `\0` included, for a character slice region. The closed-interval upper bound `b` is the last writable byte, so `strlen("abc") <= b-a` must hold; otherwise the frontend reports an error.
 
 #### 5.1.3 Pointer Arrays
 
@@ -353,6 +354,10 @@ talk = xiaoming.say
 puts(talk)
 // puts(talk) out--> "NiHao I am xiaoming!"
 ```
+
+> **Inferred declarations take the member type**: `talk = xiaoming.say` infers the type of member `say` itself
+> (`char[]`, i.e. `char*`), not the composite type `Say`; when the member is an array (`name char[9]`) it decays
+> to a pointer, so `nm = xiaoming.name` yields `char*` (implicit inference: §5.1.1).
 
 #### 5.1.5 Function Pointers
 

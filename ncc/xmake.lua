@@ -152,7 +152,7 @@ local IR_ONLY = {ir_builtin = true, ir_mr = true, ir_slice = true, ir_sparam = t
 -- 通用 void 指针裸下标拒绝），也不支持从属/位域内置函数；`len()` 对静态不可知的标量
 -- 不发前端错误（返回 0），属 2.0 待对齐项，
 -- 这些 err 用例对其无意义（其余 err 用例双前端都跑）
-local IR_ERR_SKIP = {m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, deref_bounds = true, structof_bad_member = true, void_subscript = true, len_unknown = true}
+local IR_ERR_SKIP = {m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, deref_bounds = true, structof_bad_member = true, void_subscript = true, len_unknown = true, slice_str_overflow = true}
 
 task("test")
     on_run(function ()
