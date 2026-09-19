@@ -1042,10 +1042,14 @@ void parse_declaration(CompilerState *cs)
     char *rhs_text = NULL;
     int rhs_slice = 0;
     int rhs_indent = 0;
+    long long str_lit_len = -1;   /* 字符串字面量初值的长度，供 `len(x)` 记录（§2.3） */
     if (has_init) {
         brace_init = (cur_tok(cs) == TOK_LBRACE);
         cs->parser.malloc_bytes = 0;
         cs->parser.rhs_was_slice = 0;
+        cs->parser.slice_len_known = 0;
+        if (cur_tok(cs) == TOK_STRING_LITERAL && cs->parser.lex->tok_str)
+            str_lit_len = (long long)strlen(cs->parser.lex->tok_str);
         /* Ownership/lifetime check: single-identifier initializer */
         if (cur_tok(cs) == TOK_IDENTIFIER) {
             LexerState *lex = cs->parser.lex;
@@ -1085,6 +1089,12 @@ void parse_declaration(CompilerState *cs)
                      is_static ? "static " : "",
                      c_type_name(ft->next), name, c_type_suffix(&vtype),
                      pstr[0] ? pstr : "void");
+        } else if (inferred_eq && rhs_slice) {
+            /* 推断的切片变量 `s = a[lo..hi]`：视图语义，声明为元素指针，
+               长度 hi-lo 由 `len(s)` 取用（§2.3 / §5.1.3） */
+            cgen_raw("%s%s%s *%s", is_const ? "const " : "",
+                     is_static ? "static " : "",
+                     c_type_name(type_deepest_elem(&vtype)), name);
         } else if (rhs_text && !rhs_slice) {
             /* 数组退化为指针：`E name[s1][s2]` -> `E (*name)[s2]`（一维即 `E (*name)`） */
             cgen_raw("%s%s%s(*%s)%s", is_const ? "const " : "",
@@ -1098,9 +1108,26 @@ void parse_declaration(CompilerState *cs)
         }
     }
 
+    /* 登记 `len(x)` 的逻辑长度（§2.3）：数组=元素个数、动态字符串=字面量长、
+       切片变量=边界差 hi-lo；其余形态静态不可知，len() 会即时报错 */
+    if (var_sym) {
+        if (inferred_eq && rhs_slice) {
+            var_sym->len_known = cs->parser.slice_len_known;
+            var_sym->logical_len = cs->parser.slice_len;
+        } else if (vtype.kind == TYPE_ARRAY && type_array_count(&vtype) > 0) {
+            var_sym->len_known = 1;
+            var_sym->logical_len = type_array_count(&vtype);
+        } else if (str_lit_len >= 0 &&
+                   (vtype.kind == TYPE_STRING ||
+                    (vtype.kind == TYPE_ARRAY && vtype.param_count < 0))) {
+            var_sym->len_known = 1;
+            var_sym->logical_len = str_lit_len;
+        }
+    }
+
     /* initializer */
     if (has_init) {
-        if (rhs_slice) {
+        if (rhs_slice && !inferred_eq) {
             /* `T[n] x = p[a..b]`：切片读赋给数组变量 → 按声明容量逐元素复制 */
             int cnt = type_array_count(&vtype);
             cgen_line(";");
@@ -2093,6 +2120,28 @@ static void parse_primary(CompilerState *cs)
             if (cur_tok(cs) == TOK_LPAREN) {
                 next_tok(cs); /* ( */
 
+                if (strcmp(name, "len") == 0) {
+                    /* len(x)：数组=元素个数、动态字符串=字面量长、切片变量=hi-lo（§2.3） */
+                    char arg[128];
+                    if (cur_tok(cs) != TOK_IDENTIFIER) {
+                        nihao_error(cs, "len expects an identifier");
+                        next_tok(cs);
+                    } else {
+                        snprintf(arg, sizeof(arg), "%s",
+                                 cs->parser.lex->tok_str ? cs->parser.lex->tok_str : "");
+                        Symbol *s = sym_find(cs, arg);
+                        next_tok(cs);
+                        if (!s || s->kind != SYM_VARIABLE || !s->len_known) {
+                            nihao_error(cs, "len: logical length of '%s' is not statically known",
+                                        arg);
+                            cgen_raw("0");
+                        } else {
+                            cgen_raw("%lld", s->logical_len);
+                        }
+                    }
+                    expect(cs, TOK_RPAREN);
+                    break;
+                }
                 if (strcmp(name, "sizeof") == 0) {
                     /* sizeof(type) or sizeof(expr) */
                     CType tmp;
@@ -2320,6 +2369,10 @@ static void deref_prefix(CompilerState *cs, int mark, Symbol *sym, CType *want)
         if (pt && pt->kind == TYPE_POINTER && pt->ref && pt->ref->kind != TYPE_VOID) {
             memcpy(&auto_type, pt->ref, sizeof(CType));
             want = &auto_type;
+        } else if (pt && pt->kind == TYPE_ARRAY && pt->ref) {
+            /* 数组槽（含声明后退化为指针的切片变量）解引用即取首个元素 */
+            memcpy(&auto_type, type_deepest_elem(pt), sizeof(CType));
+            want = &auto_type;
         }
     }
     if (want) cgen_raw("%*s(*(%s)(%s))", indent, "", c_cast_name(want), prefix);
@@ -2415,15 +2468,21 @@ static void parse_postfix(CompilerState *cs, int line)
                     int ind = 0;
                     char *prefix = cgen_take_prefix(cs, mark, &ind);
                     next_tok(cs);
+                    int hi_lit = (cur_tok(cs) == TOK_INT_CONST);
+                    long long hi = hi_lit ? cs->parser.lex->tok_val.i : 0;
                     int himark = cgen_mark();
-                    parse_expression(cs);          /* hi：A 后端不记录切片长度，丢弃 */
+                    parse_expression(cs);          /* hi：仅取常量边界，生成文本丢弃 */
                     cgen_truncate(himark);
                     expect(cs, TOK_RBRACKET);
                     cgen_raw("%*s(&((%s)[0]))", ind, "", prefix);
                     cs->parser.rhs_was_slice = 1;
                     cs->parser.slice_lmark = mark;
+                    cs->parser.slice_len_known = hi_lit;
+                    cs->parser.slice_len = hi_lit ? hi : 0;
                 } else {
                     cgen_raw("[");
+                    int lo_lit = (cur_tok(cs) == TOK_INT_CONST);
+                    long long lo = lo_lit ? cs->parser.lex->tok_val.i : 0;
                     parse_expression(cs);
                     if (cur_tok(cs) == TOK_RANGE) {
                         /* 切片读 `p[a..b]`：C 没有切片类型，取「指向 a 号元素的指针」，
@@ -2436,13 +2495,18 @@ static void parse_postfix(CompilerState *cs, int line)
                         closed[n] = ']';
                         closed[n + 1] = 0;
                         next_tok(cs);
+                        int hi_lit = (cur_tok(cs) == TOK_INT_CONST);
+                        long long hi = hi_lit ? cs->parser.lex->tok_val.i : 0;
                         int himark = cgen_mark();
-                        parse_expression(cs);      /* hi：同上，丢弃 */
+                        parse_expression(cs);      /* hi：同上 */
                         cgen_truncate(himark);
                         expect(cs, TOK_RBRACKET);
                         cgen_raw("%*s(&%s)", ind, "", closed);
                         cs->parser.rhs_was_slice = 1;
                         cs->parser.slice_lmark = mark;
+                        /* 两侧都是字面量才记得住 `len(切片变量)` = hi-lo（§2.3） */
+                        cs->parser.slice_len_known = lo_lit && hi_lit;
+                        cs->parser.slice_len = (lo_lit && hi_lit) ? hi - lo : 0;
                     } else {
                         cgen_raw("]");
                         expect(cs, TOK_RBRACKET);
@@ -2480,6 +2544,7 @@ static void parse_postfix(CompilerState *cs, int line)
         }
         chained = 1;                    /* 前缀不再是裸标识符 */
     }
+    cs->parser.lhs_bare_ident = !chained;
 }
 
 static void parse_unary(CompilerState *cs, int line)
@@ -2654,6 +2719,10 @@ static void parse_assign(CompilerState *cs, int line)
     switch (t) {
         case TOK_ASSIGN: {
             Symbol *lhs = cs->parser.last_ident;
+            /* 整变量重新赋值（LHS 是裸标识符）：声明期登记的逻辑长度不再可信，
+               撤销记录，让 `len(x)` 保守报错而非返回过期值（§2.3） */
+            if (lhs && lhs->kind == SYM_VARIABLE && cs->parser.lhs_bare_ident)
+                lhs->len_known = 0;
             /* LHS must be writable (not frozen by an active borrow) */
             if (lhs && lhs->kind == SYM_VARIABLE) {
                 vis_check_writable(cs, lhs);
@@ -2751,5 +2820,7 @@ void parse_expression(CompilerState *cs)
     cs->parser.lhs_was_deref = 0;
     cs->parser.rhs_was_slice = 0;
     cs->parser.slice_lmark = -1;
+    cs->parser.slice_len_known = 0;
+    cs->parser.slice_len = 0;
     parse_assign(cs, cs->parser.lex->line_num);
 }

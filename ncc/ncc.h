@@ -125,6 +125,10 @@ struct Symbol {
     Symbol *borrow_source;      /* who this var borrows from (for unfreeze) */
     /* 指针当前所指对象的字节数，`.()` 越界检查用；0 = 静态未知（不检查） */
     unsigned int pointee_bytes;
+    /* len(x) 内置函数的逻辑长度：数组=元素个数、动态字符串 char[]=字面量长度、
+       切片变量=边界差 hi-lo；len_known = 0 表示静态不可知（len() 报错） */
+    int len_known;
+    long long logical_len;
     
     /* Location in source */
     char *filename;
@@ -231,6 +235,9 @@ typedef struct {
     int lhs_was_deref;          /* 赋值左侧是解引用链（`p.(T) = v`）而非对 p 本身赋值 */
     int rhs_was_slice;          /* 刚解析的表达式以切片读 `[a..b]` 结尾（数组声明据此走复制） */
     int slice_lmark;            /* 该切片读文本在 cgen 缓冲里的起点，用于确认它是赋值左侧整体 */
+    int slice_len_known;        /* 最近一次切片读的上下界是否都是字面量（`len(切片变量)` 据此求值） */
+    long long slice_len;        /* 该切片的逻辑长度 hi-lo */
+    int lhs_bare_ident;         /* 刚解析的后缀链是裸标识符（无任何后缀步），赋值即整变量重绑定 */
     
     /* Error handling */
     int error_count;

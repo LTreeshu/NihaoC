@@ -34,7 +34,8 @@ NiHao is a new statically compiled language designed for system-level programmin
 - `unionof(type,member,ptr)` — same, accepts a `union` only
 - `holdof(type,member,ptr)` — same, accepts both `struct` and `union`
 - `visof(var)` — visibility inspection, returns the visibility attribute
-- `len(x)` — logical length (2026-08-19): array = capacity; dynamic `char[]` = literal length;
+- `len(x)` — logical length (2026-08-19): array = capacity (product of all dimensions for
+  multi-dimensional arrays); dynamic `char[]` = literal length;
   slice variable `s = arr[lo..hi]` = boundary difference `hi-lo` (bounds must be compile-time
   constants; returns a compile-time value)
 
@@ -42,6 +43,10 @@ NiHao is a new statically compiled language designed for system-level programmin
 > signatures above as of BNF v2.4; on the 1.0 line they are provided by the A backend
 > (`c` / `native`), while the `ir-*` backends leave them to the 2.0 layout work
 > (current state: `docs/IMPLEMENTATION_STATUS.md`).
+> As of BNF v2.6, `len(x)` is provided by the A backend on the 1.0 line for the three cases
+> above: when the argument's logical length is not statically known (a scalar, a slice with
+> non-literal bounds, …) the front end reports an error immediately; the `ir-*` backends
+> already cover the three cases but return 0 when the length is not statically known.
 
 ### 2.4 Keyword Reference
 
@@ -302,7 +307,7 @@ arry[1..3] = {20,30,40}
 >
 > - **A generic `void` pointer cannot be subscripted bare**: for `p[i]` and `p[a..b]` the element width is unknown at compile time, so the frontend reports an error and requires `p.(T)` first (`p.(T)[i]`, `p.(T)[a..b]`). The bounds check belongs to `.()` itself (§12.1).
 > - **Empty subscript `p[]`**: one level of dereference, equivalent to `p.()` with the type omitted; it keeps participating in the postfix chain (`p3[][].(i32)`).
-> - **Slice read `p[a..b]`**: the value is "a pointer to element `a`"; `b` is a writing hint only — the A backends do not record slice length. Assigning it to an array variable copies element-by-element up to that array's declared size. Omitting the start bound is written `p[..b]` and equals `p[0..b]`.
+> - **Slice read `p[a..b]`**: the value is "a pointer to element `a`". Assigning it to an array variable copies element-by-element up to that array's declared size; a type-inferred declaration `s = p[a..b]` instead yields a pointer view of the element type (no copy) and `s.()` is element `a`. When both bounds are literals the backend records `b-a` for `len(s)` (§2.3). Omitting the start bound is written `p[..b]` and equals `p[0..b]`, with length `b`.
 > - **Slice assignment `p[a..b] = {v0, v1, ...}`**: writes back element by element starting at `a`; the value list decides how many elements are written.
 
 #### 5.1.3 Pointer Arrays
