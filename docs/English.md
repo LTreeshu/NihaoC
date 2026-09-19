@@ -528,7 +528,7 @@ if i < 3 {
 
 ### 6.1 Pattern Matching (`is` Clauses)
 
-`is` clauses are used with `while` loops to pattern-match against the loop condition expression's value (implicitly stored in `__is_val`). `do` loops do not support `is` — `do` executes the body before evaluating the condition, so `__is_val` semantics would be confusing.
+`is` clauses are used with `while` loops to pattern-match against the loop condition expression's value (implicitly stored in `__is_val`). `do` loops do not support `is` — this is a rule of the specification, not a consequence of `do`'s semantics: `do` and `while` are both pre-test loops in this language (the condition is written before the block and evaluated first), yet `is` binds only to `while`. Both frontends reject `is` inside any `do` body, including a `do` nested in a `while` (it must not silently match the outer loop's `__is_val`). Whether `do` gains `is` support is deferred to 2.0.
 
 #### Syntax
 

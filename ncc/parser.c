@@ -1228,7 +1228,11 @@ void parse_statement(CompilerState *cs)
             cgen_raw("while (");
             parse_expression(cs);
             cgen_raw(")");
+            /* do 不支持 is：体内容器深度清零，避免外层 while 的 __is_val 被静默匹配 */
+            int save_depth = cs->while_depth;
+            cs->while_depth = 0;
             parse_statement(cs);
+            cs->while_depth = save_depth;
             break;
 
         case TOK_FOR:
