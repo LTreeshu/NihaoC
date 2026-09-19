@@ -23,13 +23,17 @@ NiHao 是一种新型静态编译语言，专为系统级编程和高性能应�
 - `typeof(type)` 类型判断 返回类型
 - `sizeof(type)` 长度判断 返回长度
 - `alignof(type)` 对齐判断 返回对齐长度
-- `structof(member)` 从属判断 返回成员所有者
-- `unionof(member)` 从属判断 返回成员所有者
-- `offsetof(type,member)` 返回偏移量
-- `bitoffsetof(type,bitmember)` 返回偏移量
+- `offsetof(type,member)` 返回成员字节偏移
+- `bitoffsetof(type,member)` 返回位域成员的位偏移（按声明顺序的位布局模型，编译期常量）
+- `structof(type,member,ptr)` 从属判断：由成员地址 `ptr` 反推所属**结构体**首地址，返回 `void*`
+- `unionof(type,member,ptr)` 同上，仅用于 `union`
+- `holdof(type,member,ptr)` 同上，`struct` / `union` 通用
 - `len(x)` 逻辑长度（2026-08-19）：数组=容量；动态字符串 `char[]`=字面量长度；
   切片变量 `s = arr[lo..hi]`=边界差 `hi-lo`（边界须编译期常量，返回编译期值）
 - `visof(var)` 可见性判断 返回可见属性
+
+> 从属查询内置函数（`structof` / `unionof` / `holdof`）与 `bitoffsetof` 自 BNF v2.4 起定稿为上述签名；
+> 1.0 线由 A 后端（`c` / `native`）提供，`ir-*` 后端属 2.0 布局待做（现状见 `docs/IMPLEMENTATION_STATUS.md`）。
 
 ### 2.4 关键字说明
 
@@ -443,10 +447,11 @@ if visof(ptr) == _static {
     // ...
 }
 
-// 从属判断
+// 从属判断：由成员地址反推所属聚合体首地址（签名见 §2.3）
+Person struct { name char[] age i32 }
 var boy Person = {"xiaoming", 13}
 var ptr void = &boy.name
-if structof(Person,ptr) == boy { 
+if structof(Person, name, ptr) == &boy { 
     // ...
 }
 ```

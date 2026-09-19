@@ -26,8 +26,8 @@
 - `default` – default branch option
 - `goto` – jump keyword
 - `true` / `false` – boolean literals
-- `bitoffsetof` – bit-field member offset
-- `holdof` – variable owner query
+- `bitoffsetof` – bit offset of a bit-field member (`bitoffsetof(type, member)`, declaration-order bit layout, compile-time constant)
+- `holdof` – variable owner query (`holdof(type, member, ptr)`, works for both struct and union)
 - `string` – string type alias (same as `char[]`)
 - `register` / `restrict` / `volatile` – C-style qualifiers
 - `struct` – structure definition
@@ -37,8 +37,8 @@
 - `sizeof` – get type size
 - `alignof` – get type alignment
 - `offsetof` – get struct member offset
-- `structof` – get base address of the struct containing a member
-- `unionof` – get base address of the union containing a member
+- `structof` – recover the base address of the struct owning a member (`structof(type, member, ptr)`)
+- `unionof` – recover the base address of the union owning a member (`unionof(type, member, ptr)`, accepts `union` only)
 - `if` – conditional branch
 - `else` – else branch
 - `for` – loop control

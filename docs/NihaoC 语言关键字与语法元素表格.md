@@ -41,8 +41,8 @@
 - `default` 分支默认选项
 - `goto` 跳转关键字
 - `true` / `false` 布尔字面量
-- `bitoffsetof` 位域成员偏移
-- `holdof` 变量持有者查询
+- `bitoffsetof` 位域成员位偏移（`bitoffsetof(type, member)`，声明序位布局，编译期常量）
+- `holdof` 变量持有者查询（`holdof(type, member, ptr)`，struct/union 通用）
 - `string` 字符串类型别名（同 `char[]`）
 - `register` / `restrict` / `volatile` C 风格修饰字
 
@@ -60,9 +60,9 @@
 
 - `offsetof` 获取结构体成员偏移量
 
-- `structof` 获取成员所在结构体首地址
+- `structof` 反推成员所属结构体首地址（`structof(type, member, ptr)`，返回 `void` 指针）
 
-- `unionof` 获取成员所在联合体首地址
+- `unionof` 反推成员所属联合体首地址（`unionof(type, member, ptr)`，仅接受 `union`）
 
 - `if` 条件判断
 

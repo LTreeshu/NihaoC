@@ -28,15 +28,20 @@ NiHao is a new statically compiled language designed for system-level programmin
 - `typeof(type)` — type inspection, returns the type
 - `sizeof(type)` — size inspection, returns the size
 - `alignof(type)` — alignment inspection, returns the alignment size
-- `structof(member)` — ownership inspection, returns the owning struct
-- `unionof(member)` — ownership inspection, returns the owning union
-- `offsetof(type,member)` — returns the byte offset
-- `bitoffsetof(type,bitmember)` — returns the bit offset
-- `holdof(type, member)` — returns the base address of the enclosing aggregate
+- `offsetof(type,member)` — returns the byte offset of a member
+- `bitoffsetof(type,member)` — returns the bit offset of a bit-field member (declaration-order bit layout model, compile-time constant)
+- `structof(type,member,ptr)` — ownership inspection: recovers the base address of the enclosing **struct** from the member address `ptr`, returns `void*`
+- `unionof(type,member,ptr)` — same, accepts a `union` only
+- `holdof(type,member,ptr)` — same, accepts both `struct` and `union`
 - `visof(var)` — visibility inspection, returns the visibility attribute
 - `len(x)` — logical length (2026-08-19): array = capacity; dynamic `char[]` = literal length;
   slice variable `s = arr[lo..hi]` = boundary difference `hi-lo` (bounds must be compile-time
   constants; returns a compile-time value)
+
+> The ownership built-ins (`structof` / `unionof` / `holdof`) and `bitoffsetof` are fixed to the
+> signatures above as of BNF v2.4; on the 1.0 line they are provided by the A backend
+> (`c` / `native`), while the `ir-*` backends leave them to the 2.0 layout work
+> (current state: `docs/IMPLEMENTATION_STATUS.md`).
 
 ### 2.4 Keyword Reference
 
@@ -452,10 +457,11 @@ if visof(ptr) == _static {
     // ...
 }
 
-// ownership check
+// ownership inspection: recover the enclosing aggregate from a member address (see §2.3)
+Person struct { name char[] age i32 }
 var boy Person = {"xiaoming", 13}
 var ptr void = &boy.name
-if structof(Person,ptr) == boy { 
+if structof(Person, name, ptr) == &boy { 
     // ...
 }
 ```

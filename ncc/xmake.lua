@@ -148,8 +148,9 @@ end
 -- IR_ONLY  : IR 专属用例——子集语法（如无类型指针声明），全量 parser 无法编译
 local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true}
 local IR_ONLY = {ir_builtin = true, ir_mr = true, ir_slice = true, ir_sparam = true, ir_cook = true}
--- IR_ERR_SKIP: IR 前端未实现 M2 静态检查，且不支持 `.(T)` 类型化解引用，这些 err 用例对其无意义（其余 err 用例双前端都跑）
-local IR_ERR_SKIP = {m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, deref_bounds = true}
+-- IR_ERR_SKIP: IR 前端未实现 M2 静态检查、不支持 `.(T)` 类型化解引用，也不支持从属/位域内置函数，
+-- 这些 err 用例对其无意义（其余 err 用例双前端都跑）
+local IR_ERR_SKIP = {m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, deref_bounds = true, structof_bad_member = true}
 
 task("test")
     on_run(function ()
@@ -322,9 +323,9 @@ task("test")
                     goto continue_err
                 end
                 if is_ir and IR_ERR_SKIP[stem] then
-                    -- IR 前端暂未实现 M2 静态检查，这些用例对其无意义
+                    -- IR 前端未覆盖这些检查/语法（M2 静态检查、`.(T)`、从属与位域内置函数），用例对其无意义
                     skipped = skipped + 1
-                    cprint("  [SKIP] err/%s.nc (IR 前端暂无 M2 静态检查)", stem)
+                    cprint("  [SKIP] err/%s.nc (IR 前端未实现该检查/语法)", stem)
                     goto continue_err
                 end
 

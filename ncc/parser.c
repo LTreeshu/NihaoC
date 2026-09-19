@@ -1524,7 +1524,16 @@ static void parse_if_stmt(CompilerState *cs)
 
 static void parse_postfix(CompilerState *cs, int line);
 
-/* 关键字内置函数：sizeof/typeof/alignof/offsetof/visof。
+/* 聚合体成员查找：owner 的 members 链（sym_add_member 串成） */
+static Symbol *agg_member_sym(Symbol *owner, const char *name)
+{
+    if (!owner || !name) return NULL;
+    for (Symbol *m = owner->members; m; m = m->next)
+        if (strcmp(m->name, name) == 0) return m;
+    return NULL;
+}
+
+/* 关键字内置函数：sizeof/typeof/alignof/offsetof/visof/structof/unionof/holdof/bitoffsetof。
  * 这些是关键字 token（TOK_SIZEOF 等），identifier 分支的字符串比较
  * 永远走不到 → 在 parse_primary 的 switch 中直接分派到这里（修复 TODO P1）。 */
 static void parse_builtin_kw(CompilerState *cs, TokenType kw)
@@ -1595,6 +1604,125 @@ static void parse_builtin_kw(CompilerState *cs, TokenType kw)
         else next_tok(cs);
         return;
     }
+    /* 从属查询 structof/unionof/holdof(Type, member, ptr)：由成员地址反推所属
+     * 聚合体首地址（container_of）。structof 只接受 struct、unionof 只接受 union，
+     * holdof 两者通用。返回 void*。 */
+    if (kw == TOK_STRUCTOF || kw == TOK_UNIONOF || kw == TOK_HOLDOF) {
+        const char *kwname = kw == TOK_STRUCTOF ? "structof" :
+                             kw == TOK_UNIONOF ? "unionof" : "holdof";
+        CType tmp;
+        parse_type(cs, &tmp);
+        const char *tname = c_type_name(&tmp);
+        Symbol *owner = tmp.sym;
+        if (cur_tok(cs) != TOK_COMMA) {
+            nihao_error(cs, "%s expects (%s, member, ptr)", kwname, tname);
+        } else {
+            next_tok(cs);
+            char member[128];
+            snprintf(member, sizeof(member), "%s", cs->parser.lex->tok_str);
+            next_tok(cs);
+            if (!owner || (owner->kind != SYM_STRUCT && owner->kind != SYM_UNION)) {
+                nihao_error(cs, "%s expects a struct/union type, got '%s'", kwname, tname);
+            } else if (kw == TOK_STRUCTOF && owner->kind != SYM_STRUCT) {
+                nihao_error(cs, "structof: '%s' is not a struct (use unionof/holdof)", tname);
+            } else if (kw == TOK_UNIONOF && owner->kind != SYM_UNION) {
+                nihao_error(cs, "unionof: '%s' is not a union (use structof/holdof)", tname);
+            } else if (!agg_member_sym(owner, member)) {
+                nihao_error(cs, "%s: no member '%s' in type '%s'", kwname, member, tname);
+            } else if (cur_tok(cs) != TOK_COMMA) {
+                nihao_error(cs, "%s expects (%s, member, ptr)", kwname, tname);
+            } else {
+                next_tok(cs);
+                cgen_raw("((void*)((char*)(");
+                parse_expression(cs);
+                cgen_raw(") - offsetof(%s, %s)))", tname, member);
+            }
+        }
+        if (cur_tok(cs) != TOK_RPAREN) nihao_error(cs, "expected ')' in %s", kwname);
+        else next_tok(cs);
+        return;
+    }
+
+    /* 位域偏移 bitoffsetof(Type, member)：按声明顺序的位偏移（编译期常量）。
+     * 模型：位域在同一存储单元内按声明顺序紧密排列，单元容量为基类型的位宽，
+     * 单元起始字节按其基类型对齐向上取整；单元起点之前的字节偏移由 C 的
+     * offsetof/sizeof（最近一个非位域成员）给出，因此不依赖自算结构体布局。 */
+    if (kw == TOK_BITOFFSETOF) {
+        CType tmp;
+        parse_type(cs, &tmp);
+        const char *tname = c_type_name(&tmp);
+        Symbol *owner = tmp.sym;
+        char member[128];
+        unsigned int bits = 0;        /* 目标所在单元之前的单元内已累计位数 */
+        unsigned int full_units = 0;  /* 目标之前在本锚点后换过的整单元数 */
+        if (cur_tok(cs) != TOK_COMMA) {
+            nihao_error(cs, "bitoffsetof expects (type, member)");
+        } else {
+            next_tok(cs);
+            snprintf(member, sizeof(member), "%s", cs->parser.lex->tok_str);
+            next_tok(cs);
+            Symbol *target = agg_member_sym(owner, member);
+            if (!target || !target->type || !target->type->bit_size) {
+                nihao_error(cs, "bitoffsetof: '%s' is not a bitfield member of type '%s'",
+                            member, tname);
+            } else {
+                const char *anchor = NULL;
+                const char *anchor_c = NULL;
+                const char *unit_c = c_type_name(target->type);
+                unsigned int unit_bits = target->type->size * 8;
+                int in_unit = 0;
+                for (Symbol *m = owner->members; m && m != target; m = m->next) {
+                    CType *mt = m->type;
+                    if (!mt) continue;
+                    if (!mt->bit_size) {
+                        in_unit = 0;
+                        bits = 0;
+                        full_units = 0;
+                        anchor = m->name;
+                        anchor_c = c_type_name(mt);
+                        continue;
+                    }
+                    unsigned int cap = mt->size * 8;
+                    if (!cap) {
+                        nihao_error(cs, "bitoffsetof: unknown storage size for member '%s'",
+                                    m->name);
+                        break;
+                    }
+                    if (in_unit && strcmp(unit_c, c_type_name(mt)) != 0) {
+                        nihao_error(cs, "bitoffsetof: mixed bitfield storage types "
+                                        "are not supported ('%s' after '%s')",
+                                    m->name, member);
+                        break;
+                    }
+                    if (!in_unit) {
+                        in_unit = 1;
+                        unit_bits = cap;
+                        bits = 0;
+                    }
+                    if (bits + mt->bit_size > unit_bits) {
+                        full_units++;
+                        bits = mt->bit_size;
+                    } else {
+                        bits += mt->bit_size;
+                    }
+                }
+                /* 对齐以基类型 sizeof 近似（tcc 无 _Alignof；基本整型 align == size） */
+                if (anchor) {
+                    cgen_raw("((((((offsetof(%s, %s) + sizeof(%s)) + (sizeof(%s) - 1))"
+                             " / sizeof(%s) * sizeof(%s)) + %lluULL) * 8ULL + %uULL))",
+                             tname, anchor, anchor_c, unit_c, unit_c, unit_c,
+                             (unsigned long long)full_units * (unit_bits / 8), bits);
+                } else {
+                    cgen_raw("((((%lluULL) * 8ULL + %uULL)))",
+                             (unsigned long long)full_units * (unit_bits / 8), bits);
+                }
+            }
+        }
+        if (cur_tok(cs) != TOK_RPAREN) nihao_error(cs, "expected ')' in bitoffsetof");
+        else next_tok(cs);
+        return;
+    }
+
     nihao_error(cs, "unknown builtin keyword");
 }
 
@@ -1829,7 +1957,8 @@ static void parse_primary(CompilerState *cs)
     switch (tok) {
         case TOK_SIZEOF: case TOK_TYPEOF: case TOK_ALIGNOF:
         case TOK_OFFSETOF: case TOK_VISOF:
-            /* 关键字内置函数（TODO P1 修复） */
+        case TOK_HOLDOF: case TOK_STRUCTOF: case TOK_UNIONOF: case TOK_BITOFFSETOF:
+            /* 关键字内置函数：词法已归为独立 token，不走标识符路径 */
             parse_builtin_kw(cs, tok);
             break;
         case TOK__UNDEF: case TOK__CONST: case TOK__FLOW:

@@ -5,7 +5,7 @@
 > - 以 [`Chinese.md`](./Chinese.md)（中文语法规范）为唯一语义标准，与编译器实现（`ncc/lexer.c`、`ncc/parser.c`、`ncc/token.h`）保持一致。
 > - 记号（terminals）一律使用双引号字符串；非终结符使用 `<...>` 尖括号表示。
 > - 约定：`::=` 定义；`|` 选择；`[ x ]` 可选（0 或 1 次）；`{ x }` 重复（0 或多次）；`( x | y )` 分组。
-> - 版本：v2.3（2026-09-19 修订：语法收敛——`?=` 安全赋值（PA-20）与 `?.` / `?(` 安全解引用（PA-21）两类附加记号移除，安全检查统一由 `=` 与 `.()` 自身承担；`TOK_SAFE_ASSIGN`/`TOK_SAFE_DOT` 仅词法保留）。上一版 v2.2（2026-09-19，`is <pattern> => <statement>` 单语句形式移除——`=>` 保留词法但语法不使用，`is` 只保留块形式且仅配合 `while` 循环体，PA-13 / PB-27.6 双前端对齐）。更早 v2.1（2026-09-15，指针语法收敛：一元 `*` 解引用移除，解引用统一 `.()`/`.(T)`/`->`）。
+> - 版本：v2.4（2026-09-20 修订：从属查询内置函数签名定为三参——`structof` / `unionof` / `holdof` 为 `(Type, member, ptr)`（原二参 `(Type, expr)` 无法给出成员偏移，无法由成员地址反推首地址），`bitoffsetof` 语义定为"声明序位偏移"（PA-22，A 后端落地；IR 前端属 2.0 布局待做）。上一版 v2.3（2026-09-19，语法收敛——`?=` 安全赋值（PA-20）与 `?.` / `?(` 安全解引用（PA-21）两类附加记号移除，安全检查统一由 `=` 与 `.()` 自身承担；`TOK_SAFE_ASSIGN`/`TOK_SAFE_DOT` 仅词法保留）。更早 v2.2（2026-09-19，`is <pattern> => <statement>` 单语句形式移除——`=>` 保留词法但语法不使用，`is` 只保留块形式且仅配合 `while` 循环体，PA-13 / PB-27.6 双前端对齐）。更早 v2.1（2026-09-15，指针语法收敛：一元 `*` 解引用移除，解引用统一 `.()`/`.(T)`/`->`）。
 
 ---
 
@@ -244,9 +244,13 @@
                    | "alignof" "(" <type-name> ")"
                    | "offsetof" "(" <type-name> "," <identifier> ")"
                    | "bitoffsetof" "(" <type-name> "," <identifier> ")"
-                   | "holdof" "(" <type-name> "," <expr> ")"
-                   | "structof" "(" <type-name> "," <expr> ")"
-                   | "unionof" "(" <type-name> "," <expr> ")"
+                     (* bitoffsetof(T, m)：位域成员 m 在 T 中的位偏移（按声明顺序的位布局模型，编译期常量） *)
+                   | "holdof" "(" <type-name> "," <identifier> "," <expr> ")"
+                   | "structof" "(" <type-name> "," <identifier> "," <expr> ")"
+                   | "unionof" "(" <type-name> "," <identifier> "," <expr> ")"
+                     (* structof/unionof/holdof(T, m, ptr)：由成员地址 ptr 反推所属聚合体首地址，
+                        即 (char*)ptr - offsetof(T, m)，返回 void*。structof 仅接受 struct、
+                        unionof 仅接受 union，holdof 两者通用（v2.4，PA-22） *)
                    | "visof" "(" <expr> ")"
                    | "len" "(" <identifier> ")"
                      (* len(x)：x 的逻辑长度——数组=容量、动态字符串 char[]=字面量长、
