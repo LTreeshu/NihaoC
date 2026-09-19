@@ -180,6 +180,8 @@ A 后端把 `sizeof` / `typeof` / `alignof` / `offsetof` / `bitoffsetof` / `viso
 | `is _` 通配符 | v1.0.2 补全（PA-15） | PB-27.5 先于 1.0 线完成（parser.c + irparse.c 双前端） |
 | 反向范围 `lo > hi` 校验 | ⚠️ 未实现 | **IR 前端已实现**（irparse.c:2259–2261 编译期报错）；A 后端 `parser.c` 仍不校验 |
 | `__is_val` 类型 | `int` 固定 | **类型感知**，等于 `while` 条件表达式类型（PB-27.7） |
+| 结构体数组成员 | **A 后端可编译可运行**：`T struct { n char[8] a i32 }` 与省略长度的 `name char[]` 均接受（PA-23 探针） | **IR 前端拒绝**：任何数组类型成员都报 `ir: expected member name`（`char[8]` 与 `char[]` 同），标量成员正常。标量-only 结构体两前端一致 |
+| `print` 内建 | A 后端把 `print(...)` 转发为 C `printf(...)`（第一参数即格式串，多余参数不自动拼接） | **IR 前端未内建 `print`**：作为未知函数直出，链接期报 `undefined symbol 'print'`（ir-native 为 `__imp_print`）；IR 侧仅 `puts` 可用，故 `IR_SUBSET` 用例一律用 `puts` |
 | 循环体外使用 `is` | A 后端 `while_depth` 守卫即时报错（parser.c:1450–1457，v1.0.2 / PA-18）+ IR 前端 `is_val_vreg < 0` 报错 | 双前端均拒绝：IR 前端由 PB-27.1 先落地，**A 后端守卫尚未从 1.0 线回灌**（PB `parser.c` 的 `case TOK_IS` 仍为通用分支、无守卫） |
 | 多个 `is-clause` 无 fallthrough | ⚠️ 未实现（PA-16 登记待决策） | **同样未实现**（并列 `if` / 独立比较跳转），待与 PA-16 一并决策 |
 | `?=` 安全赋值记号 | 已从语法移除，A 后端显式拒绝（PA-20，BNF v2.3） | **仍接受**：PB `parser.c` 在声明（498）、语句窥探（1544）、赋值（2505）三处把 `?=` 与 `=` 同路处理，`token.h:112` 注释亦未更新；移除需回灌 PB（与 `while_depth` 守卫同批） |

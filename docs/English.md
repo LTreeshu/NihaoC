@@ -773,7 +773,7 @@ func add(a i8, b i8) i8 {
 }
 
 // returns a struct (non-pointer)
-Person struct { name char[], age i32 }
+Person struct { name char[] age i32 }
 func make_person(name char[], age i32) Person {
     return Person{name, age}
 }
@@ -1386,7 +1386,7 @@ if visof(ptr) == _flow {
 Struct and array access follow the same rules:
 
 ```nihao
-Person struct { name char[], age i32 }
+Person struct { name char[] age i32 }
 flow person_ptr void = &some_person
 flow name_ptr void = person_ptr.(Person).name   // field transfer must satisfy visibility
 ```

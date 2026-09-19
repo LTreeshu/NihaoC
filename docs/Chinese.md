@@ -756,7 +756,7 @@ func add(a i8, b i8) i8 {
 }
 
 // 返回结构体（非指针）
-Person struct { name char[], age i32 }
+Person struct { name char[] age i32 }
 func make_person(name char[], age i32) Person {
     return Person{name, age}
 }
@@ -1369,7 +1369,7 @@ if visof(ptr) == _flow {
 结构体和数组访问遵循同样的规则：
 
 ```nihao
-Person struct { name char[], age i32 }
+Person struct { name char[] age i32 }
 flow person_ptr void = &some_person
 flow name_ptr void = person_ptr.(Person).name   // 字段传递需符合可见性
 ```
