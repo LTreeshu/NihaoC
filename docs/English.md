@@ -725,11 +725,19 @@ while opt {
 
 The return attribute of a function determines which attribute the **caller must use** to receive the return value, guaranteeing memory safety.
 
-| Function return attr | Allowed receiving attrs | Forbidden attrs             | Reason                                  |
-| -------------------- | ----------------------- | --------------------------- | --------------------------------------- |
-| `flow`               | `flow`                  | `func`, `static`, `const`   | ownership must transfer; only `flow` manages memory |
-| `static`             | `static`, `const`       | `flow`, `var`               | static memory has the longest lifetime; may borrow safely but never free |
-| `const`              | `const`                 | `func`, `static`, `flow`    | the read-only constraint must be preserved |
+| Function return attr | Allowed receiving attrs | Forbidden attrs          | Reason                                  |
+| -------------------- | ----------------------- | ------------------------ | --------------------------------------- |
+| `flow`               | `flow`                  | `static`, `const`, `var` | ownership must transfer; only `flow` manages memory |
+| `static`             | `static`, `const`       | `flow`, `var`            | static memory has the longest lifetime; may borrow safely but never free |
+| `const`              | `const`                 | `static`, `flow`, `var`  | the read-only constraint must be preserved |
+
+> `func` is a function return attribute (§7.1.2), not a variable storage duration, so it cannot be used as a receiving attribute and does not appear in this table (§12.1 likewise states that `func` does not participate in the transfer matrix).
+
+**Why this table is stricter than the §12.1 transfer matrix**: §12.1 constrains assignments **between variables that already exist in the same scope** — the source is still alive, and when the borrow ends it either unfreezes or is freed by its owner, so `flow → const` and `flow → var` are safe borrows. A function return value has no such source: the temporary dies as soon as the receiving statement ends. Receiving a `flow` return value through `var` or `const` leaves nobody responsible for freeing (a leak) and the borrowed address dies together with the temporary (a dangling reference). Therefore:
+
+- A `flow` return value may only be received by `flow`, which takes over ownership and the responsibility to free.
+- A `const` return value may only be received by `const`; the read-only promise must not be relaxed (the same root as §12.1 forbidding `const → var`).
+- The permitted cells `flow → const` and `flow → var` in the §12.1 matrix apply to assignment only, not to receiving return values.
 
 ```nihao
 // receiving examples
@@ -737,7 +745,10 @@ flow buf void = create_buffer(1024)      // flow → flow ✅
 static p void = get_counter()            // static → static ✅
 const ver void = get_version()           // const → const ✅
 // flow bad = get_version()              // const → flow ❌ compile error
+// const q void = create_buffer(1024)    // flow → const ❌ compile error: nobody frees it and the temporary is already dead
 ```
+
+> **Implementation status**: this check is not enforced on the 1.0 line (≤ v1.0.2) — the illegal receipients in the table above are forbidden by the specification but not yet reported by the compiler. Return-value visibility prefix checks are implemented from the 2.0 line (PB-29); the 1.0 frozen line does not port them. See the "Caller Receiving Rules (§7.3)" table in [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md).
 
 ---
 
@@ -1202,7 +1213,7 @@ Each cell in the matrix is determined by two dimensions: storage duration and ow
 
 #### `func` attribute
 
-`func` is a function return attribute (§7.1.2), not a variable storage duration, and does not participate in this matrix. See §7.3 for the rules governing function return values.
+`func` is a function return attribute (§7.1.2), not a variable storage duration, and does not participate in this matrix. This matrix describes **assignment between variables in the same scope** only; the rules for receiving function return values are in §7.3, which is stricter than this matrix — the matrix permits borrow-style assignments such as `flow → const` and `flow → var`, yet a `flow` return value may only be received by `flow`.
 
 > For the detailed correspondence between the specification and the compiler implementation, see [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md).
 
