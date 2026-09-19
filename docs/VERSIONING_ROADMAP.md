@@ -38,7 +38,7 @@
 
 - [x] **examples/ 示例集**（8/30）：7 例已建（hello/fib/struct/pointer/string/cooking/multiret）+ README 对照表；**6 例 1.0 可编译验证通过**（c/native 编译+运行）；期间暴露并修复 A 方案 `p.()` 解引用类型 bug（此前硬编码 `(*(void**)p)` → 现按符号指针 ref 输出 `(*(int32_t*)p)`）；06_cooking 标注 2.0 预览（IR_ONLY 子集语法）
 - [x] **README 更新**（8/31）：安装小节（xmake + tcc 依赖探测与获取）、CLI 命令一览表、后端表标注 1.0/2.0 范围（c/native = 1.0 正式支持；ir-* = 2.0 预览）、-run Linux only 说明
-- [x] **语言规格冻结**（8/31）：BNF v2.0 终校完成——补 `=>`（TOK_FAT_ARROW）词法、`->` 指针成员访问 postfix 规则、`T*` 具名指针 pointer-type 规则；Chinese/English 补指针声明双支持（隐式推断 + 显式声明）；语法元素表核对通过（`=>`/`->` 已含）；multireturn 无残留
+- [x] **语言规格冻结**（8/31）：BNF v2.0 终校完成——补 `=>`（TOK_FAT_ARROW）词法、`->` 指针成员访问 postfix 规则、`T*` 具名指针 pointer-type 规则；Chinese/English 补指针声明双支持（隐式推断 + 显式声明）；语法元素表核对通过（`=>`/`->` 已含）；multireturn 无残留。**注**：1.0.x 起 `T*` 具名指针声明与一元 `*` 解引用已移除（解引用统一 `.()`/`.(T)`/`->`）；2.0 起 `=>` 单语句匹配形式已移除（PA-13 / PB-27.6，BNF v2.2），`=>` 保留词法但语法不使用；`->` 保留
 - [x] **版本与发布**（8/31）：CHANGELOG.md 建立（M0→M4→1.0 里程碑条目）；`v1.0.0` tag 已本地创建（未推送，见 §3.2）
 - [x] **Linux 实测（PA-9，2026-08-31 WSL Ubuntu-24.04 完成）**：`-run` 内存执行修复（tcc_relocate(NULL) 语义误判→直接 tcc_run）、libtcc.so `-Bsymbolic` 重建（符号插值劫持）、SysV 调用约定（x87 浮点）；c/native 各 12P/0F/5S + examples 6/6 双后端一致——**Windows + Linux 双平台验证通过**（1.0 范围已含 Linux）
 
