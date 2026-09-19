@@ -81,8 +81,8 @@
 - `&` – address‑of operator
 - `=` – assignment operator (every assignment performs the visibility-compatibility check, i.e. the former "safe assignment" semantics)
 - `.` – struct/union member access
-- `.()` – void pointer dereference
-- `.(type)` – typed dereference (with built‑in out‑of‑bounds check)
+- `.()` – void pointer dereference (performs the visibility check)
+- `.(type)` – typed dereference (performs the visibility check plus a compile-time out-of-bounds check)
 - `->` – struct/union pointer member access
 - `{}` – block / initializer list / multiple return values
 - `()` – function call, type cast

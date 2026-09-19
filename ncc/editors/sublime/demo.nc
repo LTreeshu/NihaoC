@@ -38,10 +38,10 @@ func main() {
     color Color = GREEN
     sum i32 = 0
 
-    // pointer dereference .(T) and safe deref ?.(T)
+    // pointer dereference .() and typed .(T) (checks visibility + width)
     flow ptr void = malloc(i32)
     ptr.(i32) = 42
-    value i32 = ptr?.(i32)
+    value i32 = ptr.(i32)
 
     // slice range a..b
     arr i32[5] = {1, 2, 3, 4, 5}

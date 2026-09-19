@@ -471,7 +471,7 @@ static int is_expr_continuer(TokenType t)
 {
     switch (t) {
         case TOK_LPAREN: case TOK_DOT: case TOK_LBRACKET: case TOK_ARROW:
-        case TOK_DOT_PAREN: case TOK_SAFE_DOT:
+        case TOK_DOT_PAREN:
         case TOK_PLUS: case TOK_MINUS: case TOK_STAR: case TOK_SLASH:
         case TOK_PERCENT: case TOK_EQ: case TOK_NE: case TOK_LT: case TOK_GT:
         case TOK_LE: case TOK_GE: case TOK_LOGICAL_AND: case TOK_LOGICAL_OR:
@@ -1018,6 +1018,7 @@ void parse_declaration(CompilerState *cs)
             next_tok(cs);
         }
         cgen_raw(" = ");
+        cs->parser.malloc_bytes = 0;
         /* Ownership/lifetime check: single-identifier initializer */
         if (cur_tok(cs) == TOK_IDENTIFIER) {
             LexerState *lex = cs->parser.lex;
@@ -1038,6 +1039,8 @@ void parse_declaration(CompilerState *cs)
         } else {
             parse_expression(cs);
         }
+        /* malloc(T) 初始化：记录目标字节数，供 `.()` 解引用做越界检查（§12.1） */
+        if (var_sym) var_sym->pointee_bytes = cs->parser.malloc_bytes;
     }
     cgen_line(";");
 }
@@ -1956,15 +1959,24 @@ static void parse_primary(CompilerState *cs)
                 if (strcmp(name, "malloc") == 0) {
                     /* malloc(i32) / malloc(u8, 100) / malloc(void[3]) */
                     CType tmp;
+                    cs->parser.malloc_bytes = 0;
                     if (cur_tok(cs) == TOK_INT_CONST) {
                         /* malloc(64): raw byte count */
+                        cs->parser.malloc_bytes = (unsigned int)cs->parser.lex->tok_val.i;
                         cgen_raw("malloc(%lld)", (long long)cs->parser.lex->tok_val.i);
                         next_tok(cs);
                     } else {
                         parse_type(cs, &tmp);
+                        cs->parser.malloc_bytes = tmp.size;
                         cgen_raw("malloc(sizeof(%s)", c_type_name(&tmp));
                         if (cur_tok(cs) == TOK_COMMA) {
                             next_tok(cs);
+                            /* malloc(T, n)：元素数为字面量时记录总字节数 */
+                            if (cur_tok(cs) == TOK_INT_CONST && tmp.size)
+                                cs->parser.malloc_bytes =
+                                    tmp.size * (unsigned int)cs->parser.lex->tok_val.i;
+                            else
+                                cs->parser.malloc_bytes = 0;
                             cgen_raw(" * (");
                             parse_expression(cs);
                             cgen_raw(")");
@@ -2044,7 +2056,7 @@ static void parse_primary(CompilerState *cs)
     }
 }
 
-/* Dereference chain: x.(T) / x?.(T) / x.()  followed by .m [i] (args) ... */
+/* Dereference chain: x.(T) / x.()  followed by .m [i] (args) ... */
 static void parse_deref_chain(CompilerState *cs, int line)
 {
     char *name = cs->parser.lex->tok_str;
@@ -2054,8 +2066,8 @@ static void parse_deref_chain(CompilerState *cs, int line)
         vis_check_usable(cs, sym);
     }
     next_tok(cs);                       /* consume ident */
-    TokenType op = cur_tok(cs);         /* .( or ?. */
     next_tok(cs);                       /* consume .( */
+    cs->parser.lhs_was_deref = 1;       /* 赋值左侧是解引用链，而非对指针本身赋值 */
 
     if (cur_tok(cs) == TOK_RPAREN) {
         /* .() : dereference pointer one level
@@ -2071,11 +2083,23 @@ static void parse_deref_chain(CompilerState *cs, int line)
         }
     } else {
         CType tmp;
+        unsigned int avail = 0;
         parse_type(cs, &tmp);
+        /* `.()` 越界检查（§12.1）：读取宽度不得超过指针当前所指对象的静态字节数 */
+        if (sym && sym->kind == SYM_VARIABLE) {
+            avail = sym->pointee_bytes;
+            if (!avail && sym->type && sym->type->kind == TYPE_POINTER &&
+                sym->type->ref && sym->type->ref->kind != TYPE_VOID) {
+                avail = sym->type->ref->size;
+            }
+        }
+        if (avail && tmp.size > avail) {
+            nihao_error(cs, "'.(%s)' reads %u bytes but the pointer target holds only %u bytes",
+                        c_type_name(&tmp), tmp.size, avail);
+        }
         cgen_raw("(*(%s*)%s)", c_type_name(&tmp), name);
         expect(cs, TOK_RPAREN);
     }
-    (void)op;
 
     /* continue postfix chain */
     for (;;) {
@@ -2138,16 +2162,16 @@ static void parse_deref_chain(CompilerState *cs, int line)
     }
 }
 
-/* Postfix: call / .(T) deref / ?.(T) safe deref / [i] / [a..b] / .member / ++ -- */
+/* Postfix: call / .(T) deref / [i] / [a..b] / .member / ++ -- */
 static void parse_postfix(CompilerState *cs, int line)
 {
     (void)line;
-    /* Lookahead: dereference chain "x.(T)" / "x?.(T)" / "x.()" */
+    /* Lookahead: dereference chain "x.(T)" / "x.()" */
     if (cur_tok(cs) == TOK_IDENTIFIER) {
         LexerState *lex = cs->parser.lex;
         lex->peek_valid = 0;
         lexer_peek(lex);
-        if (lex->peek_tok == TOK_DOT_PAREN || lex->peek_tok == TOK_SAFE_DOT) {
+        if (lex->peek_tok == TOK_DOT_PAREN) {
             lex->peek_valid = 0;
             parse_deref_chain(cs, cs->parser.lex->line_num);
             return;
@@ -2159,7 +2183,12 @@ static void parse_postfix(CompilerState *cs, int line)
 
     for (;;) {
         TokenType tok = cur_tok(cs);
-        if (tok == TOK_LPAREN) {
+        if (tok == TOK_SAFE_DOT) {
+            /* '?.': 已从语法移除，安全检查统一由 `.()` 承担（BNF v2.3 / PA-21） */
+            nihao_error(cs, "'?.' is not part of the grammar; use '.()' "
+                            "(dereference performs the visibility and bounds checks)");
+            next_tok(cs);
+        } else if (tok == TOK_LPAREN) {
             /* function call */
             next_tok(cs);
             cgen_raw("(");
@@ -2394,6 +2423,8 @@ static void parse_assign(CompilerState *cs, int line)
             /* LHS must be writable (not frozen by an active borrow) */
             if (lhs && lhs->kind == SYM_VARIABLE) {
                 vis_check_writable(cs, lhs);
+                /* 对指针本身重新赋值：其目标宽度不再静态可知，撤销记录（保守不检查） */
+                if (!cs->parser.lhs_was_deref) lhs->pointee_bytes = 0;
             }
             next_tok(cs);
             cgen_raw(" = ");
@@ -2451,5 +2482,6 @@ static void parse_assign(CompilerState *cs, int line)
 void parse_expression(CompilerState *cs)
 {
     /* 换行即语句边界：binop 链各层按行号停止（函数体内 lexer 不产生 NEWLINE） */
+    cs->parser.lhs_was_deref = 0;
     parse_assign(cs, cs->parser.lex->line_num);
 }

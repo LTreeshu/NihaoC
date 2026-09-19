@@ -123,6 +123,8 @@ struct Symbol {
     /* 0 = valid, 1 = frozen (borrowed), 2 = invalid (ownership moved) */
     int borrow_state;
     Symbol *borrow_source;      /* who this var borrows from (for unfreeze) */
+    /* 指针当前所指对象的字节数，`.()` 越界检查用；0 = 静态未知（不检查） */
+    unsigned int pointee_bytes;
     
     /* Location in source */
     char *filename;
@@ -225,6 +227,8 @@ typedef struct {
     /* Expression parsing */
     int *macro_ptr;
     int unget_buffer_enabled;
+    unsigned int malloc_bytes;  /* 本次 malloc(T) 请求的字节数，供声明初始化记录 pointee_bytes */
+    int lhs_was_deref;          /* 赋值左侧是解引用链（`p.(T) = v`）而非对 p 本身赋值 */
     
     /* Error handling */
     int error_count;

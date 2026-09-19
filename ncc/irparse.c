@@ -1030,6 +1030,13 @@ static int ir_primary(CompilerState *cs)
             if (vetyp[vi] == 1) ir_set_double(vr);   /* PB-1：浮点元素标记（运算/比较用） */
             return vr;
         }
+        if (cur_tok(cs) == TOK_SAFE_DOT) {
+            /* '?.': 已从语法移除，解引用检查统一由 `.()` 承担（BNF v2.3 / PA-21，与 A 后端同口径） */
+            nihao_error(cs, "ir: '?.' is not part of the grammar; use '.()' "
+                            "(dereference performs the visibility and bounds checks)");
+            next_tok(cs);
+            return ir_new_vreg(F);
+        }
         if (cur_tok(cs) == TOK_DOT_PAREN) {
             /* 指针解引用 p.() → LOAD(*p)（p 变量存目标地址值；全量同语法。
              * 注意 DOT_PAREN 已含 '('——token 流 p, DOT_PAREN, ')'） */

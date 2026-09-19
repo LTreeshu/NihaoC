@@ -161,7 +161,7 @@ typedef enum {
     TOK_TERNARY,        /**< Ternary conditional operator `?:` overall representation (used by some parsers)  */
     TOK_ELLIPSIS,
     TOK_DOUBLE_COLON,
-    TOK_SAFE_DOT,       /**< NihaoC safe dereference operator `?.`  */
+    TOK_SAFE_DOT,       /**< `?.` 词法保留，语法不使用：解引用统一 `.()`，检查由其承担（BNF v2.3 / §12.1）  */
 
     _KeywordDefTable_
 

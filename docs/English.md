@@ -253,7 +253,7 @@ varptr void = &var
 // single-level pointer
 ptr void = malloc(i32)   // allocate memory
 ptr.(i32) = 42           // dereference & assign
-ptr?.(i64)               // safe dereference — compile error: i64 > i32, out of bounds
+ptr.(i64)                // compile error: i64 > i32, out of bounds (the check belongs to `.()` itself)
 
 // multi-level pointer
 ptr2 void[] = &ptr       // pointer-to-pointer
@@ -1328,11 +1328,11 @@ func debug_vis(ptr void) {
 
 ### 14.1 Safe Dereference and Access
 
-Use the `?.` operator for safe dereference; the compiler combines visibility checks with bounds checking:
+The dereference operator `.(T)` performs the safety checks itself — no extra token is needed (the former `?.` / `?(` operators have been removed from the grammar, see BNF v2.3). The compiler first validates the pointer's visibility (a frozen or invalidated source is a compile-time error), then compares `sizeof(T)` against the static byte width of the object the pointer refers to, rejecting an over-wide read:
 
 ```nihao
 func safe_access(flow ptr void) {
-    value = ptr?.(i32)   // ensures ptr is non-null and visibility is correct
+    value = ptr.(i32)   // readable only if visibility is valid and i32 fits the pointed object
 }
 
 // equivalent to
@@ -1342,6 +1342,8 @@ if visof(ptr) == _flow {
     // compile-time error
 }
 ```
+
+> **Non-nullness is guaranteed statically**: a pointer declaration must be initialised and null pointers may not be declared (§5.1), so there is no "dereference of an uninitialised pointer" path; a runtime check for `malloc` returning `NULL` is 2.0 scope (current state: `docs/IMPLEMENTATION_STATUS.md`).
 
 Struct and array access follow the same rules:
 
@@ -1567,4 +1569,4 @@ All of it is enforced statically — no runtime garbage collector, no runtime co
 | Compile-time  | `cooking` `align` `static_assert` |
 | Introspection | `sizeof` `typeof` `alignof` `offsetof` `bitoffsetof` `holdof` `structof` `unionof` `visof` `malloc` |
 | Literals      | `true` `false` |
-| Operators     | `+ - * / % ++ -- == != < > <= >= && \|\| ! & \| ^ ~ << >> = += -= *= /= %= &= \|= ^= <<= >>= -> . .( ?. ?( ? : :: , .. # ; ( ) [ ] { }` |
+| Operators     | `+ - * / % ++ -- == != < > <= >= && \|\| ! & \| ^ ~ << >> = += -= *= /= %= &= \|= ^= <<= >>= -> . .( ? : :: , .. # ; ( ) [ ] { }` |
