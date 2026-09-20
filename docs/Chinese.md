@@ -588,7 +588,7 @@ if i < 3 {
 | `Struct(f1, f2)` | 类型匹配 + 字段解构 | 绑定各字段 | `is Point(x, y) { ... }` |
 | `Variant(pat)` | ADT tag 匹配 + 子模式 | 绑定载荷 | `is Some(v) { ... }` |
 
-> **实现状态（1.0 发布线，≥ v1.0.2）**：A 后端（c/native）支持整数字面量、负整数、闭区间 `lo..hi`、枚举变体、可见性枚举与 `_` 通配符。差异项：`<identifier>` 按**值**比较而非变量绑定；结构体解构与 ADT 变体解构为预留语法；多个 `is-clause` 目前生成并列 `if`，"首个匹配即止（无 fallthrough）"尚未实现。逐项对应关系见 `IMPLEMENTATION_STATUS.md`。
+> **实现状态（1.0 发布线，≥ v1.0.2）**：A 后端（c/native）支持整数字面量、负整数、闭区间 `lo..hi`、枚举变体、可见性枚举与 `_` 通配符，并实现「首个匹配者执行（无 fallthrough）」——每轮迭代至多执行一个 `is-clause` 块。差异项：`<identifier>` 按**值**比较而非变量绑定；结构体解构与 ADT 变体解构为预留语法；IR 后端（2.0 预览）仍把多个 `is-clause` 编译为并列 `if`，条件重叠时可连续执行，待 2.0 对齐。逐项对应关系见 `IMPLEMENTATION_STATUS.md`。
 
 #### 语义规则
 

@@ -1258,13 +1258,16 @@ static void parse_is_stmt(CompilerState *cs)
 {
     /* Pattern match inside a while loop:
      *   is -1 { ... }   /   is 0..50 { ... }   /   is _flow { ... }
-     * Matches against the implicit __is_val temp (set by while). */
+     * Matches against the implicit __is_val temp (set by while).
+     * 多个 is-clause 按源码顺序求值、首个匹配者执行（§6.1 无 fallthrough）：
+     * 每子句在守卫中检查并置位 __is_matched，置位放在条件里是因为块体由
+     * parse_statement 整体输出，无法在其 { 之后插入语句。 */
     next_tok(cs);
     TokenType t = cur_tok(cs);
     if (t == TOK_IDENTIFIER && strcmp(cs->parser.lex->tok_str, "_") == 0) {
         /* 通配符：匹配任意 __is_val（恒真）——文档 pattern 列表含 _ */
         next_tok(cs);
-        cgen_raw("if (1)");
+        cgen_raw("if (!__is_matched && (1) && (__is_matched = 1))");
         if (cur_tok(cs) == TOK_LBRACE) {
             parse_statement(cs);
         } else {
@@ -1272,7 +1275,7 @@ static void parse_is_stmt(CompilerState *cs)
         }
         return;
     }
-    cgen_raw("if (__is_val");
+    cgen_raw("if (!__is_matched && (__is_val");
     if (t == TOK_MINUS) {
         next_tok(cs);
         if (cur_tok(cs) == TOK_INT_CONST) {
@@ -1313,7 +1316,7 @@ static void parse_is_stmt(CompilerState *cs)
         nihao_error(cs, "invalid 'is' pattern");
         next_tok(cs);
     }
-    cgen_raw(")");
+    cgen_raw(") && (__is_matched = 1))");
 
     if (cur_tok(cs) == TOK_LBRACE) {
         parse_statement(cs);
@@ -1360,6 +1363,7 @@ void parse_statement(CompilerState *cs)
             cgen_line("{");
             cgen_indent();
             cgen_line("int __is_val;");
+            cgen_line("int __is_matched = 0;");
             cgen_line("for (;;) {");
             cgen_indent();
             cgen_raw("__is_val = (");
@@ -1368,6 +1372,8 @@ void parse_statement(CompilerState *cs)
             cgen_line(";");
             /* 条件检查必须在 body 前（修复 do-while 语义 bug） */
             cgen_line("if (!__is_val) break;");
+            /* 每轮迭代重置匹配标记，供 is 子句实现"首个匹配者执行" */
+            cgen_line("__is_matched = 0;");
             cs->while_depth++;
             parse_statement(cs);           /* body */
             cs->while_depth--;
