@@ -118,6 +118,9 @@ struct Symbol {
     int is_extern;              /* external symbol */
     int is_builtin;             /* built-in function */
     int ownership_transferred;  /* flow ptr returned: skip auto-free */
+    /* flow 变量的初值（或最后一次整变量赋值）不是堆所有权：字符串字面量在静态只读段、
+       `&x` 指向栈帧或他方对象，两者在块/函数退出时 free() 都是非法释放（§11.1） */
+    int no_auto_free;
 
     /* Ownership/borrow state (NihaoC ch.12): */
     /* 0 = valid, 1 = frozen (borrowed), 2 = invalid (ownership moved) */

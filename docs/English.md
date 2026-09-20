@@ -1141,6 +1141,17 @@ var local_temp i32 = 100      // automatic storage, block-mutable
 
 > ¹ `const`'s storage duration depends on where it is declared: module-level declarations have static storage duration (live for the program's lifetime); block-level declarations have automatic storage duration (live only while the block is active). The read-only semantics are identical in both cases.
 
+**`flow` auto-release is issued only for heap ownership.** Whether leaving a block or function emits a release for a `flow` variable depends on whether the value it is currently bound to is a freshly acquired heap ownership:
+
+| RHS form | Storage source | On block/function exit |
+| --- | --- | --- |
+| `malloc(T)` and other heap allocations | a newly allocated heap block | auto `free` |
+| string literal `"..."` | static read-only storage | not released (freeing read-only storage would be illegal) |
+| `&x` | the frame or static storage holding `x` | not released (that address is already governed by `x`'s storage duration) |
+| `{v0, v1, ...}` aggregate initialiser | the variable's own aggregate storage | not released |
+
+Rebinding a whole declared `flow` variable (`p = rhs`) re-decides the source from the new right-hand value; `p.(T) = v` and `p[i] = v` modify the pointee and leave `p`'s own source untouched. A rebinding gives up ownership of the previous heap block, and the compiler does not insert a release at the rebinding point (deliberately conservative, to avoid double-free through aliases), so the old block leaks — exact reclamation belongs to the 2.0 ownership-transfer analysis.
+
 ---
 
 ### 11.2 Storage Duration and Assignment Safety Principle
@@ -1417,6 +1428,8 @@ Person struct { name char[] age i32 }
 flow person_ptr void = &some_person
 flow name_ptr void = person_ptr.(Person).name   // field transfer must satisfy visibility
 ```
+
+> `&some_person` points at `some_person`'s own storage (a frame or static segment), not at a newly allocated heap block, so `person_ptr` is not auto-released when it leaves scope (§11.1).
 
 ### 14.2 Complete Example (Ownership, Borrowing, and Storage Duration)
 

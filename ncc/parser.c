@@ -1092,6 +1092,15 @@ void parse_declaration(CompilerState *cs)
     long long str_lit_len = -1;   /* 字符串字面量初值的长度，供 `len(x)` 记录（§2.3） */
     if (has_init) {
         brace_init = (cur_tok(cs) == TOK_LBRACE);
+        /* 登记 flow 变量的存储来源（§11.1）：字符串字面量在静态只读段、`&x` 指向
+           栈帧或他方对象、`{...}` 是聚合存储，都不是堆所有权，退出时不得 free()；
+           malloc 等其余表达式按堆所有权处理。 */
+        if (var_sym && var_sym->vis == VIS_FLOW) {
+            TokenType rt = cur_tok(cs);
+            var_sym->no_auto_free = (rt == TOK_STRING_LITERAL ||
+                                     rt == TOK_BITWISE_AND ||
+                                     brace_init) ? 1 : 0;
+        }
         cs->parser.malloc_bytes = 0;
         cs->parser.rhs_was_slice = 0;
         cs->parser.slice_len_known = 0;
@@ -1241,7 +1250,7 @@ void parse_function(CompilerState *cs, Symbol *func_sym)
         if (s->vis == VIS_FLOW && s->type &&
             (s->type->kind == TYPE_VOID || s->type->kind == TYPE_POINTER ||
              s->type->kind == TYPE_STRING) &&
-            !s->ownership_transferred) {
+            !s->ownership_transferred && !s->no_auto_free) {
             cgen_line("free(%s);", s->name);
         }
     }
@@ -1601,7 +1610,7 @@ void parse_statement(CompilerState *cs)
                         (s->type->kind == TYPE_VOID ||
                          s->type->kind == TYPE_POINTER ||
                          s->type->kind == TYPE_STRING) &&
-                        !s->ownership_transferred) {
+                        !s->ownership_transferred && !s->no_auto_free) {
                         cgen_line("free(%s);", s->name);
                     }
                 }
@@ -2863,6 +2872,15 @@ static void parse_assign(CompilerState *cs, int line)
                         vis_check_assign(cs, lhs->vis, rhs, lhs, lhs->name);
                     }
                 }
+            }
+            /* 整变量重绑定即重新登记 flow 的存储来源（§11.1）：右值不是堆所有权时
+               块/函数退出不得 free()。`p.(T)=v`、`p[i]=v` 改的是所指对象，不动标记。 */
+            if (lhs && lhs->kind == SYM_VARIABLE && lhs->vis == VIS_FLOW &&
+                cs->parser.lhs_bare_ident) {
+                TokenType rt = cur_tok(cs);
+                lhs->no_auto_free = (rt == TOK_STRING_LITERAL ||
+                                     rt == TOK_BITWISE_AND ||
+                                     rt == TOK_LBRACE) ? 1 : 0;
             }
             parse_assign(cs, line);
             break;
