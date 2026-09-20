@@ -1,6 +1,6 @@
 # NihaoC 版本路线图：1.0（A 方案产品线）+ 2.0（B 方案演进线）
 
-> 制定日期：2026-08-30
+> 制定日期：2026-08-30 ｜ 最近更新：2026-09-20（一致性核对 C6b／PA-41：双仓库流程三处加废止注、PB 基线计数绑定制定时日期）
 > 决策：保留双路线——**A 方案 = 对外可用 1.0**（产品化，先发布）；**B 方案 = 下一代 2.0**（持续演进）。
 > 关联：`docs/PB24_DECISION.md`（三路线评估）、`docs/STAGE_SUMMARY.md`（§3.1 IR 覆盖清零）、`docs/GIT_CONVENTIONS.md`（分支约定，本文 §3 为其延伸）。
 
@@ -110,37 +110,39 @@ v2.0.0  = PB 就绪（阶段 3 达标）→ 合入 main → tag（届时 main �
 
 ```
 PA 开发：  feature/*（或直接）→ PA 验证（c/native 0 FAIL）→ 合 main → tag
-PB 开发：  直接 PB 提交 → IR 双后端/四后端一致性验证（56 PASS 0 FAIL 基线）
+PB 开发：  直接 PB 提交 → IR 双后端/四后端一致性验证（56 PASS 0 FAIL，2026-08-30 制定时用例集）
 hotfix：   PA 分支修 bug → 合 main（tag v1.0.x）→ 同步共享文件到 PB
 ```
 
 **共享文件同步规则**（lexer/token/sym/type/vis/stdlib/module/linker/xmake.lua 测试）：
 - 语法/词法演进：**先 PB 验证（IR 一致性防线更严）→ 再 PA 移植**（`=>` 即此流程先例）
 - bug 修复：**先 PA（1.0 优先）→ 再同步 PB**（或双线同改，提交信息注明对应）
-- 同步手段：现有 `cp + 双仓库双提交` 流程（ncc 活跃仓库 ↔ NihaoC）
+- 同步手段：现有 `cp + 双仓库双提交` 流程（ncc 活跃仓库 ↔ NihaoC）—— **【2026-09-20 废止】**（PA-38 定案、PA-40 从 `GIT_CONVENTIONS.md` §1 撤下）：该外部活跃仓库流程已停用，两条线现由同一仓库的 `PA` / `PB` 分支承载，共享文档跨分支用 `git merge-file` 三方合并同步；现行权威规则见 `GIT_CONVENTIONS.md` §1
 
 ### 3.4 双仓库映射
+
+> **【2026-09-20 本节整体废止，原文保留作历史记录】** 外部活跃仓库 `ncc`（分支 `feat/backend-ir`）与 `NihaoC/ncc/` 发布副本的 `cp + 双提交` 映射已停用（PA-38 定案、PA-40 入规则文档）。现行做法：`PA` / `PB` 两条线均在 `NihaoC` 单仓库内演进，共享文档跨分支以 `git merge-file` 三方合并（对 `merge-base 7d4c652`）同步，推送与 tag 由所有者逐次授权（`GIT_CONVENTIONS.md` §3.1）。下表与下两条工作流仅描述本文件制定时（2026-08-30）的状态。
 
 | 仓库 | 分支 | 角色 |
 | ---- | ---- | ---- |
 | NihaoC（发布副本） | main / PA / PB | 三分支齐全；PA 开发与 1.0 发布在此 |
 | ncc（活跃开发副本） | feat/backend-ir | **PB 线活跃开发**（对应 NihaoC/PB） |
 
-- **1.0 期间新增工作流**：PA 的共享文件改动（lexer 等）需 cp 到 ncc 活跃仓库保持同步（防 2.0 基线漂移）
-- PB 线活跃开发继续走 ncc（feat/backend-ir），周期性 cp 回 NihaoC/PB 提交
+- **1.0 期间新增工作流**（已废止）：PA 的共享文件改动（lexer 等）需 cp 到 ncc 活跃仓库保持同步（防 2.0 基线漂移）
+- PB 线活跃开发继续走 ncc（feat/backend-ir），周期性 cp 回 NihaoC/PB 提交（已废止）
 
 ### 3.5 发布门禁（合 main 条件）
 
 | 线 | 门禁 |
 | ---- | ---- |
 | PA → main | `xmake test -b c` / `-b native` 全量 0 FAIL；examples 全跑通；README/CHANGELOG 更新；规格文档冻结 |
-| PB → main | 全矩阵 56 PASS / 0 FAIL（或当时基线）；ir-c 输出质量达标；M2/link/布局函数补齐 |
+| PB → main | 全矩阵 56 PASS / 0 FAIL（2026-08-30 制定时用例集，或合入时当时基线）；ir-c 输出质量达标；M2/link/布局函数补齐 |
 
 ### 3.6 风险与对策
 
 | 风险 | 对策 |
 | ---- | ---- |
-| 双线共享文件漂移（如 lexer 各自改了 token） | 共享文件改动必须双仓库同步提交；提交信息互相注明 |
+| 双线共享文件漂移（如 lexer 各自改了 token） | 共享文件改动必须双仓库同步提交；提交信息互相注明（同步手段已改为单仓库分支 + `git merge-file` 三方合并，见 §3.4 废止注） |
 | PA 1.0 发布被 PB 需求干扰 | 1.0 特性冻结规则；PB 新语法先验证不反哺 PA（除非是 bug） |
 | 2.0 遥遥无期导致 PB 价值质疑 | 阶段 2（能力平移）设里程碑检查点；native 后端以"可跑真实程序"为 2.0 就绪 KPI |
 | 指针语义 A/B 分歧 | 1.0 决策的指针声明语义写入 BNF，PB 阶段 1 必须对齐（语言只有一个语义） |
