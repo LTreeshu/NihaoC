@@ -1,7 +1,10 @@
 -- NihaoC 编译器 - xmake 构建配置
 -- 使用 tcc 工具链构建（与代码生成后端保持一致，跨平台）
 set_project("nihao")
-set_version("1.0.2")
+-- 编译器版本单一真源：发布时只改这一处，set_version 与注入 C 的 NIHAO_VERSION 都由它派生
+local nihao_version = "1.0.2"
+set_version(nihao_version)
+add_defines("NIHAO_VERSION_TAG=" .. nihao_version)
 
 add_rules("mode.debug", "mode.release")
 set_languages("c99")

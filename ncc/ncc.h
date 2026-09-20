@@ -22,7 +22,15 @@
  * Configuration & Limits
  * ============================================================ */
 
-#define NIHAO_VERSION       "0.1.0"
+/* 版本单一真源是 xmake.lua 的 set_version，经 add_defines 以 NIHAO_VERSION_TAG 注入并字符串化。
+   不经 xmake 构建（如 LEGACY Makefile）时无该宏，落到下方占位值，不代表任一对外发布口径。 */
+#define NIHAO_STR_(x) #x
+#define NIHAO_STR(x)  NIHAO_STR_(x)
+#ifdef NIHAO_VERSION_TAG
+#define NIHAO_VERSION   NIHAO_STR(NIHAO_VERSION_TAG)
+#else
+#define NIHAO_VERSION   "0.0.0-unknown"
+#endif
 #define TOK_HASH_SIZE       2048
 #define TOK_MAX_SIZE        128
 #define MAX_NESTING_DEPTH   256

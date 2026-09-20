@@ -687,7 +687,7 @@ static int cmd_init(int argc, char **argv)
         fprintf(fp,
             "[project]\n"
             "name = \"%s\"\n"
-            "version = \"0.1.0\"\n"
+            "version = \"" NIHAO_VERSION "\"\n"
             "compiler = \"nihao\"\n"
             "\n"
             "[build]\n"
