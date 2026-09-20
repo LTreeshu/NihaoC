@@ -582,7 +582,7 @@ if i < 3 {
 }
 ```
 
-### 6.1 Pattern Matching (`is` Clauses)
+### 6.3 Pattern Matching (`is` Clauses)
 
 `is` clauses are used with `while` loops to pattern-match against the loop condition expression's value (implicitly stored in `__is_val`). `do` loops do not support `is` — this is a rule of the specification, not a consequence of `do`'s semantics: `do` and `while` are both pre-test loops in this language (the condition is written before the block and evaluated first), yet `is` binds only to `while`. Both frontends reject `is` inside any `do` body, including a `do` nested in a `while` (it must not silently match the outer loop's `__is_val`). Whether `do` gains `is` support is deferred to 2.0.
 
@@ -1266,9 +1266,9 @@ Each cell in the matrix is determined by two dimensions: storage duration and ow
 
 ---
 
-## 12.2 Transfer Rules for Function Parameters and Return Values
+### 12.2 Transfer Rules for Function Parameters and Return Values
 
-### Parameters
+#### Parameters
 
 The attribute of a function parameter determines how arguments are passed:
 
@@ -1298,7 +1298,7 @@ inspect(q)   // q frozen (read-only borrow)
 > The check is not back-ported to the frozen 1.0 line; the 2.0 line implements and verifies it (PB-26).
 > See [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md) for details.
 
-### Return values
+#### Return values
 
 - Returning a `flow` pointer: ownership transfers to the caller (the caller is responsible for freeing).
 - Returning a `static` pointer: returns a static address; the caller obtains a shared reference.
