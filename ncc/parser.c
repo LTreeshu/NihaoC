@@ -1088,6 +1088,7 @@ void parse_declaration(CompilerState *cs)
     char *rhs_text = NULL;
     int rhs_slice = 0;
     int rhs_indent = 0;
+    int str_init = 0;             /* 定长 char 数组以字面量初始化：保留数组存储 */
     long long str_lit_len = -1;   /* 字符串字面量初值的长度，供 `len(x)` 记录（§2.3） */
     if (has_init) {
         brace_init = (cur_tok(cs) == TOK_LBRACE);
@@ -1110,7 +1111,23 @@ void parse_declaration(CompilerState *cs)
                 }
             }
         }
-        if (vtype.kind == TYPE_ARRAY && vtype.param_count > 0 && !brace_init) {
+        str_init = (cur_tok(cs) == TOK_STRING_LITERAL &&
+                    vtype.kind == TYPE_ARRAY && type_array_count(&vtype) > 0);
+        if (str_init) {
+            /* `char[n] s = "..."`：按声明容量分配数组存储（不退化为指针），
+               字面量含结尾 NUL 必须放得下，诊断口径与切片赋值一致（§5.1.1） */
+            int cap = type_array_count(&vtype);
+            if (type_deepest_elem(&vtype)->kind != TYPE_CHAR) {
+                nihao_error(cs, "cannot initialize array '%s' with a string literal; "
+                                "its elements are not 'char', use a value list "
+                                "{v0, v1, ...}", name);
+            }
+            if (str_lit_len + 1 > cap) {
+                nihao_error(cs, "string needs %lld bytes with terminator, "
+                                "array '%s' holds %d",
+                            str_lit_len + 1, name, cap);
+            }
+        } else if (vtype.kind == TYPE_ARRAY && vtype.param_count > 0 && !brace_init) {
             int rmark = cgen_mark();
             parse_expression(cs);
             rhs_text = cgen_take_prefix(cs, rmark, &rhs_indent);

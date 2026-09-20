@@ -150,9 +150,10 @@ local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true,
 local IR_ONLY = {ir_builtin = true, ir_mr = true, ir_slice = true, ir_sparam = true, ir_cook = true}
 -- IR_ERR_SKIP: IR 前端未实现 M2 静态检查、不支持 `.(T)` 类型化解引用（含其宽度检查与
 -- 通用 void 指针裸下标拒绝），也不支持从属/位域内置函数；`len()` 对静态不可知的标量
--- 不发前端错误（返回 0），属 2.0 待对齐项，
+-- 不发前端错误（返回 0），定长 char 数组的字符串初值既不检查容量也不拒绝非 char 元素，
+-- 属 2.0 待对齐项，
 -- 这些 err 用例对其无意义（其余 err 用例双前端都跑）
-local IR_ERR_SKIP = {m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, deref_bounds = true, structof_bad_member = true, void_subscript = true, len_unknown = true, slice_str_overflow = true}
+local IR_ERR_SKIP = {m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, deref_bounds = true, structof_bad_member = true, void_subscript = true, len_unknown = true, slice_str_overflow = true, str_array_overflow = true, str_array_bad_elem = true}
 
 task("test")
     on_run(function ()
