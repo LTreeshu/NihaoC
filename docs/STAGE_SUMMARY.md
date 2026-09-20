@@ -1,9 +1,12 @@
-# NihaoC 阶段总结（2026-08-30 / 更新至 2026-09-01）
+# NihaoC 阶段总结（快照日期 2026-08-30 / 内容更新至 2026-09-01）
 
-> 会话恢复入口：读本文件 + `TODO.md` + `docs/BNF.md`。最后提交见 `git log -1`。
+> ⚠️ **本文件为历史阶段快照，不是现状文档。** 正文的计数、缺口清单与语法口径一律定格于 2026-09-01，此后 v1.0.1 指针语法收敛与 v1.0.2 文档-实现一致性核对均未回填本文件。
+> **现状的权威口径**：`CHANGELOG.md` 当前版本段（发布计数）+ `docs/IMPLEMENTATION_STATUS.md`（实现状态与源码行号）+ `docs/BNF.md`（语法，取其最新版本）+ `docs/ROADMAP.md`（架构与待办）。
+> 会话恢复入口：`README.md` + `CHANGELOG.md` + `TODO.md`；最后提交见 `git log -1`。
+> 本文件的保留价值：§3.1 的 IR 前端覆盖矩阵是 PB-24 统一管线决策的原始依据（`docs/PB24_DECISION.md` 引用至本文件），§3「关键坑」清单为分散的实测踩坑记录、其余文档无载。
 > 2026-08-29 起仓库分支化：`main` 产品主干 / `PA` A 方案 / `PB` B 方案（见 `docs/GIT_CONVENTIONS.md`）；B 方案开发在 `PB` 分支进行。
 
-## 1. 双方案架构
+## 1. 双方案架构（快照口径）
 
 | 方案 | 后端 | 说明 |
 | ---- | ---- | ---- |
@@ -12,12 +15,12 @@
 
 - 统一入口 `-backend=`：默认(c)/native/ir-c/ir-native/ir-riscv64/ir-arm64/ir-loongarch64；`xmake test --all` 全矩阵
 - **四目标架构收官（2026-08-15）**：x86-64 / riscv64 / arm64 / loongarch64 全部经 TargetBackend 抽象（ir_backend.c 注册表），后三者只验汇编生成
-- 源码：`ncc/`（内部活跃仓库 `D:\workspace\workbudy\ncc`，分支 feat/backend-ir）+ `NihaoC/ncc/`（发布副本，随 GitHub 推送同步）
-- **同步流程**：改 `NihaoC/ncc/` → tar 同步到 `D:\workspace\workbudy\ncc` → 两边各自 commit（推送由用户决定；2026-08-18 起 credential.helper=wincred 可直推）
+- 源码：`ncc/`（**已废止的双仓库流程**：当时另有内部活跃仓库 `D:\workspace\workbudy\ncc`，分支 feat/backend-ir，`NihaoC/ncc/` 为其发布副本）
+- **同步流程（已废止，仅作历史记录）**：改 `NihaoC/ncc/` → tar 同步到 `D:\workspace\workbudy\ncc` → 两边各自 commit（2026-08-18 起 credential.helper=wincred 可直推）。**现行做法**：单一仓库内以 `PA` / `PB` 分支承载两条线，共享文档跨分支用 `git merge-file` 三方合并同步（见 `docs/GIT_CONVENTIONS.md` §1）；推送与 tag 一律由所有者逐次授权，不自动执行。
 
-## 2. A 方案（c/native）现状
+## 2. A 方案（c/native）现状（快照至 2026-09-01）
 
-**全量 parser 测试 12P+4S 通过，0 FAIL**。已修复（历史）：
+**全量 parser 测试 12P+4S 通过，0 FAIL**（当时的用例集计数；v1.0.2 现值为 c/native 各 **38 PASS / 0 FAIL / 5 SKIP**，见 `CHANGELOG.md`）。已修复（历史）：
 - 关键字内置函数（TOK_SIZEOF/TYPEOF/ALIGNOF/OFFSETOF/VISOF 分派）、可见性枚举、parse_is_stmt
 - 语句边界行号（binop 链 12 层传起始行号，换行即语句边界）
 - cgen 补 `#include <stddef.h>`（offsetof）
@@ -27,9 +30,9 @@
 
 **已知 A 方案缺口**（见 TODO）：无（link 导入解析闭环；实际 -l 传 tcc 为规划特性）。
 
-## 3. B 方案（IR）现状
+## 3. B 方案（IR）现状（快照至 2026-09-01）
 
-**IR 用例 31 个（IR_SUBSET 26 + IR_ONLY 5），全矩阵 0 FAIL**。已完成的 PB：
+**IR 用例 31 个（IR_SUBSET 26 + IR_ONLY 5），全矩阵 0 FAIL**（当时的 PB 计数；1.0 冻结线上 ir-c/ir-native 为 2.0 预览，v1.0.2 门禁为各 **6 PASS / 0 FAIL / 33 SKIP**，PB 线自身计数以 `docs/TODO-PB.md` 与 `docs/ROADMAP.md` 为准）。已完成的 PB：
 
 | PB | 功能 | 用例 |
 | -- | ---- | ---- |
@@ -64,7 +67,7 @@
 
 ### 3.1 IR 前端 vs 全量 parser 覆盖对照（2026-08-30 盘点，PB-24 决策依据）
 
-> 本表为 **2026-08-30 历史快照**，只用于说明当时的语法覆盖结论。此后两轮语法收敛未回填本表：`T*` 具名指针与一元 `*` 解引用已移除（v1.0.1 / PB-25），`is <pat> => <stmt>` 单语句形式已移除（PA-13 / PB-27.6）。当前语法以 `BNF.md` v2.2 为准。
+> 本表为 **2026-08-30 历史快照**，只用于说明当时的语法覆盖结论，表内 ✅ 均指该时点。此后三轮收敛未回填本表：`T*` 具名指针与一元 `*` 解引用已移除（v1.0.1 / PB-25）、`is <pat> => <stmt>` 单语句形式已移除（PA-13 / PB-27.6）、`?.` 与 `?(` 安全解引用记号已移除且检查统一落入 `.()`（PA-21）。当前语法以 `docs/BNF.md` **最新版本**为准（v1.0.2 时为 v2.10）。
 
 | 维度 | 特性 | A 方案 parser.c | IR 前端 irparse.c |
 | ---- | ---- | :---: | :---: |
@@ -85,17 +88,20 @@
 
 **结论（PB-24 决策输入）**：IR 前端覆盖全量语法的差距已**清零**（8/30 补齐 `->` 指针成员访问、`?:` 三元两项表达式级特性，ir_arrow.nc 双后端 + ir_expr.nc 四后端一致性 PASS）。B 方案已可宣称"语法全覆盖"，PB-24 统一管线决策具备完整输入。命名空间无语言定义，不构成覆盖缺口。
 
-## 4. 测试体系
+## 4. 测试体系（命令现行有效；计数为 2026-08-30 快照）
 
 ```
-xmake -r ncc          # 构建（NIHAO_TCC_DIR 指向 tcc）
-xmake test --all      # 全矩阵：c/native 12P、IR 一致性 26P，0 FAIL
+xmake -r ncc          # 构建（NIHAO_TCC_DIR 指向 tcc；须在 ncc/ 目录下执行）
+xmake test --all      # 全矩阵：四后端各跑一遍 + 跨后端一致性对比
 ```
-- `tests/pos/*.nc` 全量用例（c/native）；`IR_ONLY` = IR 子集（ir 后端，如 ir_cook/ir_slice）；`IR_SUBSET` = 四后端通用（一致性检查）；**当前 56 PASS / 0 FAIL**（8/30：`->`/三元补齐后 +1，ir_ptr 标量 & 回归修复）
+- 快照计数（2026-08-30）：c/native 12P、IR 一致性 26P，合计 **56 PASS / 0 FAIL**（当日 `->`/三元补齐后 +1，ir_ptr 标量 & 回归修复）。**现值**：v1.0.2 门禁为 c/native 各 **38P/0F/5S**、ir-c/ir-native 各 **6P/0F/33S**，权威口径见 `CHANGELOG.md` 当前版本段
+- `tests/pos/*.nc` 全量用例（c/native）；`IR_ONLY` = IR 子集（ir 后端，如 ir_cook/ir_slice）；`IR_SUBSET` = 四后端通用（一致性检查）
 - 新用例须在 xmake.lua 注册 IR_ONLY 或 IR_SUBSET，否则自动当全量 target 编译失败
 - 指针解引用：A 方案与 IR 统一用 `.()` 语法（`p.() = 42` / `y i32 = p.()`）；riscv64/arm64/loongarch64 只验汇编生成
 
-## 5. 下一步候选（见 TODO.md）
+## 5. 下一步候选（2026-08/09 盘点快照）
+
+> 本节为当时的候选清单，其后进展已在 `docs/TODO-PA.md` / `docs/TODO-PB.md` / `docs/ROADMAP.md` 记账，本文件不再回填。就本节内容而言：**PA-9（-run/Linux 实测）已于 2026-08-31 在 WSL 完成**、**A 方案 link 实际 `-l` 传递早已实现**（与下方"完成"条目重复列出，属当时清单未去重）、**Chinese.md / English.md 已随 BNF 逐节核对至 v2.10**。现行待办请看上述三个 TODO 文件。
 
 - PB-3 剩余：动态数组增长（2026-08-28 用户决策：**暂缓留设计**——`[2...]` 按固定容量，堆结构 ptr+len+cap 待统一管线决策后设计）；切片运行时边界长度（同需切片二元组结构，一并暂缓）
 - 数据模型剩余：无（2026-08-27 union 嵌套完成，全部清零）
