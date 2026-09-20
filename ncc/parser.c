@@ -1355,6 +1355,9 @@ void parse_statement(CompilerState *cs)
 {
     TokenType tok = cur_tok(cs);
 
+    /* 上一条语句的 flow→flow 转移豁免到此结束：失效源在新语句中不可再读 */
+    cs->parser.moved_src = NULL;
+
     /* 标签：name:（C 风格，lexer 注释 label suffix；peek 下一 token） */
     if (tok == TOK_IDENTIFIER) {
         LexerState *lx = cs->parser.lex;

@@ -241,6 +241,7 @@ typedef struct {
     int slice_len_known;        /* 最近一次切片读的上下界是否都是字面量（`len(切片变量)` 据此求值） */
     long long slice_len;        /* 该切片的逻辑长度 hi-lo */
     int lhs_bare_ident;         /* 刚解析的后缀链是裸标识符（无任何后缀步），赋值即整变量重绑定 */
+    Symbol *moved_src;          /* 本语句自身转移出去的 flow 源：右值取值仍须放行，语句结束即失效（§12.1） */
     
     /* Error handling */
     int error_count;

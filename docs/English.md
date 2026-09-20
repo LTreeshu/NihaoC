@@ -1149,8 +1149,9 @@ var local_temp i32 = 100      // automatic storage, block-mutable
 | string literal `"..."` | static read-only storage | not released (freeing read-only storage would be illegal) |
 | `&x` | the frame or static storage holding `x` | not released (that address is already governed by `x`'s storage duration) |
 | `{v0, v1, ...}` aggregate initialiser | the variable's own aggregate storage | not released |
+| a source that has transferred ownership away (`src` in `flow new void = src`, §12.1) | ownership handed to the receiver | not released (the receiver releases it; releasing twice would be illegal) |
 
-Rebinding a whole declared `flow` variable (`p = rhs`) re-decides the source from the new right-hand value; `p.(T) = v` and `p[i] = v` modify the pointee and leave `p`'s own source untouched. A rebinding gives up ownership of the previous heap block, and the compiler does not insert a release at the rebinding point (deliberately conservative, to avoid double-free through aliases), so the old block leaks — exact reclamation belongs to the 2.0 ownership-transfer analysis.
+Rebinding a whole declared `flow` variable (`p = rhs`) re-decides the source from the new right-hand value; `p.(T) = v` and `p[i] = v` modify the pointee and leave `p`'s own source untouched. A rebinding gives up ownership of the previous heap block, and the compiler does not insert a release at the rebinding point (deliberately conservative, to avoid double-free through aliases), so the old block leaks — exact reclamation belongs to the 2.0 ownership-transfer analysis. The transfer forms `flow b void = a` / `b = a` (both `flow`) are not a leak: `b` takes over `a`'s heap block and releases it when `b` leaves scope.
 
 ---
 
@@ -1218,6 +1219,12 @@ The 16 transfer rules derived from the matrix (8 allowed, 8 forbidden), for line
 > **frozen**: the source pointer may not be read or written while borrowed (like Rust's immutable borrow).
 > **invalidated**: the source pointer may no longer be used (ownership has transferred).
 > **stays valid**: the source remains usable, unchanged.
+
+**When invalidation takes effect**: the transferring statement's own right-hand side necessarily reads the source — otherwise `flow new_owner void = ptr` could not be evaluated. Invalidation therefore starts at the **next statement**: within the transfer statement the source is still readable as a right-hand value (a necessary condition for that statement to exist), and it becomes unreadable and unwritable once the statement ends.
+
+**A frozen source may not transfer ownership**: while the source is borrowed (frozen), `flow → flow` is a compile-time error — otherwise the new owner would release the object while a live borrow still points at it, leaving the borrow dangling (the §14.2 analysis table states the same).
+
+**Transfer and auto-release**: ownership transfer moves the release responsibility together with ownership, so the receiver becomes the single party responsible for releasing; an invalidated source no longer triggers the block/function-exit auto-release of §11.1, which would otherwise `free` the same heap object twice.
 
 #### Design Rationale
 
@@ -1484,7 +1491,7 @@ func main() {
     // ptr.(i32) = 400     // error: ptr still frozen
 
     // flow -> flow (ownership transfer)
-    flow new_owner void = ptr  // ptr,read_ref,mut_ref invalidated
+    flow new_owner void = ptr  // error: ptr is borrowed (frozen) by mut_ref/read_ref, ownership may not be transferred (see the analysis below)
     // ptr.(i32) = 500     // error: ptr invalidated
 
     // function-call transfer
