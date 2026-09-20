@@ -265,7 +265,8 @@ static globalVar f32 = 3.14
 
 // multi-variable declaration
 var {a = 0,b = 1,c = 0} i8
-var {aa = "aa",bb = "bb",cc = "cc"} char[2]
+// fixed array form: each variable gets array storage of the declared capacity, and the literal must fit with its terminating NUL (see 5.1.2)
+var {aa = "aa",bb = "bb",cc = "cc"} char[3]
 var {aaa = "aaa",bbb = "bbb",ccc = "ccc"} char[]
 ```
 
@@ -331,7 +332,8 @@ arry[1..3] = {20,30,40}
 > - **Slice assignment `p[a..b] = {v0, v1, ...}`**: writes back element by element starting at `a`; the value list decides how many elements are written.
 > - **String right-hand side `p[a..b] = "abc"`**: copies the literal **byte by byte**, terminator `\0` included, for a character slice region. The closed-interval upper bound `b` is the last writable byte, so `strlen("abc") <= b-a` must hold; otherwise the frontend reports an error.
 > - **String initializer of a fixed-size character array `s char[n] = "abc"`**: allocates real **array storage** of the declared size (no decay to a pointer) and writes the literal together with its terminating `\0`, so `strlen + 1 <= n` must hold; otherwise the frontend reports `string needs N bytes with terminator, array 's' holds M` (same wording rule as the slice case above). Elements may be overwritten in place. `len(s)` returns the declared capacity `n` (§2.3 "array = capacity"), independent of the content length. A fixed-size array whose element type is not `char` cannot take a string literal initializer — the frontend reports an error and asks for a value list `{...}`. The size-omitted form `char[] s = "abc"` stays a dynamic string (§5.1.1): it generates a pointer, `len()` returns the literal length, and the capacity check above does not apply.
-> - **Implementation note (2026-09-20, v1.0.2 / PA-31)**: the array storage and both diagnostics above are provided by the A-plan c/native backends; the `ir-*` backends check neither the capacity nor the element type, which is a 2.0 alignment item.
+> - **The same form in a multi-variable declaration `var {aa = "aa", …} char[n]` (§4.2)**: exactly the same rules as the single-variable case — every variable gets its own array storage of the declared capacity, `len()` returns that capacity, and both diagnostics above are reported per variable. If an initializer is not a string literal (including an omitted initializer), the frontend reports an error and asks for a single-variable declaration; it never silently drops `[n]` and emits broken C such as `char aa = …`. The size-omitted `{…} char[]` form still decays to a pointer and registers the literal length.
+> - **Implementation note (2026-09-20, v1.0.2 / PA-31, PA-34)**: the array storage and both diagnostics above are provided by the A-plan c/native backends; the `ir-*` backends check neither the capacity nor the element type, and do not implement the array form of a multi-variable declaration at all, which is a 2.0 alignment item.
 
 #### 5.1.3 Pointer Arrays
 

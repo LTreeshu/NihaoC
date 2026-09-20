@@ -153,7 +153,7 @@ local IR_ONLY = {ir_builtin = true, ir_mr = true, ir_slice = true, ir_sparam = t
 -- 不发前端错误（返回 0），定长 char 数组的字符串初值既不检查容量也不拒绝非 char 元素，
 -- 属 2.0 待对齐项，
 -- 这些 err 用例对其无意义（其余 err 用例双前端都跑）
-local IR_ERR_SKIP = {m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, flow_move_frozen = true, deref_bounds = true, structof_bad_member = true, void_subscript = true, len_unknown = true, slice_str_overflow = true, str_array_overflow = true, str_array_bad_elem = true}
+local IR_ERR_SKIP = {m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, flow_move_frozen = true, deref_bounds = true, structof_bad_member = true, void_subscript = true, len_unknown = true, slice_str_overflow = true, str_array_overflow = true, str_array_bad_elem = true, multi_arr_overflow = true, multi_arr_nostr = true}
 
 task("test")
     on_run(function ()

@@ -783,6 +783,8 @@ void parse_declaration(CompilerState *cs)
         int nnames = 0;
         int has_init[8] = {0};
         int init_seg[8] = {0};      /* 每个 init 表达式在 C 缓冲的段起点 */
+        int init_str[8] = {0};      /* 初值是字符串字面量（定长 char 数组存储的判据） */
+        long long init_len[8] = {0};/* 字符串字面量长度（不含结尾 NUL） */
         skip_newlines(cs);
         while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF && nnames < 8) {
             if (cur_tok(cs) != TOK_IDENTIFIER) {
@@ -795,6 +797,9 @@ void parse_declaration(CompilerState *cs)
             if (cur_tok(cs) == TOK_ASSIGN) {
                 has_init[nnames] = 1;
                 next_tok(cs);
+                init_str[nnames] = (cur_tok(cs) == TOK_STRING_LITERAL);
+                if (init_str[nnames] && cs->parser.lex->tok_str)
+                    init_len[nnames] = (long long)strlen(cs->parser.lex->tok_str);
                 init_seg[nnames] = cgen_mark();
                 parse_expression(cs); /* 值 emit 到 [seg, len) 段，生成时重排 */
             }
@@ -805,6 +810,9 @@ void parse_declaration(CompilerState *cs)
         expect(cs, TOK_RBRACE);
         CType bt;
         parse_type(cs, &bt);
+        /* 定长数组类型（`char[3]`）与单变量分支同口径：保留数组存储而不是把后缀
+           丢掉生成 `char aa = "aa"` 这种错误 C（§5.1.2 / PA-31） */
+        int arr_cap = (bt.kind == TYPE_ARRAY) ? type_array_count(&bt) : 0;
         /* 先收集每个 init 值段文本（段边界 = 相邻 init 起点 / 当前 len），
          * 再 truncate 掉原始位置，最后按 name 顺序重排输出 */
         char init_text[8][512];
@@ -824,8 +832,27 @@ void parse_declaration(CompilerState *cs)
         }
         if (had_any_init) cgen_truncate(init_seg[0]);  /* 清原始值段 */
         for (int i = 0; i < nnames; i++) {
-            cgen_raw("%s%s %s", vis == VIS_CONST ? "const " : "",
-                     c_type_name(&bt), names[i]);
+            if (arr_cap > 0) {
+                if (!init_str[i]) {
+                    nihao_error(cs, "'%s' has fixed array type but no string literal "
+                                    "initializer; use a single-variable declaration "
+                                    "for this form", names[i]);
+                    continue;
+                }
+                if (type_deepest_elem(&bt)->kind != TYPE_CHAR) {
+                    nihao_error(cs, "cannot initialize array '%s' with a string literal; "
+                                    "its elements are not 'char', use a value list "
+                                    "{v0, v1, ...}", names[i]);
+                }
+                if (init_len[i] + 1 > arr_cap) {
+                    nihao_error(cs, "string needs %lld bytes with terminator, "
+                                    "array '%s' holds %d",
+                                init_len[i] + 1, names[i], arr_cap);
+                }
+            }
+            cgen_raw("%s%s %s%s", vis == VIS_CONST ? "const " : "",
+                     c_type_name(&bt), names[i],
+                     arr_cap > 0 ? c_type_suffix(&bt) : "");
             if (has_init[i] && init_text[i][0]) {
                 char *p = init_text[i];
                 while (*p == ' ' || *p == '\t') p++;   /* 段含缩进前导，trim */
@@ -833,12 +860,21 @@ void parse_declaration(CompilerState *cs)
             }
             cgen_line(";");
             /* 注册符号表（否则后续赋值被当推断声明 → redeclaration） */
+            Symbol *vs;
             if (cs->parser.cur_func) {
-                Symbol *vs = sym_push_local(cs, cs->parser.cur_func, names[i], &bt);
-                vs->vis = vis;
+                vs = sym_push_local(cs, cs->parser.cur_func, names[i], &bt);
             } else {
-                Symbol *vs = sym_push(cs, SYM_VARIABLE, names[i], &bt);
-                vs->vis = vis;
+                vs = sym_push(cs, SYM_VARIABLE, names[i], &bt);
+            }
+            vs->vis = vis;
+            /* `len(x)` 的逻辑长度登记（§2.3）：定长数组=声明容量、动态字符串=字面量长 */
+            if (arr_cap > 0) {
+                vs->len_known = 1;
+                vs->logical_len = arr_cap;
+            } else if (init_str[i] &&
+                       (bt.kind == TYPE_ARRAY || bt.kind == TYPE_STRING)) {
+                vs->len_known = 1;
+                vs->logical_len = init_len[i];
             }
         }
         return;
