@@ -72,9 +72,9 @@
 - `char[]` – string type
 - `short` – short integer (C-compat)
 - `int` – integer (C-compat)
-- - `long` – long integer (C-compat)
-- - `float` – single-precision float (C-compat)
-- - `double` – double-precision float (C-compat)
+- `long` – long integer (C-compat)
+- `float` – single-precision float (C-compat)
+- `double` – double-precision float (C-compat)
 
 ###### Reserved Operators
 
@@ -141,4 +141,8 @@
 
 ###### Other Operators
 
--
+- `..` – range operator (slice `[start..end]`, see Reserved Operators)
+- `...` – dynamic array marker (`[N...]` / `[...]`, BNF `<array-size>`; automatic growth reserved for 2.0)
+- `;` – statement terminator
+- `#` – statement terminator (equivalent to `;` and newline)
+- `::` – lexically reserved (scope resolution placeholder), not used by the current grammar
