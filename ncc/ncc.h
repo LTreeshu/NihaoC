@@ -22,7 +22,15 @@
  * Configuration & Limits
  * ============================================================ */
 
-#define NIHAO_VERSION       "0.1.0"
+/* 版本单一真源是 xmake.lua 的 set_version，经 add_defines 以 NIHAO_VERSION_TAG 注入并字符串化。
+   不经 xmake 构建（如 LEGACY Makefile）时无该宏，落到下方占位值，不代表任一对外发布口径。 */
+#define NIHAO_STR_(x) #x
+#define NIHAO_STR(x)  NIHAO_STR_(x)
+#ifdef NIHAO_VERSION_TAG
+#define NIHAO_VERSION   NIHAO_STR(NIHAO_VERSION_TAG)
+#else
+#define NIHAO_VERSION   "0.0.0-unknown"
+#endif
 #define TOK_HASH_SIZE       2048
 #define TOK_MAX_SIZE        128
 #define MAX_NESTING_DEPTH   256
@@ -118,11 +126,20 @@ struct Symbol {
     int is_extern;              /* external symbol */
     int is_builtin;             /* built-in function */
     int ownership_transferred;  /* flow ptr returned: skip auto-free */
+    /* flow 变量的初值（或最后一次整变量赋值）不是堆所有权：字符串字面量在静态只读段、
+       `&x` 指向栈帧或他方对象，两者在块/函数退出时 free() 都是非法释放（§11.1） */
+    int no_auto_free;
 
     /* Ownership/borrow state (NihaoC ch.12): */
     /* 0 = valid, 1 = frozen (borrowed), 2 = invalid (ownership moved) */
     int borrow_state;
     Symbol *borrow_source;      /* who this var borrows from (for unfreeze) */
+    /* 指针当前所指对象的字节数，`.()` 越界检查用；0 = 静态未知（不检查） */
+    unsigned int pointee_bytes;
+    /* len(x) 内置函数的逻辑长度：数组=元素个数、动态字符串 char[]=字面量长度、
+       切片变量=边界差 hi-lo；len_known = 0 表示静态不可知（len() 报错） */
+    int len_known;
+    long long logical_len;
     
     /* Location in source */
     char *filename;
@@ -225,6 +242,14 @@ typedef struct {
     /* Expression parsing */
     int *macro_ptr;
     int unget_buffer_enabled;
+    unsigned int malloc_bytes;  /* 本次 malloc(T) 请求的字节数，供声明初始化记录 pointee_bytes */
+    int lhs_was_deref;          /* 赋值左侧是解引用链（`p.(T) = v`）而非对 p 本身赋值 */
+    int rhs_was_slice;          /* 刚解析的表达式以切片读 `[a..b]` 结尾（数组声明据此走复制） */
+    int slice_lmark;            /* 该切片读文本在 cgen 缓冲里的起点，用于确认它是赋值左侧整体 */
+    int slice_len_known;        /* 最近一次切片读的上下界是否都是字面量（`len(切片变量)` 据此求值） */
+    long long slice_len;        /* 该切片的逻辑长度 hi-lo */
+    int lhs_bare_ident;         /* 刚解析的后缀链是裸标识符（无任何后缀步），赋值即整变量重绑定 */
+    Symbol *moved_src;          /* 本语句自身转移出去的 flow 源：右值取值仍须放行，语句结束即失效（§12.1） */
     
     /* Error handling */
     int error_count;
@@ -282,6 +307,7 @@ struct CompilerState {
     
     /* Parser state */
     ParserState parser;
+    int while_depth;              /* >0 表示处于 while 循环体内，`is` 仅此上下文合法 */
     
     /* Symbol tables */
     TokenSym **table_ident;
@@ -383,6 +409,7 @@ Symbol *sym_register_builtins(CompilerState *cs);
 CType *type_new(CompilerState *cs, TypeKind kind);
 CType *type_array(CompilerState *cs, void *elem_type, int size);
 CType *type_check_statement(CompilerState *cs);
+unsigned int type_align(CType *t);
 
 /* vis.c */
 void visibility_init(CompilerState *cs);

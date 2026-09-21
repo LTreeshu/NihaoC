@@ -1,0 +1,6 @@
+structof ok
+holdof ok
+unionof ok
+bitoff len ok
+bitoff flag ok
+bitoff tail ok

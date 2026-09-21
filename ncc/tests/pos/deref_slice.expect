@@ -1,0 +1,8 @@
+multilevel ok
+arrayptr ok
+slice copy ok
+ptr-of-array ok
+dyn ptr array ok
+ptrarry ok
+slice assign ok
+multi-dim ok

@@ -27,16 +27,46 @@ NiHao is a new statically compiled language designed for system-level programmin
 
 - `typeof(type)` — type inspection, returns the type
 - `sizeof(type)` — size inspection, returns the size
-- `alignof(type)` — alignment inspection, returns the alignment size
-- `structof(member)` — ownership inspection, returns the owning struct
-- `unionof(member)` — ownership inspection, returns the owning union
-- `offsetof(type,member)` — returns the byte offset
-- `bitoffsetof(type,bitmember)` — returns the bit offset
-- `holdof(type, member)` — returns the base address of the enclosing aggregate
+- `alignof(type)` — alignment inspection, returns the alignment size (compile-time constant: an array takes its element alignment, a struct/union takes the widest member alignment, `void` counts as the generic pointer with 8)
+- `offsetof(type,member)` — returns the byte offset of a member
+- `bitoffsetof(type,member)` — returns the bit offset of a bit-field member (declaration-order bit layout model, compile-time constant)
+- `structof(type,member,ptr)` — ownership inspection: recovers the base address of the enclosing **struct** from the member address `ptr`, returns `void*`
+- `unionof(type,member,ptr)` — same, accepts a `union` only
+- `holdof(type,member,ptr)` — same, accepts both `struct` and `union`
 - `visof(var)` — visibility inspection, returns the visibility attribute
-- `len(x)` — logical length (2026-08-19): array = capacity; dynamic `char[]` = literal length;
+- `len(x)` — logical length (2026-08-19): array = capacity (product of all dimensions for
+  multi-dimensional arrays); dynamic `char[]` = literal length;
   slice variable `s = arr[lo..hi]` = boundary difference `hi-lo` (bounds must be compile-time
   constants; returns a compile-time value)
+
+> The ownership built-ins (`structof` / `unionof` / `holdof`) and `bitoffsetof` are fixed to the
+> signatures above as of BNF v2.4; on the 1.0 line they are provided by the A backend
+> (`c` / `native`), while the `ir-*` backends leave them to the 2.0 layout work
+> (current state: `docs/IMPLEMENTATION_STATUS.md`).
+> As of BNF v2.6, `len(x)` is provided by the A backend on the 1.0 line for the three cases
+> above: when the argument's logical length is not statically known (a scalar, a slice with
+> non-literal bounds, …) the front end reports an error immediately; the `ir-*` backends
+> already cover the three cases but return 0 when the length is not statically known.
+
+#### 2.3.1 Output Built-ins (`print` / `puts`)
+
+- `puts(s)` — prints a NUL-terminated string and appends a newline; the argument **must be a string
+  pointer** (`char*` / `char[]`). It is not "print any value": handing an integer (e.g. `p.(i32)`)
+  to `puts` makes the C library dereference that number as an address, crashing or emitting garbage.
+- `print(x)` — when the argument is **not** a string literal: prints the value as a decimal integer
+  followed by a newline (the value, not the address).
+- `print("fmt", a, b, ...)` — when the argument **is** a string literal: forwarded verbatim to C
+  `printf`. The first argument is the C format string, so the conversions (`%d` / `%s` / `%lld` …),
+  their count and their types are the caller's responsibility; extra arguments are **not**
+  concatenated and no newline is added. Hence `print("[LOG] ", msg)` emits only `[LOG] ` (the `msg`
+  is dropped); the correct form is `print("[LOG] %s\n", msg)`.
+
+> The two forms are distinguished statically by the first argument token (literal → `printf`
+> passthrough, otherwise → integer print), so `print(buf)` with `buf` a string variable prints its
+> address as an integer, not its contents — use `puts` to print strings.
+> Scope: `print` is provided by the A backend on the 1.0 line; the `ir-*` backends (2.0 line) do not
+> have it built in (it is emitted as an undefined symbol and fails at link time), so tests meant to
+> run on every backend use `puts` only. `puts` is a plain C library passthrough on both lines.
 
 ### 2.4 Keyword Reference
 
@@ -235,7 +265,8 @@ static globalVar f32 = 3.14
 
 // multi-variable declaration
 var {a = 0,b = 1,c = 0} i8
-var {aa = "aa",bb = "bb",cc = "cc"} char[2]
+// fixed array form: each variable gets array storage of the declared capacity, and the literal must fit with its terminating NUL (see 5.1.2)
+var {aa = "aa",bb = "bb",cc = "cc"} char[3]
 var {aaa = "aaa",bbb = "bbb",ccc = "ccc"} char[]
 ```
 
@@ -253,14 +284,14 @@ varptr void = &var
 // single-level pointer
 ptr void = malloc(i32)   // allocate memory
 ptr.(i32) = 42           // dereference & assign
-ptr?.(i64)               // safe dereference — compile error: i64 > i32, out of bounds
+ptr.(i64)                // compile error: i64 > i32, out of bounds (the check belongs to `.()` itself)
 
 // multi-level pointer
 ptr2 void[] = &ptr       // pointer-to-pointer
 ptr = ptr2.()            // one-level dereference; type may be omitted for void
 variable = ptr2[].(i32)  // two-level dereference
 
-ptr3 void[][] ?= &ptr2    // pointer-to-pointer-to-pointer
+ptr3 void[][] = &ptr2     // pointer-to-pointer-to-pointer
 ptr2 = ptr3.()            // one-level dereference
 ptr  = ptr3[].()          // two-level dereference
 variable = ptr3[][].(i32) // three-level dereference
@@ -268,7 +299,7 @@ variable = ptr3[][].(i32) // three-level dereference
 
 > **Pointer declaration syntax (decided 2026-08-19: implicit inference declaration)**
 >
-> - **Implicit inference**: `p = &x` auto-infers `p` as a pointer to `x`'s type (no type name needed).
+> - **Implicit inference**: `p = &x` auto-infers `p` as a pointer to `x`'s type (no type name needed). When the right-hand side is a member access `v = s.m`, the inferred type is member `m`'s own type (an array member decays to a pointer); when it is a call `v = f(a)` or `v = fp(a)`, the inferred type is the return type of the callee (or of the function pointer).
 
 > - **`->` pointer member access**: `p->field` is equivalent to `p.()->field`; chained `p->a->b` and compound assignment `p->n += 1` are supported (aligned in both A-plan and IR layers since 2026-08-19).
 
@@ -277,19 +308,32 @@ variable = ptr3[][].(i32) // three-level dereference
 ```nihao
 arry char[9] = {1,2,3,4,5,6,7,8,9}
 arryptr void = &arry           // pointer to an array
-arryptr[0] = 0
-arryptr[9] = 9                 // undefined behavior
 arryptr.(char[9])[0] = 0       // dereference member [0]
+// arryptr[0] = 0                 // compile error: element width of a generic void pointer is unknown
 // arryptr.(char[9])[9] = 9       // compile error: out of bounds
 
-arrybuffer char[8] = arryptr.(char[9])[0..7]
-// arrybuffer == {0,1,2,4,5,6,7,8}
+arrybuffer char[8] = arryptr.(char[9])[0..7]   // slice read into an array -> copy by declared size
+// arrybuffer == {0,2,3,4,5,6,7,8}
 
 // array of array pointers
 arryptr2 void[2] = {&arry,&arrybuffer}
 arryptr2[0].(char[9])[8] = arry[8]
 arryptr2[1].(char[8])[7] = arrybuffer[7]
+
+// slice assignment: element-wise write-back
+arry[1..3] = {20,30,40}
 ```
+
+> **Array pointers and slices (decided 2026-09-20, A-plan c/native backends)**
+>
+> - **A generic `void` pointer cannot be subscripted bare**: for `p[i]` and `p[a..b]` the element width is unknown at compile time, so the frontend reports an error and requires `p.(T)` first (`p.(T)[i]`, `p.(T)[a..b]`). The bounds check belongs to `.()` itself (§12.1).
+> - **Empty subscript `p[]`**: one level of dereference, equivalent to `p.()` with the type omitted; it keeps participating in the postfix chain (`p3[][].(i32)`).
+> - **Slice read `p[a..b]`**: the value is "a pointer to element `a`". Assigning it to an array variable copies element-by-element up to that array's declared size; a type-inferred declaration `s = p[a..b]` instead yields a pointer view of the element type (no copy) and `s.()` is element `a`. When both bounds are literals the backend records `b-a` for `len(s)` (§2.3). Omitting the start bound is written `p[..b]` and equals `p[0..b]`, with length `b`.
+> - **Slice assignment `p[a..b] = {v0, v1, ...}`**: writes back element by element starting at `a`; the value list decides how many elements are written.
+> - **String right-hand side `p[a..b] = "abc"`**: copies the literal **byte by byte**, terminator `\0` included, for a character slice region. The closed-interval upper bound `b` is the last writable byte, so `strlen("abc") <= b-a` must hold; otherwise the frontend reports an error.
+> - **String initializer of a fixed-size character array `s char[n] = "abc"`**: allocates real **array storage** of the declared size (no decay to a pointer) and writes the literal together with its terminating `\0`, so `strlen + 1 <= n` must hold; otherwise the frontend reports `string needs N bytes with terminator, array 's' holds M` (same wording rule as the slice case above). Elements may be overwritten in place. `len(s)` returns the declared capacity `n` (§2.3 "array = capacity"), independent of the content length. A fixed-size array whose element type is not `char` cannot take a string literal initializer — the frontend reports an error and asks for a value list `{...}`. The size-omitted form `char[] s = "abc"` stays a dynamic string (§5.1.1): it generates a pointer, `len()` returns the literal length, and the capacity check above does not apply.
+> - **The same form in a multi-variable declaration `var {aa = "aa", …} char[n]` (§4.2)**: exactly the same rules as the single-variable case — every variable gets its own array storage of the declared capacity, `len()` returns that capacity, and both diagnostics above are reported per variable. If an initializer is not a string literal (including an omitted initializer), the frontend reports an error and asks for a single-variable declaration; it never silently drops `[n]` and emits broken C such as `char aa = …`. The size-omitted `{…} char[]` form still decays to a pointer and registers the literal length.
+> - **Implementation note (2026-09-20, v1.0.2 / PA-31, PA-34)**: the array storage and both diagnostics above are provided by the A-plan c/native backends; the `ir-*` backends check neither the capacity nor the element type, and do not implement the array form of a multi-variable declaration at all, which is a 2.0 alignment item.
 
 #### 5.1.3 Pointer Arrays
 
@@ -300,17 +344,24 @@ dptrarry1[2].(i32) += 1
 
 dptr3 void[4][5] = malloc(void[4][5]) // dynamically allocate a 2-D pointer array
 dptr3[3][4] = ptr       // safe pointer transfer
-// error: dptr3[0][0].(int64) error: int64 type size > i32 type size!
 dptr3[3][4].(i32) += 1  // multi-level dereference
+// dptr3[0][0].(i64)     // no error: the width behind a pointer-array slot is unknowable at compile time, so the check is skipped (§12.1)
+// ptr.(i64)             // compile error: ptr comes from malloc(i32), its target holds only 4 bytes
 
 // pointer to pointer array
 ptrarry void = &arryptr2
 ptrarry.(void[2])[0].(char[9])[8] = 8
 ptrarry.(void[2])[1].(char[8])[7] = 7
 
-// arry == {0,1,2,4,5,6,7,8,8}
-// arrybuffer == {0,1,2,4,5,6,7,7}
+// arry == {0,2,3,4,5,6,7,8,8}
+// arrybuffer == {0,2,3,4,5,6,7,7}
 ```
+
+> **A `T[n]` declaration initialized by `malloc` decays to a pointer**: `dptrarry1 void[3] = malloc(void[3])`
+> emits `void* (*dptrarry1) = malloc(3 * sizeof(void*))` — a C array cannot be initialized by a non-constant,
+> so the declaration takes the "array decays to a pointer to its first element" form (only the leading dimension
+> is dropped: `void[4][5]` → `void* (*p)[5]`). Brace initialization (`arryptr2 void[2] = {&arry,&arrybuffer}`)
+> stays a real C array.
 
 #### 5.1.4 Composite Type Pointers
 
@@ -327,6 +378,10 @@ talk = xiaoming.say
 puts(talk)
 // puts(talk) out--> "NiHao I am xiaoming!"
 ```
+
+> **Inferred declarations take the member type**: `talk = xiaoming.say` infers the type of member `say` itself
+> (`char[]`, i.e. `char*`), not the composite type `Say`; when the member is an array (`name char[9]`) it decays
+> to a pointer, so `nm = xiaoming.name` yields `char*` (implicit inference: §5.1.1).
 
 #### 5.1.5 Function Pointers
 
@@ -452,10 +507,11 @@ if visof(ptr) == _static {
     // ...
 }
 
-// ownership check
+// ownership inspection: recover the enclosing aggregate from a member address (see §2.3)
+Person struct { name char[] age i32 }
 var boy Person = {"xiaoming", 13}
 var ptr void = &boy.name
-if structof(Person,ptr) == boy { 
+if structof(Person, name, ptr) == &boy { 
     // ...
 }
 ```
@@ -526,9 +582,9 @@ if i < 3 {
 }
 ```
 
-### 6.1 Pattern Matching (`is` Clauses)
+### 6.3 Pattern Matching (`is` Clauses)
 
-`is` clauses are used with `while` loops to pattern-match against the loop condition expression's value (implicitly stored in `__is_val`). `do` loops do not support `is` — `do` executes the body before evaluating the condition, so `__is_val` semantics would be confusing.
+`is` clauses are used with `while` loops to pattern-match against the loop condition expression's value (implicitly stored in `__is_val`). `do` loops do not support `is` — this is a rule of the specification, not a consequence of `do`'s semantics: `do` and `while` are both pre-test loops in this language (the condition is written before the block and evaluated first), yet `is` binds only to `while`. Both frontends reject `is` inside any `do` body, including a `do` nested in a `while` (it must not silently match the outer loop's `__is_val`). Whether `do` gains `is` support is deferred to 2.0.
 
 #### Syntax
 
@@ -560,7 +616,7 @@ if i < 3 {
 | `Struct(f1, f2)` | type match + field destructuring | binds each field | `is Point(x, y) { ... }` |
 | `Variant(pat)` | ADT tag match + sub-pattern | binds payload | `is Some(v) { ... }` |
 
-> **Implementation status (1.0 release line, ≥ v1.0.2)**: the A backend (c/native) supports integer literal, negative integer, closed range `lo..hi`, enum variant, visibility enum, and the `_` wildcard (completed in v1.0.2, on both the A backend and the IR backend). Differences from this table: `<identifier>` compares **by value** rather than binding a new variable; struct destructuring and ADT variant destructuring remain reserved syntax. Multiple `is-clause`s still compile to parallel `if` statements, so "first match wins (no fallthrough)" is not yet implemented. See `IMPLEMENTATION_STATUS.md` for the item-by-item mapping.
+> **Implementation status (1.0 release line, ≥ v1.0.2)**: the A backend (c/native) supports integer literal, negative integer, closed range `lo..hi`, enum variant, visibility enum, the `_` wildcard (completed in v1.0.2, on both the A backend and the IR backend), and "first match wins (no fallthrough)" — at most one `is-clause` body runs per loop iteration (v1.0.2). Differences from this table: `<identifier>` compares **by value** rather than binding a new variable; struct destructuring and ADT variant destructuring remain reserved syntax; the IR backends (2.0 preview) still compile multiple `is-clause`s to parallel `if` statements, so overlapping patterns may execute in sequence there — to be aligned in 2.0. See `IMPLEMENTATION_STATUS.md` for the item-by-item mapping.
 
 #### Semantic Rules
 
@@ -698,11 +754,19 @@ while opt {
 
 The return attribute of a function determines which attribute the **caller must use** to receive the return value, guaranteeing memory safety.
 
-| Function return attr | Allowed receiving attrs | Forbidden attrs             | Reason                                  |
-| -------------------- | ----------------------- | --------------------------- | --------------------------------------- |
-| `flow`               | `flow`                  | `func`, `static`, `const`   | ownership must transfer; only `flow` manages memory |
-| `static`             | `static`, `const`       | `flow`, `var`               | static memory has the longest lifetime; may borrow safely but never free |
-| `const`              | `const`                 | `func`, `static`, `flow`    | the read-only constraint must be preserved |
+| Function return attr | Allowed receiving attrs | Forbidden attrs          | Reason                                  |
+| -------------------- | ----------------------- | ------------------------ | --------------------------------------- |
+| `flow`               | `flow`                  | `static`, `const`, `var` | ownership must transfer; only `flow` manages memory |
+| `static`             | `static`, `const`       | `flow`, `var`            | static memory has the longest lifetime; may borrow safely but never free |
+| `const`              | `const`                 | `static`, `flow`, `var`  | the read-only constraint must be preserved |
+
+> `func` is a function return attribute (§7.1.2), not a variable storage duration, so it cannot be used as a receiving attribute and does not appear in this table (§12.1 likewise states that `func` does not participate in the transfer matrix).
+
+**Why this table is stricter than the §12.1 transfer matrix**: §12.1 constrains assignments **between variables that already exist in the same scope** — the source is still alive, and when the borrow ends it either unfreezes or is freed by its owner, so `flow → const` and `flow → var` are safe borrows. A function return value has no such source: the temporary dies as soon as the receiving statement ends. Receiving a `flow` return value through `var` or `const` leaves nobody responsible for freeing (a leak) and the borrowed address dies together with the temporary (a dangling reference). Therefore:
+
+- A `flow` return value may only be received by `flow`, which takes over ownership and the responsibility to free.
+- A `const` return value may only be received by `const`; the read-only promise must not be relaxed (the same root as §12.1 forbidding `const → var`).
+- The permitted cells `flow → const` and `flow → var` in the §12.1 matrix apply to assignment only, not to receiving return values.
 
 ```nihao
 // receiving examples
@@ -710,7 +774,10 @@ flow buf void = create_buffer(1024)      // flow → flow ✅
 static p void = get_counter()            // static → static ✅
 const ver void = get_version()           // const → const ✅
 // flow bad = get_version()              // const → flow ❌ compile error
+// const q void = create_buffer(1024)    // flow → const ❌ compile error: nobody frees it and the temporary is already dead
 ```
+
+> **Implementation status**: this check is not enforced on the 1.0 line (≤ v1.0.2) — the illegal receipients in the table above are forbidden by the specification but not yet reported by the compiler. Return-value visibility prefix checks are implemented from the 2.0 line (PB-29); the 1.0 frozen line does not port them. See the "Caller Receiving Rules (§7.3)" table in [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md).
 
 ---
 
@@ -726,7 +793,7 @@ func greet() {
 
 // no return value, with parameters
 func log(msg char[]) {
-    print("[LOG] ", msg)
+    print("[LOG] %s\n", msg)   // format-string form, see §2.3.1
 }
 
 // returns a non-pointer type
@@ -735,7 +802,7 @@ func add(a i8, b i8) i8 {
 }
 
 // returns a struct (non-pointer)
-Person struct { name char[], age i32 }
+Person struct { name char[] age i32 }
 func make_person(name char[], age i32) Person {
     return Person{name, age}
 }
@@ -1076,6 +1143,18 @@ var local_temp i32 = 100      // automatic storage, block-mutable
 
 > ¹ `const`'s storage duration depends on where it is declared: module-level declarations have static storage duration (live for the program's lifetime); block-level declarations have automatic storage duration (live only while the block is active). The read-only semantics are identical in both cases.
 
+**`flow` auto-release is issued only for heap ownership.** Whether leaving a block or function emits a release for a `flow` variable depends on whether the value it is currently bound to is a freshly acquired heap ownership:
+
+| RHS form | Storage source | On block/function exit |
+| --- | --- | --- |
+| `malloc(T)` and other heap allocations | a newly allocated heap block | auto `free` |
+| string literal `"..."` | static read-only storage | not released (freeing read-only storage would be illegal) |
+| `&x` | the frame or static storage holding `x` | not released (that address is already governed by `x`'s storage duration) |
+| `{v0, v1, ...}` aggregate initialiser | the variable's own aggregate storage | not released |
+| a source that has transferred ownership away (`src` in `flow new void = src`, §12.1) | ownership handed to the receiver | not released (the receiver releases it; releasing twice would be illegal) |
+
+Rebinding a whole declared `flow` variable (`p = rhs`) re-decides the source from the new right-hand value; `p.(T) = v` and `p[i] = v` modify the pointee and leave `p`'s own source untouched. A rebinding gives up ownership of the previous heap block, and the compiler does not insert a release at the rebinding point (deliberately conservative, to avoid double-free through aliases), so the old block leaks — exact reclamation belongs to the 2.0 ownership-transfer analysis. The transfer forms `flow b void = a` / `b = a` (both `flow`) are not a leak: `b` takes over `a`'s heap block and releases it when `b` leaves scope.
+
 ---
 
 ### 11.2 Storage Duration and Assignment Safety Principle
@@ -1143,6 +1222,12 @@ The 16 transfer rules derived from the matrix (8 allowed, 8 forbidden), for line
 > **invalidated**: the source pointer may no longer be used (ownership has transferred).
 > **stays valid**: the source remains usable, unchanged.
 
+**When invalidation takes effect**: the transferring statement's own right-hand side necessarily reads the source — otherwise `flow new_owner void = ptr` could not be evaluated. Invalidation therefore starts at the **next statement**: within the transfer statement the source is still readable as a right-hand value (a necessary condition for that statement to exist), and it becomes unreadable and unwritable once the statement ends.
+
+**A frozen source may not transfer ownership**: while the source is borrowed (frozen), `flow → flow` is a compile-time error — otherwise the new owner would release the object while a live borrow still points at it, leaving the borrow dangling (the §14.2 analysis table states the same).
+
+**Transfer and auto-release**: ownership transfer moves the release responsibility together with ownership, so the receiver becomes the single party responsible for releasing; an invalidated source no longer triggers the block/function-exit auto-release of §11.1, which would otherwise `free` the same heap object twice.
+
 #### Design Rationale
 
 Each cell in the matrix is determined by two dimensions: storage duration and ownership/borrowing semantics.
@@ -1175,15 +1260,15 @@ Each cell in the matrix is determined by two dimensions: storage duration and ow
 
 #### `func` attribute
 
-`func` is a function return attribute (§7.1.2), not a variable storage duration, and does not participate in this matrix. See §7.3 for the rules governing function return values.
+`func` is a function return attribute (§7.1.2), not a variable storage duration, and does not participate in this matrix. This matrix describes **assignment between variables in the same scope** only; the rules for receiving function return values are in §7.3, which is stricter than this matrix — the matrix permits borrow-style assignments such as `flow → const` and `flow → var`, yet a `flow` return value may only be received by `flow`.
 
 > For the detailed correspondence between the specification and the compiler implementation, see [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md).
 
 ---
 
-## 12.2 Transfer Rules for Function Parameters and Return Values
+### 12.2 Transfer Rules for Function Parameters and Return Values
 
-### Parameters
+#### Parameters
 
 The attribute of a function parameter determines how arguments are passed:
 
@@ -1209,11 +1294,11 @@ modify(q)    // q frozen (mutable borrow)
 inspect(q)   // q frozen (read-only borrow)
 ```
 
-> **Implementation status**: The current compiler (ncc) parses parameter attribute prefixes but does not enforce the corresponding borrow semantics (parser.c:870–874).
-> All parameters are internally treated as `var` (VIS_DEFAULT). Parameter ownership/borrow checking will be completed in a future release.
+> **Implementation status**: On the 1.0 line (≤ v1.0.2) the compiler parses parameter attribute prefixes but does not enforce the corresponding borrow semantics — every parameter is treated as `var`; ownership/borrow checks on parameter prefixes land on the 2.0 line (PB-26). See the "Function parameters (§12.2)" table in `IMPLEMENTATION_STATUS.md` for exact code locations.
+> The check is not back-ported to the frozen 1.0 line; the 2.0 line implements and verifies it (PB-26).
 > See [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md) for details.
 
-### Return values
+#### Return values
 
 - Returning a `flow` pointer: ownership transfers to the caller (the caller is responsible for freeing).
 - Returning a `static` pointer: returns a static address; the caller obtains a shared reference.
@@ -1328,11 +1413,11 @@ func debug_vis(ptr void) {
 
 ### 14.1 Safe Dereference and Access
 
-Use the `?.` operator for safe dereference; the compiler combines visibility checks with bounds checking:
+The dereference operator `.(T)` performs the safety checks itself — no extra token is needed (the former `?.` / `?(` operators have been removed from the grammar, see BNF v2.3). The compiler first validates the pointer's visibility (a frozen or invalidated source is a compile-time error), then compares `sizeof(T)` against the static byte width of the object the pointer refers to, rejecting an over-wide read:
 
 ```nihao
 func safe_access(flow ptr void) {
-    value = ptr?.(i32)   // ensures ptr is non-null and visibility is correct
+    value = ptr.(i32)   // readable only if visibility is valid and i32 fits the pointed object
 }
 
 // equivalent to
@@ -1343,13 +1428,17 @@ if visof(ptr) == _flow {
 }
 ```
 
+> **Non-nullness is guaranteed statically**: a pointer declaration must be initialised and null pointers may not be declared (§5.1), so there is no "dereference of an uninitialised pointer" path; a runtime check for `malloc` returning `NULL` is 2.0 scope (current state: `docs/IMPLEMENTATION_STATUS.md`).
+
 Struct and array access follow the same rules:
 
 ```nihao
-Person struct { name char[], age i32 }
+Person struct { name char[] age i32 }
 flow person_ptr void = &some_person
 flow name_ptr void = person_ptr.(Person).name   // field transfer must satisfy visibility
 ```
+
+> `&some_person` points at `some_person`'s own storage (a frame or static segment), not at a newly allocated heap block, so `person_ptr` is not auto-released when it leaves scope (§11.1).
 
 ### 14.2 Complete Example (Ownership, Borrowing, and Storage Duration)
 
@@ -1372,8 +1461,8 @@ func modify(var val void) {
 }
 
 func inspect(const val void) {
-    puts("Inspecting value: ")
-    puts(val.(i32))
+    print("Inspecting value: ")
+    print(val.(i32))           // integer form, see §2.3.1
 }
 
 flow create_ptr() void {
@@ -1404,7 +1493,7 @@ func main() {
     // ptr.(i32) = 400     // error: ptr still frozen
 
     // flow -> flow (ownership transfer)
-    flow new_owner void = ptr  // ptr,read_ref,mut_ref invalidated
+    flow new_owner void = ptr  // error: ptr is borrowed (frozen) by mut_ref/read_ref, ownership may not be transferred (see the analysis below)
     // ptr.(i32) = 500     // error: ptr invalidated
 
     // function-call transfer
@@ -1415,7 +1504,7 @@ func main() {
     flow q void = malloc(i32)
     q.(i32) = 1100
     modify(q)             // q frozen; mutated inside
-    puts(q.(i32))         // prints 200
+    print(q.(i32))          // prints 200 (integer form, §2.3.1)
     inspect(q)            // q frozen (read-only)
 
     // chained calls (nested borrows)
@@ -1428,7 +1517,7 @@ func main() {
 
     // return values
     flow p2 void = create_ptr()  // receives ownership
-    puts(p2.(i32))          // 100
+    print(p2.(i32))         // 100
     // p2 auto-freed
 
     // nested scopes
@@ -1444,7 +1533,7 @@ func main() {
         }                        // o ends; n unfrozen
         n.(i32) = 900
     }                            // n ends; m unfrozen
-    puts(m.(i32))                // 900
+    print(m.(i32))                 // 900
 }
 ```
 
@@ -1474,7 +1563,7 @@ The following table excerpts the key pointer operations and shows the compiler's
 | `const o = n`                                            | assignment (`_var` → `_const`)| source `n` is `_var` (mutable borrow); `var→const` = read-only borrow | **`n` frozen** (until `o`'s scope ends); `o` is a read-only borrow.                                     |
 | `// o.(i32) = 700` (comment)<br>`// n.(i32) = 800` (comment)| attempted writes           | `o` read-only; `n` frozen because of `o`; neither mutable       | compiler errors at the commented positions if uncommented.                                                |
 | `n.(i32) = 900`                                          | write                       | `o`'s scope ended; `n` unfrozen; `n` is a mutable borrow and may write | analysis passes; `n` may modify the pointed-to data (owned by `m`).                                     |
-| `puts(m.(i32))`                                          | read                        | `n`'s scope ended; `m` unfrozen; `m` owns memory, readable      | analysis passes; reads value 900.                                                                        |
+| `print(m.(i32))`                                         | read                        | `n`'s scope ended; `m` unfrozen; `m` owns memory, readable      | analysis passes; reads value 900.                                                                        |
 
 ---
 
@@ -1567,4 +1656,4 @@ All of it is enforced statically — no runtime garbage collector, no runtime co
 | Compile-time  | `cooking` `align` `static_assert` |
 | Introspection | `sizeof` `typeof` `alignof` `offsetof` `bitoffsetof` `holdof` `structof` `unionof` `visof` `malloc` |
 | Literals      | `true` `false` |
-| Operators     | `+ - * / % ++ -- == != < > <= >= && \|\| ! & \| ^ ~ << >> = += -= *= /= %= &= \|= ^= <<= >>= -> . .( ?. ?( ?= ? : :: , .. # ; ( ) [ ] { }` |
+| Operators     | `+ - * / % ++ -- == != < > <= >= && \|\| ! & \| ^ ~ << >> = += -= *= /= %= &= \|= ^= <<= >>= -> . .( ? : :: , .. # ; ( ) [ ] { }` |

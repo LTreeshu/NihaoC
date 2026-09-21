@@ -23,7 +23,7 @@ A new better C language for my fantasy， a better programing world for void !
 
 开发约定|Development Conventions
 
-[Git 提交与推送约定](./docs/GIT_CONVENTIONS.md) · [版本路线图（1.0/2.0）](./docs/VERSIONING_ROADMAP.md) · [进度总结](./docs/STAGE_SUMMARY.md) · [TODO](./TODO.md) · [变更日志](./CHANGELOG.md)
+[Git 提交与推送约定](./docs/GIT_CONVENTIONS.md) · [版本路线图（1.0/2.0）](./docs/VERSIONING_ROADMAP.md) · [阶段总结（历史快照）](./docs/STAGE_SUMMARY.md) · [TODO](./TODO.md) · [变更日志](./CHANGELOG.md)
 
 Source code example demonstration:
 
@@ -137,9 +137,11 @@ nihao <command> [options]
 | `ir-arm64` | 2.0 预览 | IR → AArch64 汇编（AAPCS64，验汇编生成） |
 | `ir-loongarch64` | 2.0 预览 | IR → LoongArch64 汇编（LA64 基础指令集，验汇编生成） |
 
-> **1.0 范围**：`c` / `native` 两后端为对外可用产品线（路线图 A 方案），全量语法回归 12P/0F，examples 6/6 通过。
-> **双平台验证（2026-08-31）**：Windows 与 Linux（WSL Ubuntu-24.04）均通过 c/native 全量回归 0 FAIL +
-> examples 6/6（c/native 双后端）；`-run` 内存执行在 Linux 实测通过（WSL 期间修复 4 个平台 bug，
+> **1.0 范围**：`c` / `native` 两后端为对外可用产品线（路线图 A 方案），v1.0.2 门禁实测：全量语法回归每后端 **38 PASS / 0 FAIL / 5 SKIP**，examples **6/7** ——
+> `06_cooking.nc` 为 2.0 预览示例（`cooking` 编译期块与编译期函数尚未纳入 1.0 语法），1.0 线两后端不接受、`ir-c` / `ir-native` 可通过。
+> 计数随版本变化，权威口径以 [`CHANGELOG.md`](./CHANGELOG.md) 当前版本段与 [`docs/IMPLEMENTATION_STATUS.md`](./docs/IMPLEMENTATION_STATUS.md) 为准。
+> **双平台验证（2026-08-31，v1.0.0 时点）**：Windows 与 Linux（WSL Ubuntu-24.04）均通过 c/native 全量回归 0 FAIL +
+> examples 6/6（c/native 双后端，当时的用例集）；`-run` 内存执行在 Linux 实测通过（WSL 期间修复 4 个平台 bug，
 > 详见 CHANGELOG v1.0.1 记录）。
 > **2.0 预览**：`ir-*` 四架构后端（x86-64/riscv64/arm64/loongarch64）为下一代演进线（路线图 B 方案），
 > 其中 riscv64/arm64/loongarch64 生成标准 GAS 汇编（`-backend=ir-riscv64 -o out.s`），本机无交叉

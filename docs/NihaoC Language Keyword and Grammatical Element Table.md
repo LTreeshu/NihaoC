@@ -26,8 +26,8 @@
 - `default` – default branch option
 - `goto` – jump keyword
 - `true` / `false` – boolean literals
-- `bitoffsetof` – bit-field member offset
-- `holdof` – variable owner query
+- `bitoffsetof` – bit offset of a bit-field member (`bitoffsetof(type, member)`, declaration-order bit layout, compile-time constant)
+- `holdof` – variable owner query (`holdof(type, member, ptr)`, works for both struct and union)
 - `string` – string type alias (same as `char[]`)
 - `register` / `restrict` / `volatile` – C-style qualifiers
 - `struct` – structure definition
@@ -37,8 +37,8 @@
 - `sizeof` – get type size
 - `alignof` – get type alignment
 - `offsetof` – get struct member offset
-- `structof` – get base address of the struct containing a member
-- `unionof` – get base address of the union containing a member
+- `structof` – recover the base address of the struct owning a member (`structof(type, member, ptr)`)
+- `unionof` – recover the base address of the union owning a member (`unionof(type, member, ptr)`, accepts `union` only)
 - `if` – conditional branch
 - `else` – else branch
 - `for` – loop control
@@ -72,18 +72,17 @@
 - `char[]` – string type
 - `short` – short integer (C-compat)
 - `int` – integer (C-compat)
-- - `long` – long integer (C-compat)
-- - `float` – single-precision float (C-compat)
-- - `double` – double-precision float (C-compat)
+- `long` – long integer (C-compat)
+- `float` – single-precision float (C-compat)
+- `double` – double-precision float (C-compat)
 
 ###### Reserved Operators
 
 - `&` – address‑of operator
-- `=` – assignment operator
-- `?=` – safe assignment operator (with pointer checking)
+- `=` – assignment operator (every assignment performs the visibility-compatibility check, i.e. the former "safe assignment" semantics)
 - `.` – struct/union member access
-- `.()` – void pointer dereference
-- `.(type)` – typed dereference (with built‑in out‑of‑bounds check)
+- `.()` – void pointer dereference (performs the visibility check)
+- `.(type)` – typed dereference (performs the visibility check plus a compile-time out-of-bounds check)
 - `->` – struct/union pointer member access
 - `{}` – block / initializer list / multiple return values
 - `()` – function call, type cast
@@ -142,4 +141,8 @@
 
 ###### Other Operators
 
--
+- `..` – range operator (slice `[start..end]`, see Reserved Operators)
+- `...` – dynamic array marker (`[N...]` / `[...]`, BNF `<array-size>`; automatic growth reserved for 2.0)
+- `;` – statement terminator
+- `#` – statement terminator (equivalent to `;` and newline)
+- `::` – lexically reserved (scope resolution placeholder), not used by the current grammar
