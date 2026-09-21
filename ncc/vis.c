@@ -3,7 +3,7 @@
 /* ============================================================
  * Visibility & Ownership Static Analysis (NihaoC spec ch.11-14)
  *
- * State machine for pointer transfer rules (ch.12.1 / 12.2):
+ * State machine for pointer transfer rules (ch.12.1 matrix; ch.12.2 function/return rules unimplemented in 1.0):
  *   flow  -> var    : mutable borrow, source FROZEN
  *   flow  -> const  : read-only borrow, source FROZEN
  *   flow  -> flow   : ownership transfer, source INVALID
@@ -65,7 +65,7 @@ static int vis_norm(Visibility v)
     return (v == VIS_DEFAULT) ? VIS_DEFAULT /* var */ : (int)v;
 }
 
-/* Storage-lifetime + ownership/borrow transfer check (ch.12.2 matrix).
+/* Storage-lifetime + ownership/borrow transfer check (ch.12.1 matrix).
  * Returns 1 if the transfer is FORBIDDEN (caller reports the error). */
 int vis_check_transfer(Visibility src, Visibility dst)
 {
