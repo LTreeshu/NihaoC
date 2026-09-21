@@ -102,9 +102,10 @@ v2.0.0  = PB 就绪（阶段 3 达标）→ 合入 main → tag（届时 main �
 ```
 
 - tag 命名：`v<major>.<minor>.<patch>`，提交信息带 `release:` 前缀
+- **tag 形态：统一使用附注 tag（`git tag -a`，消息写门禁基线与版本范围）**。自 `v1.0.2`（PA-47，2026-09-21）起生效；`v1.0.1` 是历史上的轻量 tag，不回改。落点约定：打在发布线（1.x 为 `PA`）已验证的 tip 上，随后 `PA` 合入 `main` 后该提交从 `main` 可达（核对命令 `git merge-base --is-ancestor <tag> main`）。
 - **版本号单一真源**：`ncc/xmake.lua` 顶部的 `nihao_version` 常量——`set_version(nihao_version)` 与 `add_defines("NIHAO_VERSION_TAG=" .. nihao_version)` 同源于此，`ncc.h` 的 `NIHAO_VERSION` 由注入值字符串化得到，因此 `ncc --version`、帮助横幅、verbose 启动行与 `nihao init` 生成的 `nihao.toml` `[project] version` 全部等于构建时的那一处。**发布上抬版本号只改这一处**，不再手工同步头文件常量。不经 xmake 构建（LEGACY `Makefile`，已标注弃用）时无注入，上述输出为占位 `0.0.0-unknown`，不代表任何发布口径。（跨分支发布规则：某条线尚未接入构建注入时，按本条回灌。）
 - 1.x 期间 main 与 PA 保持同步（PA 是开发源，main 是发布镜像）
-- tag 台账：`v1.0.0` → `2036fba`（2026-08-31，annotated）、`v1.0.1` → `75c59cc`（2026-09-03，lightweight）；`v1.0.2` 于 2026-09-19 发布准备就绪待 tag（内容见 `CHANGELOG.md` 与 `GIT_CONVENTIONS.md` §5）
+- tag 台账：`v1.0.0` → `2036fba`（2026-08-31，annotated）、`v1.0.1` → `75c59cc`（2026-09-03，lightweight）、`v1.0.2` → `18f9c77`（2026-09-21，annotated，**本地未推送**，推送由 ltree 逐次授权见 `GIT_CONVENTIONS.md` §3.1）。`v1.0.2` 内容见 `CHANGELOG.md` 与 `GIT_CONVENTIONS.md` §五；tag 指向 `PA` 的 PA-46 提交，因为该提交与门禁复跑提交（PA-44 `6b69cfb`）在 `ncc/` 与 `examples/` 下逐字节相同（核对命令 `git diff --stat 6b69cfb v1.0.2^{commit} -- ncc/ examples/` 应为空），其后的提交仅动文档。
 
 ### 3.3 工作流
 
