@@ -30,6 +30,7 @@
 - `holdof` – variable owner query (`holdof(type, member, ptr)`, works for both struct and union)
 - `string` – string type alias (same as `char[]`)
 - `register` / `restrict` / `volatile` – C-style qualifiers
+- `short` / `int` / `long` / `float` / `double` – C-style type aliases (lexically reserved, **not** types; write `i16` / `i32` / `i64` / `f32` / `f64` by width)
 - `struct` – structure definition
 - `union` – union definition
 - `enum` – enumeration definition
@@ -54,7 +55,9 @@
 
 ###### Type Keywords
 
-- `void` – pointer type
+- `void` – generic pointer type
+
+> There are exactly 16 primitive types (`char[]` and `string` count as one), see `BNF.md` §3 `<primitive-type>`; `short`/`int`/`long`/`float`/`double` are not among them.
 - `bool` – boolean type
 - `i8` – 8‑bit signed integer type
 - `i16` – 16‑bit signed integer type
@@ -66,15 +69,10 @@
 - `i64` – 64‑bit signed integer type
 - `f32` – 32‑bit floating‑point type
 - `f64` – 64‑bit floating‑point type
-- `fx32` – 32‑bit fixed‑point type
-- `fx64` – 64‑bit fixed‑point type
+- `fx32` – 32-bit fixed-point type (stored as an equally wide integer in 1.x; radix undefined)
+- `fx64` – 64-bit fixed-point type (stored as an equally wide integer in 1.x; radix undefined)
 - `char` – character type
 - `char[]` – string type
-- `short` – short integer (C-compat)
-- `int` – integer (C-compat)
-- `long` – long integer (C-compat)
-- `float` – single-precision float (C-compat)
-- `double` – double-precision float (C-compat)
 
 ###### Reserved Operators
 
@@ -144,5 +142,5 @@
 - `..` – range operator (slice `[start..end]`, see Reserved Operators)
 - `...` – dynamic array marker (`[N...]` / `[...]`, BNF `<array-size>`; automatic growth reserved for 2.0)
 - `;` – statement terminator
-- `#` – statement terminator (equivalent to `;` and newline)
+- `#` – compatible statement terminator (canonical spelling is `;` or a newline)
 - `::` – lexically reserved (scope resolution placeholder), not used by the current grammar
