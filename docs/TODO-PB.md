@@ -1,6 +1,6 @@
 # 方案 B — IR 中间层待办（PB 分支）
 
-> 更新日期：2026-09-19
+> 更新日期：2026-09-21（本轮在 `PB` 完成 **PA-48 语法设计固定轮** 的共享文档回灌：四份设计文档与六份簿记文档按三方合并对齐 `PA`，PB-30 入账；PB-31 ~ PB-33 为开放待办）
 > 本文件为 PB 分支（2.0 IR 演进线）专属待办。通用里程碑与跨分支待办见 `ROADMAP.md`。
 > 2026-08-29 起仓库分支化：B 方案开发在 `PB` 分支（见 `docs/GIT_CONVENTIONS.md`）。
 
@@ -111,3 +111,24 @@
   - **cgen 返回类型生成**：`Symbol.ret_vis ∈ {flow/const/static}` 时 `cret = "void*"`（让 C 函数签名合法，避免参数/返回类型不匹配编译错）。
   - **测试**：新增 `pos/struct_param_prefix.nc`（IR_ONLY，2 断言；struct × flow/var/const 前缀）、`pos/static_param_share.nc`（IR_SUBSET，4 断言；static 参数共享，函数局部 static + 延迟赋值规避 C "static 局部+函数 init 非法"）、`pos/return_flow.nc`（IR_SUBSET，4 断言；`flow→flow` 转移 + `static→const` 转移）、`err/m2f_retflow.nc`（3 错误用例，`flow→static` 禁止，报"target lifetime"）。
   - **回归**：`xmake test --all` 全矩阵（c/native/ir-c/ir-native）**0 FAIL**；四后端一致。
+
+---
+
+### 语法设计固定轮：同步、复测与回灌（2026-09-21，`BNF.md` v2.11 / PA-48）
+
+> 本轮 ltree 授权「按推荐执行修复」，`docs/SYNTAX_DESIGN_REVIEW.md` §11 的 R1~R19 已在 `PA` 侧一次性固定（PA-48），并规定**本轮只固定设计、代码缺口逐条登记为 PB 待办**。下列 PB-32 / PB-33 即该决策落地的待办清单。
+
+- [x] **PB-30 共享文档同步到 v2.11 口径（2026-09-21 完成，文档-only）**：以三方合并（merge-base `7d4c652`）把 `PA` 侧 PA-35 ~ PA-48 的文档变更灌入本分支——四份设计层文档（`BNF.md` v2.11 / `Chinese.md` / `English.md` / 两份语法元素表）与五份簿记文档（`CHANGELOG.md` / `ROADMAP.md` / `GIT_CONVENTIONS.md` / `VERSIONING_ROADMAP.md` / `STAGE_SUMMARY.md`）现与 `PA` 逐字一致，`docs/TODO-PA.md` 同步为 `PA` 现值。设计层新口径：基本类型 **16 个**（`short`/`int`/`long`/`float`/`double` 退出 `<primitive-type>` 转为词法保留，词法保留字 3 → **8**）、`<for-step> ::= <expr>`、`switch` 各 `case` 不穿透且 1.x 无 `fallthrough`、`<statement>` 含 `<label-def>`、`is <identifier>` 按值比较、`#` 为兼容语句终止符、`fx32`/`fx64` 同宽整型存储且定点小数点位置未定义。PA-45 的 PB 回灌清单 ①~⑦（从属查询三参签名、`=`/`.()` 可见性检查定语、英文表畸形 bullet、`其他运算符` 五行、文件末尾换行）**随本次合并一并落地**。`docs/IMPLEMENTATION_STATUS.md` **保留 PB 版本**（本分支专属行号），只补 PA-48 的新增节。核对命令：`git diff PA PB -- <上述十份文档>` 应只剩两份语法元素表的 `?=` / `=>` 两行与本分支专属文件。
+- [ ] **PB-31 删除两份语法元素表的 `?=` / `=>` 两行（依赖 PB-33 的 P1）**：按 PA-45 判定，这两行是 1.0 / 2.0 线的**实现差异**而非文档不一致——本分支 `token.h:112 TOK_SAFE_ASSIGN` 仍被 `parser.c` 消费，`=>` 仅词法保留。故本轮保留。P1（`?=` / `?.` 语法移除）完成后删除两行，届时中/英两表应各为 **116 = `PA` 现值**（`PA` 由 120 → 116 是 R19 移除五个类型别名行所致，见 `TODO-PA.md` PA-45 追记）。
+- [ ] **PB-32 在 PB 后端复测 F1~F9（`IMPLEMENTATION_STATUS.md`「语法固定轮实测记录」）**：该表数据采自 `PA`/`main`（v1.0.2）的 A 后端，本分支未复测。重点是四条本分支同样可能成立的缺口：F1 结构体成员默认值 lowering 生成 `7int32_t x;`、F2 生成的 C 字符串字面量含真实 `0x0A` 字节、F8/F9 四档数组容量写法（`[N...]` 被前端拒绝、`[...]` 无默认容量 8、聚合初值退化成非法 C）。IR 侧另需确认 `[...]` 的默认容量 8 是否只在槽模型成立。复测结论回填「2.0 线（PB）差异」一节，并与 `TODO-PA.md` 的开放待办 PA-49 ~ PA-53 交叉注明。
+- [ ] **PB-33 PB 侧代码缺口回灌（`docs/SYNTAX_DESIGN_REVIEW.md` §12 的 P1~P6）**：本分支前端落后 1.0 线已定稿的六组实现，逐条与本分支 BNF v2.11 冲突，属 2.0 线开发范围：
+
+| 编号 | 违反定稿设计之处（实测于 PB） | 需要落到 PB 的动作 |
+| --- | --- | --- |
+| P1 | `?=`（`parser.c` 3 处消费 `TOK_SAFE_ASSIGN`）、`?.`（2 处）仍被语法接受 | 语法移除 + 词法保留 + 补 err 用例（对齐 `PA` 的 `safe_assign_removed` / `safe_dot_removed`）；完成后执行 PB-31 |
+| P2 | `structof` / `unionof` / `holdof` / `bitoffsetof` 两个前端零实现（仅 `token.h` 有关键字） | 按 BNF v2.11 三参 `(T, m, ptr)` 实现 + `bitoffsetof` 声明序位布局 + err 用例（PA-22 口径） |
+| P3 | `alignof` 仍输出 C 的 `_Alignof`（`parser.c` 2 处） | 改由编译期自算并输出字面量（PA-24 口径） |
+| P4 | 无 `while_depth` / `__is_matched` / `no_auto_free` / `moved_src` | 补 `is` 出循环守卫、`is` 首匹配即止（PA-16）、自动释放只发堆右值（PA-32）、`flow→flow` 转移与冻结源拒绝（PA-33） |
+| P5 | 数组/切片口径缺（定长字符数组容量诊断、非 `char` 元素字面量、多变量数组声明、`len` 静态不可知报错、`void` 裸下标拒绝） | 按 BNF v2.5~v2.10 逐条补前端诊断（PA-25/26/27/31/34 口径） |
+| P6 | `nihao_version` 单一真源未接入 | 版本号改由 `xmake.lua` 构建期注入（PA-35） |
+
