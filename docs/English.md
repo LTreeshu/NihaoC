@@ -21,7 +21,7 @@ NiHao is a new statically compiled language designed for system-level programmin
 
 - Statements are separated by a newline or `;` — both are optional delimiters.
 - Multiple statements on the same line are separated by `;`: `stmt1; stmt2`
-- `#` is also a valid statement terminator.
+- `#` is a **compatibility-retained** statement terminator (equivalent to `;`). Canonical code uses only newlines and `;`; `#` is no longer used in new code or in documentation examples (BNF §1.4).
 
 ### 2.3 Built-in Functions
 
@@ -34,19 +34,20 @@ NiHao is a new statically compiled language designed for system-level programmin
 - `unionof(type,member,ptr)` — same, accepts a `union` only
 - `holdof(type,member,ptr)` — same, accepts both `struct` and `union`
 - `visof(var)` — visibility inspection, returns the visibility attribute
-- `len(x)` — logical length (2026-08-19): array = capacity (product of all dimensions for
+- `len(x)` — logical length: array = capacity (product of all dimensions for
   multi-dimensional arrays); dynamic `char[]` = literal length;
   slice variable `s = arr[lo..hi]` = boundary difference `hi-lo` (bounds must be compile-time
   constants; returns a compile-time value)
 
-> The ownership built-ins (`structof` / `unionof` / `holdof`) and `bitoffsetof` are fixed to the
-> signatures above as of BNF v2.4; on the 1.0 line they are provided by the A backend
-> (`c` / `native`), while the `ir-*` backends leave them to the 2.0 layout work
-> (current state: `docs/IMPLEMENTATION_STATUS.md`).
-> As of BNF v2.6, `len(x)` is provided by the A backend on the 1.0 line for the three cases
-> above: when the argument's logical length is not statically known (a scalar, a slice with
-> non-literal bounds, …) the front end reports an error immediately; the `ir-*` backends
-> already cover the three cases but return 0 when the length is not statically known.
+> `sizeof` / `typeof` / `alignof` / `offsetof` / `bitoffsetof` / `structof` / `unionof` / `holdof` / `visof` are
+> keywords; `len` / `malloc` / `print` / `puts` / `static_assert` are **built-in names** — neither kind takes part
+> in user scope resolution, so a user declaration cannot shadow them.
+> The ownership built-ins (`structof` / `unionof` / `holdof`) take three arguments `(type, member, ptr)`: a type
+> plus member name alone yields no offset, so the owner's base address is recovered from the member address;
+> `structof` accepts only `struct`, `unionof` only `union`, `holdof` both.
+> `len(x)` yields a compile-time constant in all three cases; when the argument's logical length is not statically
+> known (a scalar, a slice with non-literal bounds, …) it is a front-end error.
+> Which backend provides what is tracked in `docs/IMPLEMENTATION_STATUS.md`.
 
 #### 2.3.1 Output Built-ins (`print` / `puts`)
 
@@ -64,9 +65,8 @@ NiHao is a new statically compiled language designed for system-level programmin
 > The two forms are distinguished statically by the first argument token (literal → `printf`
 > passthrough, otherwise → integer print), so `print(buf)` with `buf` a string variable prints its
 > address as an integer, not its contents — use `puts` to print strings.
-> Scope: `print` is provided by the A backend on the 1.0 line; the `ir-*` backends (2.0 line) do not
-> have it built in (it is emitted as an undefined symbol and fails at link time), so tests meant to
-> run on every backend use `puts` only. `puts` is a plain C library passthrough on both lines.
+> `puts` is a plain C library passthrough. Availability of `print` per backend is tracked in
+> `docs/IMPLEMENTATION_STATUS.md`.
 
 ### 2.4 Keyword Reference
 
@@ -94,6 +94,11 @@ NiHao is a new statically compiled language designed for system-level programmin
 - `[[unused]]` — deprecation function attribute
 - `[[export] ".my_section"]` — export to a specific section
 
+> The complete keyword set and where each keyword sits in the grammar are defined by [`BNF.md`](./BNF.md) §1.2
+> (40 grammar keywords + 8 lexically reserved words + 16 primitive type names).
+> Of these, **`register` / `restrict` / `volatile` and `short` / `int` / `long` / `float` / `double` are lexically
+> reserved only**: no production uses them, so writing one in source is a reserved-word conflict, not valid syntax.
+
 ## 3. Type System
 
 ### 3.1 Primitive Types
@@ -101,8 +106,9 @@ NiHao is a new statically compiled language designed for system-level programmin
 | Type    | Description                 | Size    |
 | ------- | --------------------------- | ------- |
 | `void`  | Generic pointer type        | machine pointer size |
-| `char[]`| String type                 | dynamic |
+| `char[]`| String type (equivalent spelling of `string`) | dynamic |
 | `char`  | Character type              | 1 byte  |
+| `bool`  | Boolean type                | 1 byte  |
 | `u8`    | Unsigned 8-bit integer      | 1 byte  |
 | `u16`   | Unsigned 16-bit integer     | 2 bytes |
 | `u32`   | Unsigned 32-bit integer     | 4 bytes |
@@ -112,15 +118,19 @@ NiHao is a new statically compiled language designed for system-level programmin
 | `i32`   | Signed 32-bit integer       | 4 bytes |
 | `i64`   | Signed 64-bit integer       | 8 bytes |
 | `f32`   | Single-precision float      | 4 bytes |
-
-> f32 strict width (implemented 2026-08-19): values are rounded to single precision on
-> assignment/initialization (storage-truncation semantics); arithmetic still promotes to
-> double. `f32 x = 0.1` stores back so that `x != 0.1` (f64 literal).
 | `f64`   | Double-precision float      | 8 bytes |
-| `fx32`  | Fixed-point (Q16.16)        | 4 bytes |
-| `fx64`  | Fixed-point (Q32.32)        | 8 bytes |
+| `fx32`  | 32-bit fixed point (stored as an equally wide integer in 1.x; radix undefined) | 4 bytes |
+| `fx64`  | 64-bit fixed point (stored as an equally wide integer in 1.x; radix undefined) | 8 bytes |
 
-C-compatible types also exist: `string` (alias of `char[]`), `short`, `int`, `long`, `float`, `double`, `bool`.
+> - The primitive types are exactly the 16 above (`char[]` and `string` being one type spelled two ways).
+>   The C-style aliases `short` / `int` / `long` / `float` / `double` are **not** types — they are reserved
+>   words, and writing one where a type is expected is a syntax error. Use the exact widths instead:
+>   `short`→`i16`, `int`→`i32`, `long`→`i64`, `float`→`f32`, `double`→`f64`.
+> - `f32` has strict single-precision storage: values are rounded to single precision on
+>   assignment/initialization (storage-truncation semantics) while arithmetic still promotes to
+>   double, so `f32 x = 0.1` stores back such that `x != 0.1` (the literal is `f64`).
+> - The radix of `fx32` / `fx64` (Q16.16 / Q32.32) is **undefined** in 1.x: operations and conversions
+>   behave exactly like the equally wide integer type. Fixed-point semantics are reserved for 2.0.
 
 ### 3.2 Composite Types
 
@@ -220,7 +230,7 @@ xunion union{
 xunion.r1 = 1
 ```
 
-**Named-type nesting (implemented 2026-08-19)** — chained member access + whole-struct copy:
+**Named-type nesting** — chained member access + whole-struct copy:
 
 ```nihao
 Point struct { x i32 y i32 }
@@ -233,9 +243,9 @@ l.b.y = 2            // chained access (recursively expanded offsets)
 m Line
 m = l                // whole-struct copy (per-member, nested recursion; copies are independent)
 
-n Line = {{1, 2}, {3, 4}}   // nested initializer list (recursive fill, 2026-08-26)
+n Line = {{1, 2}, {3, 4}}   // nested initializer list (recursive fill)
 
-// union nesting: aggregate members share slots (total slots = largest member, 2026-08-27)
+// union nesting: aggregate members share slots (total slots = largest member)
 U union { a Point b Point }
 un U
 un.a.x = 1
@@ -301,7 +311,7 @@ variable = ptr3[][].(i32) // three-level dereference
 >
 > - **Implicit inference**: `p = &x` auto-infers `p` as a pointer to `x`'s type (no type name needed). When the right-hand side is a member access `v = s.m`, the inferred type is member `m`'s own type (an array member decays to a pointer); when it is a call `v = f(a)` or `v = fp(a)`, the inferred type is the return type of the callee (or of the function pointer).
 
-> - **`->` pointer member access**: `p->field` is equivalent to `p.()->field`; chained `p->a->b` and compound assignment `p->n += 1` are supported (aligned in both A-plan and IR layers since 2026-08-19).
+> - **`->` pointer member access**: `p->field` is equivalent to `p.()->field`; chained `p->a->b` and compound assignment `p->n += 1` are supported.
 
 #### 5.1.2 Array Pointers
 
@@ -324,7 +334,7 @@ arryptr2[1].(char[8])[7] = arrybuffer[7]
 arry[1..3] = {20,30,40}
 ```
 
-> **Array pointers and slices (decided 2026-09-20, A-plan c/native backends)**
+> **Array pointers and slices (per-backend coverage: see `IMPLEMENTATION_STATUS.md`)**
 >
 > - **A generic `void` pointer cannot be subscripted bare**: for `p[i]` and `p[a..b]` the element width is unknown at compile time, so the frontend reports an error and requires `p.(T)` first (`p.(T)[i]`, `p.(T)[a..b]`). The bounds check belongs to `.()` itself (§12.1).
 > - **Empty subscript `p[]`**: one level of dereference, equivalent to `p.()` with the type omitted; it keeps participating in the postfix chain (`p3[][].(i32)`).
@@ -333,8 +343,6 @@ arry[1..3] = {20,30,40}
 > - **String right-hand side `p[a..b] = "abc"`**: copies the literal **byte by byte**, terminator `\0` included, for a character slice region. The closed-interval upper bound `b` is the last writable byte, so `strlen("abc") <= b-a` must hold; otherwise the frontend reports an error.
 > - **String initializer of a fixed-size character array `s char[n] = "abc"`**: allocates real **array storage** of the declared size (no decay to a pointer) and writes the literal together with its terminating `\0`, so `strlen + 1 <= n` must hold; otherwise the frontend reports `string needs N bytes with terminator, array 's' holds M` (same wording rule as the slice case above). Elements may be overwritten in place. `len(s)` returns the declared capacity `n` (§2.3 "array = capacity"), independent of the content length. A fixed-size array whose element type is not `char` cannot take a string literal initializer — the frontend reports an error and asks for a value list `{...}`. The size-omitted form `char[] s = "abc"` stays a dynamic string (§5.1.1): it generates a pointer, `len()` returns the literal length, and the capacity check above does not apply.
 > - **The same form in a multi-variable declaration `var {aa = "aa", …} char[n]` (§4.2)**: exactly the same rules as the single-variable case — every variable gets its own array storage of the declared capacity, `len()` returns that capacity, and both diagnostics above are reported per variable. If an initializer is not a string literal (including an omitted initializer), the frontend reports an error and asks for a single-variable declaration; it never silently drops `[n]` and emits broken C such as `char aa = …`. The size-omitted `{…} char[]` form still decays to a pointer and registers the literal length.
-> - **Implementation note (2026-09-20, v1.0.2 / PA-31, PA-34)**: the array storage and both diagnostics above are provided by the A-plan c/native backends; the `ir-*` backends check neither the capacity nor the element type, and do not implement the array form of a multi-variable declaration at all, which is a 2.0 alignment item.
-
 #### 5.1.3 Pointer Arrays
 
 ```nihao
@@ -571,7 +579,30 @@ for i = 0; i < 10; i++ {
 }
 ```
 
-**goto and labels (2026-08-19):**
+- `for <init> ; <cond> ; <step> { … }`: `<init>` may be a declaration (including the inferred form
+  `for i = 0; …`) or an expression; `<step>` is **any expression** (assignment, `i++`/`i--`, a call, …).
+  The compiler does **not** check whether the step advances the loop variable — omit it and you get an
+  infinite loop.
+
+**switch:**
+
+```nihao
+switch (code) {
+    case 1:
+        puts("one")
+    case 2:
+        puts("two")
+    default:
+        puts("other")
+}
+```
+
+- Each `case` (and `default`) leaves the whole `switch` when its statement list ends; execution does
+  **not fall through**. No per-case `break` is needed (or allowed).
+- 1.x offers **no** explicit fall-through spelling (there is no `fallthrough` keyword). Hoist shared
+  statements out of the `switch`, or use `goto` with a label.
+
+**goto and labels:**
 
 ```nihao
 i i32 = 0
@@ -599,7 +630,7 @@ if i < 3 {
                    | <visibility-enum>                  (* visibility enum *)
                    | <struct-destructure>               (* struct destructuring — reserved *)
                    | <adt-destructure>                  (* ADT variant destructuring — reserved *)
-                   | <identifier>                       (* variable binding *)
+                   | <identifier>                       (* compared by value, introduces no binding *)
 ```
 
 #### Pattern Semantics
@@ -612,22 +643,27 @@ if i < 3 {
 | `lo..hi` | `__is_val >= lo && __is_val <= hi` | none | `is 0..50 { continue }` |
 | `<enum-variant>` | `__is_val == VARIANT_VAL` | none | `is RED { ... }` |
 | `<vis-enum>` | `visof == NH_*` | none | `is _flow { ... }` |
-| `<identifier>` | always matches | binds value to new variable | `is x { printf(x) }` |
-| `Struct(f1, f2)` | type match + field destructuring | binds each field | `is Point(x, y) { ... }` |
-| `Variant(pat)` | ADT tag match + sub-pattern | binds payload | `is Some(v) { ... }` |
+| `<identifier>` | `__is_val == x` (compared with the variable's current value) | none | `is lim { ... }` |
+| `Struct(f1, f2)` | type match + field destructuring (reserved) | binds each field | `is Point(x, y) { ... }` |
+| `Variant(pat)` | ADT tag match + sub-pattern (reserved) | binds payload | `is Some(v) { ... }` |
 
-> **Implementation status (1.0 release line, ≥ v1.0.2)**: the A backend (c/native) supports integer literal, negative integer, closed range `lo..hi`, enum variant, visibility enum, the `_` wildcard (completed in v1.0.2, on both the A backend and the IR backend), and "first match wins (no fallthrough)" — at most one `is-clause` body runs per loop iteration (v1.0.2). Differences from this table: `<identifier>` compares **by value** rather than binding a new variable; struct destructuring and ADT variant destructuring remain reserved syntax; the IR backends (2.0 preview) still compile multiple `is-clause`s to parallel `if` statements, so overlapping patterns may execute in sequence there — to be aligned in 2.0. See `IMPLEMENTATION_STATUS.md` for the item-by-item mapping.
+> **`<identifier>` settled (BNF v2.11)**: the 1.x pattern set is a **value-matching** set — a bare identifier
+> behaves like a literal, matching against its current value; it introduces no binding and shadows nothing.
+> Binding and destructuring (`Struct(...)`, `Variant(...)`, and binding-style `<identifier>`) are 2.0
+> capabilities; this version only reserves their syntax.
+>
+> Per-backend coverage of the patterns above is tracked in `IMPLEMENTATION_STATUS.md`.
 
 #### Semantic Rules
 
 - **R1 — `__is_val` type**: equals the type of the `while` condition expression.
-- **R2 — Variable binding scope**: limited to the `is-clause`'s `block-stmt`.
+- **R2 — Binding scope**: where a destructuring pattern introduces bindings (reserved syntax), its scope is the `is-clause`'s `block-stmt`.
 - **R3 — Struct destructuring field matching**: supports positional, named (`.field`), wildcard (`_`), and mixed/nested.
 - **R4 — ADT variant matching (future)**: tag check + payload binding.
 
 #### Identifier Disambiguation
 
-A bare identifier that is a known enum variant (findable in the compiler symbol table) is matched by value; otherwise it is treated as a variable binding.
+A bare identifier that is a known enum variant (findable in the compiler symbol table) matches that variant's value; otherwise it compares against the identifier's current value. Both are value matches — neither introduces a binding.
 
 #### Match Order
 
@@ -777,7 +813,7 @@ const ver void = get_version()           // const → const ✅
 // const q void = create_buffer(1024)    // flow → const ❌ compile error: nobody frees it and the temporary is already dead
 ```
 
-> **Implementation status**: this check is not enforced on the 1.0 line (≤ v1.0.2) — the illegal receipients in the table above are forbidden by the specification but not yet reported by the compiler. Return-value visibility prefix checks are implemented from the 2.0 line (PB-29); the 1.0 frozen line does not port them. See the "Caller Receiving Rules (§7.3)" table in [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md).
+> The **enforcement status** of the table above (which line reports an error, which line currently only forbids it in the specification) is recorded per item in the "Caller Receiving Rules (§7.3)" table of [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md). A form forbidden by the specification is not a legal program on any line.
 
 ---
 
@@ -1048,7 +1084,7 @@ cooking {
     const BUILD_TIME = time.now()
     // compile-time variables: const NAME [TYPE] = expr (shared across blocks, folded at runtime)
     const BASE i32 = 10
-    // compile-time functions (macro expansion, 2026-08-19): const NAME(p1, p2) = expr
+    // compile-time functions (macro expansion): const NAME(p1, p2) = expr
     const sq(x) = x * x
     static_assert(sq(5) == 25, "sq(5) != 25")   // nested sq(sq(2)) / compose sq(cube(2)) supported
 }
@@ -1294,9 +1330,7 @@ modify(q)    // q frozen (mutable borrow)
 inspect(q)   // q frozen (read-only borrow)
 ```
 
-> **Implementation status**: On the 1.0 line (≤ v1.0.2) the compiler parses parameter attribute prefixes but does not enforce the corresponding borrow semantics — every parameter is treated as `var`; ownership/borrow checks on parameter prefixes land on the 2.0 line (PB-26). See the "Function parameters (§12.2)" table in `IMPLEMENTATION_STATUS.md` for exact code locations.
-> The check is not back-ported to the frozen 1.0 line; the 2.0 line implements and verifies it (PB-26).
-> See [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md) for details.
+> The **enforcement status** of parameter attribute prefixes (where they are parsed only, where they drive ownership/borrow checks) is tracked in the "Function parameters (§12.2)" table of [`IMPLEMENTATION_STATUS.md`](./IMPLEMENTATION_STATUS.md).
 
 #### Return values
 
@@ -1413,7 +1447,7 @@ func debug_vis(ptr void) {
 
 ### 14.1 Safe Dereference and Access
 
-The dereference operator `.(T)` performs the safety checks itself — no extra token is needed (the former `?.` / `?(` operators have been removed from the grammar, see BNF v2.3). The compiler first validates the pointer's visibility (a frozen or invalidated source is a compile-time error), then compares `sizeof(T)` against the static byte width of the object the pointer refers to, rejecting an over-wide read:
+The dereference operator `.(T)` performs the safety checks itself — no extra token is needed (the former `?.` / `?(` operators have been removed from the grammar). The compiler first validates the pointer's visibility (a frozen or invalidated source is a compile-time error), then compares `sizeof(T)` against the static byte width of the object the pointer refers to, rejecting an over-wide read:
 
 ```nihao
 func safe_access(flow ptr void) {
@@ -1647,7 +1681,7 @@ All of it is enforced statically — no runtime garbage collector, no runtime co
 
 | Category      | Tokens |
 | ------------- | ------ |
-| Types         | `void` `char` `string` `bool` `i8` `i16` `i32` `i64` `u8` `u16` `u32` `u64` `f32` `f64` `fx32` `fx64` `short` `int` `long` `float` `double` |
+| Types         | `void` `char` `string` `bool` `i8` `i16` `i32` `i64` `u8` `u16` `u32` `u64` `f32` `f64` `fx32` `fx64` |
 | Storage/visibility | `const` `flow` `static` `var` `_undef` `_const` `_flow` `_static` `_var` |
 | Functions     | `func` `return` `break` `continue` `goto` |
 | Aggregates    | `struct` `union` `enum` `alias` |
