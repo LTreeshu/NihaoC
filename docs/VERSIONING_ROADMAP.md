@@ -40,7 +40,7 @@
 - [x] **examples/ 示例集**（8/30）：7 例已建（hello/fib/struct/pointer/string/cooking/multiret）+ README 对照表；**6 例 1.0 可编译验证通过**（c/native 编译+运行）；期间暴露并修复 A 方案 `p.()` 解引用类型 bug（此前硬编码 `(*(void**)p)` → 现按符号指针 ref 输出 `(*(int32_t*)p)`）；06_cooking 标注 2.0 预览（IR_ONLY 子集语法）
 - [x] **README 更新**（8/31）：安装小节（xmake + tcc 依赖探测与获取）、CLI 命令一览表、后端表标注 1.0/2.0 范围（c/native = 1.0 正式支持；ir-* = 2.0 预览）、-run Linux only 说明
 - [x] **语言规格冻结**（8/31）：BNF v2.0 终校完成——补 `=>`（TOK_FAT_ARROW）词法、`->` 指针成员访问 postfix 规则、`T*` 具名指针 pointer-type 规则；Chinese/English 补指针声明双支持（隐式推断 + 显式声明）；语法元素表核对通过（`=>`/`->` 已含）；multireturn 无残留。**注**：1.0.x 起 `T*` 具名指针声明与一元 `*` 解引用已移除（解引用统一 `.()`/`.(T)`/`->`）；2.0 起 `=>` 单语句匹配形式已移除（PA-13 / PB-27.6，BNF v2.2），`=>` 保留词法但语法不使用；`->` 保留
-- [x] **版本与发布**（8/31）：CHANGELOG.md 建立（M0→M4→1.0 里程碑条目）；`v1.0.0` tag 已本地创建（未推送，见 §3.2）
+- [x] **版本与发布**（8/31）：CHANGELOG.md 建立（M0→M4→1.0 里程碑条目）；`v1.0.0` tag 当时仅本地创建（后已推送，台账见 §3.2）
 - [x] **Linux 实测（PA-9，2026-08-31 WSL Ubuntu-24.04 完成）**：`-run` 内存执行修复（tcc_relocate(NULL) 语义误判→直接 tcc_run）、libtcc.so `-Bsymbolic` 重建（符号插值劫持）、SysV 调用约定（x87 浮点）；c/native 各 12P/0F/5S + examples 6/6 双后端一致——**Windows + Linux 双平台验证通过**（1.0 范围已含 Linux）
 
 ### 1.4 明确留给 2.0（1.0 不做）
@@ -105,7 +105,7 @@ v2.0.0  = PB 就绪（阶段 3 达标）→ 合入 main → tag（届时 main �
 - **tag 形态：统一使用附注 tag（`git tag -a`，消息写门禁基线与版本范围）**。自 `v1.0.2`（PA-47，2026-09-21）起生效；`v1.0.1` 是历史上的轻量 tag，不回改。落点约定：打在发布线（1.x 为 `PA`）已验证的 tip 上，随后 `PA` 合入 `main` 后该提交从 `main` 可达（核对命令 `git merge-base --is-ancestor <tag> main`）。
 - **版本号单一真源**：`ncc/xmake.lua` 顶部的 `nihao_version` 常量——`set_version(nihao_version)` 与 `add_defines("NIHAO_VERSION_TAG=" .. nihao_version)` 同源于此，`ncc.h` 的 `NIHAO_VERSION` 由注入值字符串化得到，因此 `ncc --version`、帮助横幅、verbose 启动行与 `nihao init` 生成的 `nihao.toml` `[project] version` 全部等于构建时的那一处。**发布上抬版本号只改这一处**，不再手工同步头文件常量。不经 xmake 构建（LEGACY `Makefile`，已标注弃用）时无注入，上述输出为占位 `0.0.0-unknown`，不代表任何发布口径。（跨分支发布规则：某条线尚未接入构建注入时，按本条回灌。）
 - 1.x 期间 main 与 PA 保持同步（PA 是开发源，main 是发布镜像）
-- tag 台账：`v1.0.0` → `2036fba`（2026-08-31，annotated）、`v1.0.1` → `75c59cc`（2026-09-03，lightweight）、`v1.0.2` → `18f9c77`（2026-09-21，annotated，**本地未推送**，推送由 ltree 逐次授权见 `GIT_CONVENTIONS.md` §3.1）。`v1.0.2` 内容见 `CHANGELOG.md` 与 `GIT_CONVENTIONS.md` §五；tag 指向 `PA` 的 PA-46 提交，因为该提交与门禁复跑提交（PA-44 `6b69cfb`）在 `ncc/` 与 `examples/` 下逐字节相同（核对命令 `git diff --stat 6b69cfb v1.0.2^{commit} -- ncc/ examples/` 应为空），其后的提交仅动文档。
+- tag 台账：`v1.0.0` → `2036fba`（2026-08-31，annotated）、`v1.0.1` → `75c59cc`（2026-09-03，lightweight）、`v1.0.2` → `18f9c77`（2026-09-21 建本地 annotated tag，**2026-09-24 经 ltree 单独授权推送**；推送门禁见 `GIT_CONVENTIONS.md` §3.1）。`v1.0.2` 内容见 `CHANGELOG.md` 与 `GIT_CONVENTIONS.md` §五；tag 指向 `PA` 的 PA-46 提交，因为该提交与门禁复跑提交（PA-44 `6b69cfb`）在 `ncc/` 与 `examples/` 下逐字节相同（核对命令 `git diff --stat 6b69cfb v1.0.2^{commit} -- ncc/ examples/` 应为空），其后的提交仅动文档。
 
 ### 3.3 工作流
 
