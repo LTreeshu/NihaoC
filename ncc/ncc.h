@@ -41,6 +41,9 @@
 #define MAX_INIT_DESIGATORS 32
 /* 数组容量写法 `[...]` / `[..]` 省略容量时的默认容量（BNF §3，兼容保留档） */
 #define NH_DEFAULT_ARRAY_CAP 8
+/* 成员默认值展开的缓冲上限（§3.1 × §5.1.2：聚合类型数组按元素逐项展开）；
+ * 超出时前端即时报错，不生成截断的初始化器 */
+#define DEFAULT_INIT_BUF 8192
 
 #define match(a,b)  (strcmp(a,b) == 0)
 
@@ -252,9 +255,6 @@ typedef struct {
     int unget_buffer_enabled;
     unsigned int malloc_bytes;  /* 本次 malloc(T) 请求的字节数，供声明初始化记录 pointee_bytes */
     CType *init_pointee;        /* 本次初值静态已知的所指类型（malloc(T) / &x），供声明记录 pointee_type */
-    int init_has_designator;    /* 本次初始化列表用了 `.成员 = 值` 指定形式 */
-    char *init_desigs[MAX_INIT_DESIGATORS];   /* 被指定式初值点名的成员名 */
-    int init_desig_count;
     int lhs_was_deref;          /* 赋值左侧是解引用链（`p.(T) = v`）而非对 p 本身赋值 */
     int rhs_was_slice;          /* 刚解析的表达式以切片读 `[a..b]` 结尾（数组声明据此走复制） */
     int slice_lmark;            /* 该切片读文本在 cgen 缓冲里的起点，用于确认它是赋值左侧整体 */

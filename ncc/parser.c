@@ -598,20 +598,40 @@ static int is_expr_continuer(TokenType t)
     }
 }
 
+/* 成员默认值展开（定义在聚合体段），初始化列表按层补默认值时调用 */
+static int member_default_text(const CType *t, int skip, const char **names,
+                               int n_names, char *out, size_t sz);
+static int type_array_count(CType *t);
+/* 初值槽位的类型与全默认值文本（定义在 type_array_count 之后） */
+static CType *init_elem_type(CType *base, int k);
+static int default_init_text(CompilerState *cs, CType *t, char *out, size_t sz);
+
+/* 默认值展开撑破缓冲上限：即时报错，绝不生成截断的初始化器 */
+static void default_init_too_big(CompilerState *cs)
+{
+    nihao_error(cs, "aggregate initializer is too large to expand its member "
+                    "defaults (%d byte buffer)", DEFAULT_INIT_BUF);
+}
+
 /* 初始化列表（嵌套递归）：已消费 {，元素逐项 parse_expression；遇 { 递归。
- * 定义在使用处（parse_declaration）前 */
-static int parse_init_list(CompilerState *cs)
+ * `base` = 本层被初始化的类型，用于将第 k 项的类型传给嵌套列表并按层补成员默认值
+ * （§3.1 / §5.1.3）。返回本层顶层项数。 */
+static int parse_init_list(CompilerState *cs, CType *base)
 {
     cgen_raw("{");
     next_tok(cs);
     skip_newlines(cs);
     int k = 0;
+    int all_braced = 1;                    /* 每项都是 `{...}`，才可按元素补默认值 */
+    char *desigs[MAX_INIT_DESIGATORS];      /* 本层被点名的成员，嵌套层各自记账 */
+    int ndesig = 0;
+    int has_d = 0;
     if (cur_tok(cs) != TOK_RBRACE) {
         for (;;) {
             if (cur_tok(cs) == TOK_RBRACE) break;   /* 尾逗号 `{1, 2,}` */
             if (k > 0) cgen_raw(", ");
             if (cur_tok(cs) == TOK_LBRACE) {
-                parse_init_list(cs);
+                parse_init_list(cs, init_elem_type(base, k));
             } else if (cur_tok(cs) == TOK_DOT &&
                        peek_ahead(cs, 1) == TOK_IDENTIFIER &&
                        peek_ahead(cs, 2) == TOK_ASSIGN) {
@@ -619,15 +639,16 @@ static int parse_init_list(CompilerState *cs)
                  * 与 C 指定初始化器同形，原样透传；被点名的成员不再补默认值 */
                 next_tok(cs);                                   /* . */
                 cgen_raw(".%s = ", cs->parser.lex->tok_str);    /* 成员名 */
-                if (cs->parser.init_desig_count < MAX_INIT_DESIGATORS)
-                    cs->parser.init_desigs[cs->parser.init_desig_count++] =
-                        cs->parser.lex->tok_str;
-                cs->parser.init_has_designator = 1;
+                if (ndesig < MAX_INIT_DESIGATORS)
+                    desigs[ndesig++] = cs->parser.lex->tok_str;
+                has_d = 1;
                 next_tok(cs);                                   /* name */
                 next_tok(cs);                                   /* = */
                 parse_expression(cs);
+                all_braced = 0;
             } else {
                 parse_expression(cs);
+                all_braced = 0;
             }
             k++;
             skip_newlines(cs);
@@ -637,6 +658,33 @@ static int parse_init_list(CompilerState *cs)
             }
         }
     }
+    /* 省略的成员/元素取定义处的默认值：聚合按位置跳过前 k 员、按名排除指定式；
+     * 数组只在整个元素都未给出时补尾数元素（§3.1 × §5.1.2） */
+    char extra[DEFAULT_INIT_BUF];
+    extra[0] = '\0';
+    int n_extra = 0;
+    if (base && (base->kind == TYPE_STRUCT || base->kind == TYPE_UNION)) {
+        n_extra = member_default_text(base, has_d ? 0 : k,
+                                     has_d ? (const char **)desigs : NULL,
+                                     has_d ? ndesig : 0, extra, sizeof(extra));
+    } else if (base && base->kind == TYPE_ARRAY && k > 0 && all_braced) {
+        int cap = type_array_count(base);
+        char elem[DEFAULT_INIT_BUF];
+        if (cap > 0 && default_init_text(cs, base->ref, elem, sizeof(elem)) == 1) {
+            size_t used = 0;
+            for (int i = k; i < cap; i++) {
+                int w = snprintf(extra + used, sizeof(extra) - used, "%s%s",
+                                 used ? ", " : "", elem);
+                if (w < 0 || (size_t)w >= sizeof(extra) - used) {
+                    default_init_too_big(cs);
+                    break;
+                }
+                used += (size_t)w;
+            }
+            n_extra = used ? 1 : 0;
+        }
+    }
+    if (n_extra) cgen_raw(", %s ", extra);
     expect(cs, TOK_RBRACE);
     cgen_raw("}");
     return k;   /* 顶层初值个数；嵌套 {...} 只算一个 */
@@ -660,6 +708,60 @@ static CType *type_deepest_elem(CType *t)
 {
     while (t && t->kind == TYPE_ARRAY && t->ref) t = t->ref;
     return t;
+}
+
+/* 初始化列表第 k 项的类型：数组各槽同元素类型，struct 取第 k 个成员，
+ * union 与未知情形返回 NULL（该层不补默认值）。 */
+static CType *init_elem_type(CType *base, int k)
+{
+    if (!base) return NULL;
+    if (base->kind == TYPE_ARRAY) return base->ref;
+    if (base->kind == TYPE_STRUCT && base->sym && base->sym->kind == SYM_STRUCT) {
+        int i = 0;
+        for (Symbol *m = base->sym->members; m; m = m->next, i++)
+            if (i == k) return m->type;
+    }
+    return NULL;
+}
+
+/* 一个声明槽位的「全默认值」初始化文本（自带花括号），供聚合类型数组逐项展开：
+ *   struct/union 成员默认值 -> `{ .a = 7, .b = 9 }`
+ *   数组 -> 把元素默认文本重复声明容量次
+ * 返回 1 = 写出内容；0 = 该类型没有成员默认值；-1 = 展开超出缓冲上限。 */
+static int default_init_text(CompilerState *cs, CType *t, char *out, size_t sz)
+{
+    out[0] = '\0';
+    if (!t) return 0;
+    if (t->kind == TYPE_ARRAY) {
+        int cap = t->param_count;
+        if (cap <= 0) return 0;             /* 容量静态不可知：不展开 */
+        char elem[DEFAULT_INIT_BUF];
+        int r = default_init_text(cs, t->ref, elem, sizeof(elem));
+        if (r != 1) return r;               /* -1 已由递归报出 */
+        size_t used = (size_t)snprintf(out, sz, "{ ");
+        for (int i = 0; i < cap; i++) {
+            int w = snprintf(out + used, sz - used, "%s%s", i ? ", " : "", elem);
+            if (w < 0 || (size_t)w >= sz - used) {
+                default_init_too_big(cs);
+                return -1;
+            }
+            used += (size_t)w;
+        }
+        int w = snprintf(out + used, sz - used, " }");
+        if (w < 0 || (size_t)w >= sz - used) {
+            default_init_too_big(cs);
+            return -1;
+        }
+        return 1;
+    }
+    char defs[DEFAULT_INIT_BUF];
+    if (!member_default_text(t, 0, NULL, 0, defs, sizeof(defs))) return 0;
+    int w = snprintf(out, sz, "{ %s }", defs);
+    if (w < 0 || (size_t)w >= sz) {
+        default_init_too_big(cs);
+        return -1;
+    }
+    return 1;
 }
 
 /* postfix 前缀文本回取（定义在表达式解析段） */
@@ -1310,8 +1412,6 @@ void parse_declaration(CompilerState *cs)
         }
         cs->parser.malloc_bytes = 0;
         cs->parser.init_pointee = NULL;
-        cs->parser.init_has_designator = 0;
-        cs->parser.init_desig_count = 0;
         cs->parser.rhs_was_slice = 0;
         cs->parser.slice_len_known = 0;
         if (cur_tok(cs) == TOK_BITWISE_AND) {
@@ -1428,37 +1528,19 @@ void parse_declaration(CompilerState *cs)
         if (rhs_text) {
             cgen_raw("%s", rhs_text);
         } else if (brace_init) {
-            /* 数组/聚合初始化列表：= {e0, e1, ...}（原样输出给 C；嵌套 { } 递归）。
-             * 聚合类型时把省略成员的默认值插进右括号之前 */
-            int imark = cgen_mark();
-            cs->parser.init_has_designator = 0;
-            cs->parser.init_desig_count = 0;
-            int n_init = parse_init_list(cs);
-            char *list = cgen_take_prefix(cs, imark, NULL);
-            char defs[4096];
-            /* 位置式初值按「已给出前 n 个成员」补剩余默认值；指定式初值位置对齐
-               不成立，改按成员名排除已点名的那些（§3.1 成员默认值口径） */
-            int has_d = cs->parser.init_has_designator;
-            int nd = member_default_text(&vtype, has_d ? 0 : n_init,
-                                         has_d ? (const char **)cs->parser.init_desigs : NULL,
-                                         has_d ? cs->parser.init_desig_count : 0,
-                                         defs, sizeof(defs));
-            size_t llen = strlen(list);
-            if (nd && llen > 0 && list[llen - 1] == '}') {
-                list[llen - 1] = '\0';
-                cgen_raw("%s, %s }", list, defs);
-            } else {
-                cgen_raw("%s", list);
-            }
+            /* 数组/聚合初始化列表：= {e0, e1, ...}；嵌套 { } 递归，
+             * 每层各自把省略成员/尾数元素的默认值补在右括号之前（§3.1 × §5.1.2） */
+            parse_init_list(cs, &vtype);
         } else {
             parse_expression(cs);
         }
         /* malloc(T) 初始化：记录目标字节数，供 `.()` 解引用做越界检查（§12.1） */
         record_init_pointee(cs, var_sym);
     } else {
-        char defs[4096];
-        if (member_default_text(&vtype, 0, NULL, 0, defs, sizeof(defs)))
-            cgen_raw(" = { %s }", defs);
+        char defs[DEFAULT_INIT_BUF];
+        /* 超出缓冲上限时 default_init_text 已报错，这里只是不再产出初始化器 */
+        if (default_init_text(cs, &vtype, defs, sizeof(defs)) > 0)
+            cgen_raw(" = %s", defs);
     }
     cgen_line(";");
 }
