@@ -2,9 +2,21 @@
 
 版本号遵循 [Semantic Versioning](https://semver.org)。本文件记录 NihaoC 编译器（`ncc/`）的里程碑与版本变更。
 
-## [Unreleased] — 语法设计固定轮（`BNF.md` v2.11，2026-09-21，文档-only）
+## [Unreleased]
 
-> 落在本地 tag `v1.0.2`（→ `18f9c77`）之后，故**不计入 v1.0.2**；无代码变更，门禁基线不变（c/native 各 38P/0F/5S、ir-c/ir-native 各 6P/0F/33S、examples 6/7）。
+### 1.0 线代码轮（PA-49 / PA-50，2026-09-24，用户可见缺陷修复）
+
+> 同样落在本地 tag `v1.0.2`（→ `18f9c77`）之后，**不计入 v1.0.2**。本小节是 v1.0.2 之后第一个**含代码变更**的轮次，门禁基线随之由 c/native 各 38P/0F/5S 变为下述数值。**本小节所在提交仅在本地，未推送**（推送授权门禁见 `docs/GIT_CONVENTIONS.md` §3.1）。
+
+- **结构体 / union 成员默认值的代码生成修复（PA-49，F1）**：`P struct { x i32 = 7  y i32 }` 此前把初值当类型名前缀输出，生成 `typedef struct P { 7int32_t x; int32_t y; } P;`，tcc 报 `error: invalid number`——即该写法「语法可写、不可编译」。按 BNF v2.11 §3.1 已固定的 `<field-decl> ::= … [ "=" <expr> ]` 语义实现 lowering（不选「前端即时报暂不支持」，那会否决设计承诺的写法）：C 无字段默认值语法，故 `parse_member_list` 用 `cgen_mark()` / `cgen_take_prefix()` 把初值文本从聚合体里取出并挂到成员符号的新字段 `Symbol.def_init`（`ncc.h`），改由**声明点**展开成 C 指定初始化器——无初值 → `P p = { .x = 7, .z = 9 };`；位置初值只覆盖前 `k` 员（`parse_init_list` 改为返回顶层元素个数）→ `P q = {5, .z = 9 };`；`union` 取首个带默认值的成员，且用户一给初值即以用户为准。**未覆盖形态已登记**：数组变量 `arr P[3]` 不展开默认值 → **PA-56**；函数参数与 `malloc` 出的聚合体同理（后者属 2.0 内存模型）。顺带修复 `cgen_truncate()` 回退后未按残留文本重设 `at_line_start`，此前截掉一段输出会把下一行的缩进一起丢掉（生成 C 的排版缺陷，非本轮引入）。测试：新增 `tests/pos/struct_member_default.nc` + `.expect`。
+- **产物 C 的字符串字面量改按转义序列重新编码（PA-50，F2，可移植性缺陷）**：源写 `print("%d\n", i)` 时 A 后端产出的 C 里是 `printf("` + 真换行字节 + `", i)` 而非 `\n` 两字符。tcc 作为扩展容忍，故既有全部门禁都在 tcc 下过而不报错；一旦换 gcc / clang / MSVC 编译产物、或把 `.c` 交给外部工具链，用例会一起红。词法器本就把 `\n` / `\t` / `\x..` 解码成真字节，故在落地端补 `cgen_string_lit()`（`cgen.c`）：`\` `"` 与 `\n \t \r \a \b \f \v` 用短转义，其余控制字节（`< 0x20`、`0x7f`）出八进制 `\NNN`，`>= 0x80` 的 UTF-8 字节原样保留。A 后端直接吐字面量字节的**仅两处**（`parse_primary` 的 `TOK_STRING_LITERAL`、切片赋值的字符串右值 `memcpy`），均已改用该函数。**未覆盖**：IR→C 后端（`ir_to_c.c` 的 `static const char %s[] = "%s"`）与汇编后端（`ir_backend.c` 的 `.string`）仍原样输出字节，属 2.0 线路径（PB-33）。
+- **新增门禁抽查：产物 C 必须可被非 tcc 编译器解析（F2 的长期防线）**：`ncc/xmake.lua` 的 test 任务在 `c` 后端每个 pos 用例编译成功后追加 `<cc> -fsyntax-only 产物.c`（`find_program` 探测 clang → gcc → cc；先跑一份 `#include <stdio.h>` 探针，本机编译器不可用则整段跳过、不影响门禁）。一次性普查：**47 份产物 C 中 45 份通过**，`ir_builtin` / `ir_struct` 因 **int↔指针隐式转换**被 clang 判错——另一类既有缺口，登记为 **PA-55**，暂经 `STRICT_SKIP` 名单排除。修复前这两例连同其余 45 份一起被拒，故该抽查对 F2 是有效防线（临时摘掉 `STRICT_SKIP` 里的 `ir_struct` 会立刻产出 1 FAIL）。
+- **同轮新登记的开放待办**：**PA-55**（产物 C 的 int↔pointer 隐式转换，2 例，随 `STRICT_SKIP` 追踪）、**PA-56**（聚合类型数组变量不展开成员默认值，与 PA-51 的 `[...]` 口径一并定）。既有开放项 **PA-51 / PA-52 / PA-53** 不变。
+- **门禁（2026-09-24 实测）**：c / native 各 **39P/0F/5S**（v1.0.2 基线 38P/0F/5S + 本轮 1 例）、ir-c / ir-native 各 **6P/0F/34S**（新用例未入 `IR_SUBSET`，IR 侧自动跳过），0 FAIL，examples **6/7**（`06_cooking.nc` 仍失败于 `cooking const: expected '='`，属 2.0 预览示例，非本轮引入）。**PB 线待回灌**：`parse_member_list` 的初值丢弃逻辑在 PB `parser.c` 逐字相同、`cgen.c` / `ncc.h` 同源，可直接移植；`xmake.lua` 的抽查段需随 `STRICT_SKIP` 名单一并回灌。
+
+### 语法设计固定轮（`BNF.md` v2.11，2026-09-21，文档-only）
+
+> 本节内的改动同样落在本地 tag `v1.0.2`（→ `18f9c77`）之后，故**不计入 v1.0.2**；无代码变更，当时的门禁基线不变（c/native 各 38P/0F/5S、ir-c/ir-native 各 6P/0F/33S、examples 6/7）。
 
 - **语法设计一次性固定（PA-48）**：ltree 授权「按推荐执行修复」，`docs/SYNTAX_DESIGN_REVIEW.md` §11 的 R1~R19 逐条落地——`<for-step>` 放宽为 `<expr>`、`switch` 各 `case` **不穿透**且 1.x 不提供 `fallthrough`、`<statement>` 补 `<label-def>`、`is <identifier>` 定为**按值比较**（变量绑定与解构留 2.0）、`#` 降级为兼容语句终止符、`fx32` / `fx64` 定性为同宽整型存储且定点小数点位置未定义、`[...]` 与 `[...N]` 标注为兼容保留、C 风格声明标注为兼容写法、内置名与关键字统一「不参与用户作用域解析」、`register` / `restrict` / `volatile` 明写词法保留。已移除记号（`T*`、一元 `*`、`=>`、`?=`、`?.` / `?(`）在四份设计文档中不再作为语法出现。
 - **C 风格类型别名从类型清单移除（R19，用户可见语法收窄）**：`short` / `int` / `long` / `float` / `double` 退出 `<primitive-type>`，基本类型定为 **16 个**；五个别名转入 `BNF.md` §1.2 `<reserved-keyword>`（词法保留数 3 → **8**），按宽度改写为 `i16` / `i32` / `i64` / `f32` / `f64`。依据：A 后端在类型位置本就逐个报 `unexpected token 'short' in expression`，`token.h` 有 token 但 PA / PB 三个前端零消费、`tests/` 与 `examples/` 零使用点——属文档追平实现，非行为变更。

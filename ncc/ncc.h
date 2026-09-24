@@ -159,6 +159,8 @@ struct Symbol {
     int member_count;
     int total_size;
     int total_align;
+    /* 成员默认值（`x i32 = 7`）的 C 初值文本，仅成员 Symbol 用；NULL = 无默认值 */
+    char *def_init;
     
     /* For modules */
     Symbol *module_symbols;
@@ -358,6 +360,7 @@ int is_visibility_token(TokenType tok);
 /* cgen.c - C backend */
 void cgen_init(void);
 void cgen_raw(const char *fmt, ...);
+void cgen_string_lit(const char *s);   /* 字面量按 C 转义序列重新编码后输出 */
 void cgen_line(const char *fmt, ...);
 void cgen_blank(void);
 void cgen_indent(void);

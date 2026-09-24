@@ -20,7 +20,7 @@
 
 ## 2. A 方案（c/native）现状（快照至 2026-09-01）
 
-**全量 parser 测试 12P+4S 通过，0 FAIL**（当时的用例集计数；v1.0.2 现值为 c/native 各 **38 PASS / 0 FAIL / 5 SKIP**，见 `CHANGELOG.md`）。已修复（历史）：
+**全量 parser 测试 12P+4S 通过，0 FAIL**（当时的用例集计数；v1.0.2 时点值为 c/native 各 **38 PASS / 0 FAIL / 5 SKIP**，此后各轮现值见 `CHANGELOG.md` 当前版本段）。已修复（历史）：
 - 关键字内置函数（TOK_SIZEOF/TYPEOF/ALIGNOF/OFFSETOF/VISOF 分派）、可见性枚举、parse_is_stmt
 - 语句边界行号（binop 链 12 层传起始行号，换行即语句边界）
 - cgen 补 `#include <stddef.h>`（offsetof）
@@ -94,7 +94,7 @@
 xmake -r ncc          # 构建（NIHAO_TCC_DIR 指向 tcc；须在 ncc/ 目录下执行）
 xmake test --all      # 全矩阵：四后端各跑一遍 + 跨后端一致性对比
 ```
-- 快照计数（2026-08-30）：c/native 12P、IR 一致性 26P，合计 **56 PASS / 0 FAIL**（当日 `->`/三元补齐后 +1，ir_ptr 标量 & 回归修复）。**现值**：v1.0.2 门禁为 c/native 各 **38P/0F/5S**、ir-c/ir-native 各 **6P/0F/33S**，权威口径见 `CHANGELOG.md` 当前版本段
+- 快照计数（2026-08-30）：c/native 12P、IR 一致性 26P，合计 **56 PASS / 0 FAIL**（当日 `->`/三元补齐后 +1，ir_ptr 标量 & 回归修复）。**v1.0.2 时点值**：c/native 各 **38P/0F/5S**、ir-c/ir-native 各 **6P/0F/33S**；2026-09-24 代码轮（PA-49 / PA-50）后为 c/native 各 **39P/0F/5S**、ir 各 **6P/0F/34S**，权威口径见 `CHANGELOG.md` 当前版本段
 - `tests/pos/*.nc` 全量用例（c/native）；`IR_ONLY` = IR 子集（ir 后端，如 ir_cook/ir_slice）；`IR_SUBSET` = 四后端通用（一致性检查）
 - 新用例须在 xmake.lua 注册 IR_ONLY 或 IR_SUBSET，否则自动当全量 target 编译失败
 - 指针解引用：A 方案与 IR 统一用 `.()` 语法（`p.() = 42` / `y i32 = p.()`）；riscv64/arm64/loongarch64 只验汇编生成

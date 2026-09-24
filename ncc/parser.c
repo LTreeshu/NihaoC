@@ -84,8 +84,10 @@ static int is_user_type_name(CompilerState *cs)
 }
 
 /* Parse a struct/union/enum member list in NihaoC order:
- *   [vis] name Type [:bitwidth]
+ *   [vis] name Type [:bitwidth] [= expr]
  * Emits the C member declaration while parsing. */
+static char *cgen_take_prefix(CompilerState *cs, int mark, int *indent);
+
 static void parse_member_list(CompilerState *cs, Symbol *owner, int is_union)
 {
     (void)is_union;
@@ -119,14 +121,18 @@ static void parse_member_list(CompilerState *cs, Symbol *owner, int is_union)
                 next_tok(cs);
             }
         }
-        /* default value: member Type = expr  (ignored in C output) */
+        /* default value: member Type = expr。C 没有「字段默认值」语法，且本后端
+         * 一边解析一边输出，所以初值表达式的文本先取出再从聚合体里截掉，
+         * 挂到成员符号上，由该类型的变量声明处展开成指定初始化器（BNF §3.1） */
+        char *def_text = NULL;
         if (cur_tok(cs) == TOK_ASSIGN) {
             next_tok(cs);
+            int dmark = cgen_mark();
             parse_expression(cs);
+            def_text = cgen_take_prefix(cs, dmark, NULL);
         }
-        if (owner) {
-            sym_add_member(cs, owner, mname, &mtype);
-        }
+        Symbol *member = owner ? sym_add_member(cs, owner, mname, &mtype) : NULL;
+        if (member && def_text && def_text[0]) member->def_init = def_text;
         /* emit C member declaration */
         if (mtype.bit_size > 0) {
             cgen_line("%s %s : %u;", c_type_name(&mtype), mname, mtype.bit_size);
@@ -490,7 +496,7 @@ static int is_expr_continuer(TokenType t)
 
 /* 初始化列表（嵌套递归）：已消费 {，元素逐项 parse_expression；遇 { 递归。
  * 定义在使用处（parse_declaration）前 */
-static void parse_init_list(CompilerState *cs)
+static int parse_init_list(CompilerState *cs)
 {
     cgen_raw("{");
     next_tok(cs);
@@ -512,6 +518,7 @@ static void parse_init_list(CompilerState *cs)
     }
     expect(cs, TOK_RBRACE);
     cgen_raw("}");
+    return k;   /* 顶层初值个数；嵌套 {...} 只算一个 */
 }
 
 /* 固定数组的元素总个数（多维取各维乘积）；含省略维度/动态维时返回 0（未知） */
@@ -672,6 +679,30 @@ static int infer_init_type(CompilerState *cs, CType *out)
             out->size = 4;
             return 0;
     }
+}
+
+/* 成员默认值展开（BNF §3.1 `<field-decl> ... [ "=" <expr> ]`）：声明聚合类型变量时，
+ * 初值未覆盖的成员取定义处的默认值，用 C 指定初始化器实现。把 `.a = 7, .b = 9`
+ * 写进 `out`，返回补上的成员数；`skip` = 用户已按位置给出的初值个数。
+ * union 各成员共享同一槽位：只取首个带默认值的成员，且用户一给初值就以用户为准。 */
+static int member_default_text(const CType *t, int skip, char *out, size_t sz)
+{
+    Symbol *s = t ? t->sym : NULL;
+    out[0] = '\0';
+    if (!s || (s->kind != SYM_STRUCT && s->kind != SYM_UNION) || !s->members)
+        return 0;
+    if (s->kind == SYM_UNION && skip > 0) return 0;
+
+    int idx = 0, n = 0;
+    for (Symbol *m = s->members; m; m = m->next, idx++) {
+        if (!m->def_init || idx < skip) continue;
+        if (s->kind == SYM_UNION && n > 0) break;
+        size_t used = strlen(out);
+        snprintf(out + used, sz - used, "%s.%s = %s", n ? ", " : "",
+                 m->name, m->def_init);
+        n++;
+    }
+    return n;
 }
 
 void parse_declaration(CompilerState *cs)
@@ -1248,13 +1279,29 @@ void parse_declaration(CompilerState *cs)
         if (rhs_text) {
             cgen_raw("%s", rhs_text);
         } else if (brace_init) {
-            /* 数组/聚合初始化列表：= {e0, e1, ...}（原样输出给 C；嵌套 { } 递归） */
-            parse_init_list(cs);
+            /* 数组/聚合初始化列表：= {e0, e1, ...}（原样输出给 C；嵌套 { } 递归）。
+             * 聚合类型时把省略成员的默认值插进右括号之前 */
+            int imark = cgen_mark();
+            int n_init = parse_init_list(cs);
+            char *list = cgen_take_prefix(cs, imark, NULL);
+            char defs[4096];
+            int nd = member_default_text(&vtype, n_init, defs, sizeof(defs));
+            size_t llen = strlen(list);
+            if (nd && llen > 0 && list[llen - 1] == '}') {
+                list[llen - 1] = '\0';
+                cgen_raw("%s, %s }", list, defs);
+            } else {
+                cgen_raw("%s", list);
+            }
         } else {
             parse_expression(cs);
         }
         /* malloc(T) 初始化：记录目标字节数，供 `.()` 解引用做越界检查（§12.1） */
         if (var_sym) var_sym->pointee_bytes = cs->parser.malloc_bytes;
+    } else {
+        char defs[4096];
+        if (member_default_text(&vtype, 0, defs, sizeof(defs)))
+            cgen_raw(" = { %s }", defs);
     }
     cgen_line(";");
 }
@@ -2206,7 +2253,7 @@ static void parse_primary(CompilerState *cs)
             next_tok(cs);
             break;
         case TOK_STRING_LITERAL:
-            cgen_raw("\"%s\"", cs->parser.lex->tok_str ? cs->parser.lex->tok_str : "");
+            cgen_string_lit(cs->parser.lex->tok_str);
             next_tok(cs);
             break;
         case TOK_TRUE:
@@ -2863,8 +2910,9 @@ static void parse_assign(CompilerState *cs, int line)
                                         "slice holds %lld",
                                     (unsigned)(llen + 1), cs->parser.slice_len + 1);
                     }
-                    cgen_raw("%*smemcpy(%s, \"%s\", %u)", sl_indent, "",
-                             sl, lit ? lit : "", (unsigned)(llen + 1));
+                    cgen_raw("%*smemcpy(%s, ", sl_indent, "", sl);
+                    cgen_string_lit(lit);
+                    cgen_raw(", %u)", (unsigned)(llen + 1));
                     next_tok(cs);
                     cs->parser.rhs_was_slice = 0;
                     cs->parser.slice_lmark = -1;

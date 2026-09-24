@@ -162,6 +162,7 @@ task("test")
     on_run(function ()
         import("core.project.task")
         import("core.base.option")
+        import("lib.detect.find_program")
         task.run("build", {targets = "ncc"})
         local ncc = path.join(os.projectdir(), "build",
                               "ncc" .. (is_host("windows") and ".exe" or ""))
@@ -232,6 +233,31 @@ task("test")
         -- 后端一致性防线：无 .expect 的用例，收集各后端输出，
         -- 全部后端运行完后比对一致性（避免"期望缺失直接 PASS"的测试盲区）
         local consistency = {}
+
+        -- 可移植性抽查：c 后端的产物 C 必须能被 tcc 之外的编译器解析。tcc 把「字符串
+        -- 字面量内含真换行字节」当扩展容忍（PA-50/F2 的成因），gcc / clang / MSVC 会拒。
+        -- 先探测该编译器在本机可用（msys gcc 缺 include 路径时会全线误报），不可用则跳过。
+        local strict_cc = nil
+        do
+            local probe = path.join(os.projectdir(), "build", ".strict_probe.c")
+            local pf = io.open(probe, "w")
+            if pf then
+                pf:write('#include <stdio.h>\nint main(void){puts("");return 0;}\n')
+                pf:close()
+                for _, cand in ipairs({"clang", "gcc", "cc"}) do
+                    local p = find_program(cand)
+                    if p and os.execv(p, {"-fsyntax-only", probe},
+                                      {try = true, stdout = os.nul, stderr = os.nul}) == 0 then
+                        strict_cc = p
+                        break
+                    end
+                end
+            end
+        end
+        -- clang/gcc 把 int↔pointer 隐式转换判为错误。这两例暴露的是另一类既有缺陷
+        -- （`void` 当通用指针槽、`char[]` 成员以整数初始化），与 F2 无关，先登记排除，
+        -- 见 docs/TODO-PA.md 的 PA-55。
+        local STRICT_SKIP = { ir_builtin = true, ir_struct = true }
         for _, b in ipairs(list) do
             local passed, failed, skipped = 0, 0, 0
             local is_ir = (b == "ir-c" or b == "ir-native")
@@ -285,6 +311,18 @@ task("test")
                     cprint("${red}[FAIL] pos/%s.nc: no executable produced", stem)
                     failed = failed + 1
                     goto continue_pos
+                end
+
+                if b == "c" and strict_cc and not STRICT_SKIP[stem] then
+                    local csrc = exe .. ".c"
+                    if os.isfile(csrc) and
+                       os.execv(strict_cc, {"-fsyntax-only", csrc},
+                                {try = true, stdout = os.nul, stderr = os.nul}) ~= 0 then
+                        cprint("${red}[FAIL] pos/%s.nc: 产物 C 被 %s 拒绝（tcc 之外的编译器不可解析）",
+                               stem, path.filename(strict_cc))
+                        failed = failed + 1
+                        goto continue_pos
+                    end
                 end
 
                 local outfile = exe .. ".out"
