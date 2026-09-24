@@ -155,9 +155,10 @@ local IR_ONLY = {ir_builtin = true, ir_mr = true, ir_slice = true, ir_sparam = t
 -- 通用 void 指针裸下标/成员访问拒绝），也不支持从属/位域内置函数；`len()` 对静态不可知的标量
 -- 不发前端错误（返回 0），定长 char 数组的字符串初值既不检查容量也不拒绝非 char 元素，
 -- `is` 区间也不做 lo<=hi 校验，聚合类型数组的成员默认值展开（连带上限诊断）整条机制均无，
+-- cooking 块内的未落地 item 仍按 token 逐个跳过（不发 1.x 的 unsupported cooking item 诊断），
 -- 均属 2.0 待对齐项，
 -- 这些 err 用例对其无意义（其余 err 用例双前端都跑）
-local IR_ERR_SKIP = {m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, flow_move_frozen = true, deref_bounds = true, structof_bad_member = true, void_subscript = true, void_member_unknown = true, is_empty_range = true, len_unknown = true, slice_str_overflow = true, str_array_overflow = true, str_array_bad_elem = true, multi_arr_overflow = true, multi_arr_nostr = true, default_init_overflow = true}
+local IR_ERR_SKIP = {m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, flow_move_frozen = true, deref_bounds = true, structof_bad_member = true, void_subscript = true, void_member_unknown = true, is_empty_range = true, len_unknown = true, slice_str_overflow = true, str_array_overflow = true, str_array_bad_elem = true, multi_arr_overflow = true, multi_arr_nostr = true, default_init_overflow = true, cooking_bare_var = true}
 
 task("test")
     on_run(function ()

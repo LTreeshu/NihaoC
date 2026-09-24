@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 1.0 线未实现形态专属诊断轮（PA-52 / PA-59，2026-09-25，代码 + 门禁用例）
+
+> 落在本地 tag `v1.0.2`（→ `18f9c77`）之后，晚于 2026-09-24 的 PA-49 / PA-50、PA-57、PA-56 三轮，**不计入 v1.0.2**。对象是同一类缺陷：「语法可写、1.x 既不落地也无专属诊断」。1.0 冻结线不引入模块系统与编译期函数，故两条开放项都走**专属诊断**一侧而非实现。上一基线是 PA-56 轮的 c / native 各 53P/0F/5S。**本小节所在提交仅在本地，未推送**（推送授权门禁见 `docs/GIT_CONVENTIONS.md` §3.1）。
+
+- **`linkas` 结案 PA-52（A 后端 `ncc/parser.c`）**：新增 `parse_linkas_decl()`（parser.c:449–458）——**先报** `linkas is not implemented in 1.x; static-library export naming comes with the 2.0 module system`（定位停在 `linkas` 记号上），**再整条消费** `<linkas-decl>` 的记号与其字符串字面量。此前 `linkas "libc.so"` 落到 `parse_declaration` 的通用兜底分支，连报两条 `unexpected token 'linkas' / 'TOK_STRING_LITERAL' at declaration level`，读者看不出是记号未实现。两个调用点覆盖 `linkas` 可出现的两处位置：`use` / `link` 交错循环（PA-57 合并出的那一个）与通用顶层声明循环（写在 `func` 之后同样走专属文案）。`TOK_LINKAS` 的实现本身仍是 2.0 项（两前端消费者数为 0），登记进 `docs/IMPLEMENTATION_STATUS.md`「2.0 线（PB）差异」。
+- **cooking 块结案 PA-59、并补 PA-58 的诊断侧（A 后端 `ncc/parser.c`）**：`parse_cooking_block` 的兜底分支原为「`next_tok` 逐个吞掉」，故 BNF §8 `<cooking-item>` 的 `<var-decl>` 与 `<ct-func-call>` 两形态静默丢弃——`cooking { K i32 = 3 }` 之后 `print("%d\n", K)` 生成的 C 里没有 `K`，错误延迟到 tcc 才报 `'K' undeclared`。现即时报 `unsupported cooking item '<tok>'; 1.x provides only 'const NAME = expr', 'static_assert(...)' in a cooking block`（标识符印其拼写，其余印 token 名）。同分支一并补三项：① 块内 item 的 `;` / `#` 终止符此前也落进兜底分支（`cooking { const A i32 = 2; }` 会报错），现由循环首分支正常吞掉；② `const` 后不是标识符时报 `cooking const: expected name`（此前静默继续）；③ `const NAME(...)` 形态由误导性的 `cooking const: expected '='` 改为 **`cooking function 'sq' is not implemented in 1.x; use a plain 'const NAME = expr'`**（parser.c:2514–2519），`examples/06_cooking.nc` 在 c 后端下从一条看不懂的语法错变成逐行的「未实现」清单（该示例可编译性未变，PA-58 的实现侧仍开放、动作仍待裁定）。
+- **`skip_cooking_item()`（parser.c:2476–2485）按「起始行」界定 item 边界**：词法器不发换行 token（`ncc lex` 实测 `K i32 = 3` 之后直接是下一行的 `const`），故首版按 `TOK_NEWLINE` 跳过的写法会把整块剩余 item 一起吞掉（三处缺口只报一条错）。现改为遇「换到下一行 / `;` / `#` / `}` / EOF」即停，一条坏 item 只报一个错且不吞后续。探针复核：`cooking { K i32 = 3  const Q i32 = 7 }` 报 1 条且 `Q` 仍可用；正向 `func main() { cooking { const A i32 = 2;  static_assert(A == 2, "a")  const B i32 = A * 3 } print("%d\n", B + 1) }` 编译通过并输出 `7`。
+- **新增 2 条 err 门禁用例**：`tests/err/linkas_not_implemented.nc` + `.expect`（取 `linkas` 子串，**四后端均执行**——A 后端是上述专属文案，IR 前端是既有的 `ir: unsupported top-level token 'linkas'`，与 `safe_assign_removed` 只取 `'?='` 的既有口径同类）；`tests/err/cooking_bare_var.nc` + `.expect`（`unsupported cooking item`）入 `IR_ERR_SKIP`（现**十八条**），因 IR 前端仍逐 token 跳过、只在引用处报 `undeclared variable`，且其编译期函数**已实现**、1.x 的「未实现」文案对它无意义。
+- **门禁（2026-09-25 实测 `xmake test --all`）**：c / native 各 **55 PASS / 0 FAIL / 5 SKIP**，ir-c / ir-native 各 **8 PASS / 0 FAIL / 48 SKIP**，全矩阵 **0 FAIL**；产物 C 的 `-fsyntax-only` 抽查份数不变（pos 用例未增），examples **6/7** 不变（仅 `06_cooking.nc`，见 PA-58）。**PB 线待回灌**：`parse_linkas_decl()` 与 cooking 块的三条诊断都在 PA/PB 同源文件 `parser.c` 上，移植时须一并带上，否则 `tests/err/linkas_not_implemented.nc` 会在 PB 的 c 后端因文案不同判红；IR 前端（`ir_cooking`）的跳过式兜底属 2.0 待对齐项。
+
 ### 1.0 线聚合类型数组的成员默认值轮（PA-56，2026-09-24，代码 + 门禁用例）
 
 > 同样落在本地 tag `v1.0.2`（→ `18f9c77`）之后，**不计入 v1.0.2**，且晚于同日的语法标准对齐轮 PA-57。结案 PA-49 留下的「数组变量不展开成员默认值」一项。口径由 ltree 三选一裁定为**逐项展开**（另两案「按容量上限截断」「明写边界不展开」未采纳）：`arr P[3]` → `P arr[3] = { { .x = 7 },{ .x = 7 },{ .x = 7 } };`，位置初值只覆盖前 `k` 项、**未覆盖的尾数元素仍补全默认值**。上一基线是 PA-57 轮的 c/native 各 51P/0F/5S。**本小节所在提交仅在本地，未推送**（推送授权门禁见 `docs/GIT_CONVENTIONS.md` §3.1）。

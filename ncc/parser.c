@@ -446,6 +446,17 @@ void parse_type(CompilerState *cs, CType *type)
     }
 }
 
+/* <linkas-decl> ::= "linkas" <string-literal>（BNF §2.1）：1.x 没有任何消费者——
+ * 静态库导出命名随 2.0 模块系统落地。此前落入 parse_declaration 的通用分支，连报两条
+ * `unexpected token ... at declaration level`，看不出是该记号未实现；现整条消费并给专属诊断。 */
+static void parse_linkas_decl(CompilerState *cs)
+{
+    nihao_error(cs, "linkas is not implemented in 1.x; static-library export naming "
+                    "comes with the 2.0 module system");
+    next_tok(cs);                                          /* linkas */
+    if (cur_tok(cs) == TOK_STRING_LITERAL) next_tok(cs);   /* 库名 */
+}
+
 /* ============================================================
  * Module Parsing
  * ============================================================ */
@@ -478,9 +489,15 @@ void parse_module(CompilerState *cs)
     /* Parse use / link statements（BNF <top-level>：二者可任意交错，故同一循环分派；
        每个声明都可带 `;` / `#` 终止符，见 <empty-stmt>） */
     while (cur_tok(cs) == TOK_USE || cur_tok(cs) == TOK_LINK ||
+           cur_tok(cs) == TOK_LINKAS ||
            cur_tok(cs) == TOK_SEMICOLON || cur_tok(cs) == TOK_POUND) {
         if (cur_tok(cs) == TOK_SEMICOLON || cur_tok(cs) == TOK_POUND) {
             next_tok(cs);
+            skip_newlines(cs);
+            continue;
+        }
+        if (cur_tok(cs) == TOK_LINKAS) {
+            parse_linkas_decl(cs);
             skip_newlines(cs);
             continue;
         }
@@ -546,6 +563,9 @@ void parse_module(CompilerState *cs)
             skip_newlines(cs);
         } else if (cur_tok(cs) == TOK_COOKING) {
             parse_cooking_block(cs);
+        } else if (cur_tok(cs) == TOK_LINKAS) {
+            parse_linkas_decl(cs);
+            skip_newlines(cs);
         } else if (cur_tok(cs) == TOK_ALIGN) {
             /* align n { ... }：对齐块——块体按普通声明处理（对齐留给 C 布局） */
             next_tok(cs);
@@ -2453,6 +2473,17 @@ static void parse_static_assert(CompilerState *cs)
     }
 }
 
+/* 跳过当前 cooking item 的剩余部分：词法器不发换行 token，故以 item 的起始行界定，
+ * 换到下一行、遇到 `;` / `#` 终止符或块尾即停。使一条未落地的 item 只报一个错，
+ * 也不会把后续 item 一起吞掉。 */
+static void skip_cooking_item(CompilerState *cs, int start_line)
+{
+    while (cur_tok(cs) != TOK_SEMICOLON && cur_tok(cs) != TOK_POUND &&
+           cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF &&
+           cs->parser.lex->line_num == start_line)
+        next_tok(cs);
+}
+
 /* cooking { ... }：编译期块——static_assert 求值 + 编译期常量声明 */
 static void parse_cooking_block(CompilerState *cs)
 {
@@ -2464,17 +2495,29 @@ static void parse_cooking_block(CompilerState *cs)
     next_tok(cs);
     skip_newlines(cs);
     while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF) {
-        if (cur_tok(cs) == TOK_IDENTIFIER &&
-            strcmp(cs->parser.lex->tok_str, "static_assert") == 0) {
+        int item_line = cs->parser.lex->line_num;   /* item 起始行，未落地形态按行跳过 */
+        if (cur_tok(cs) == TOK_SEMICOLON || cur_tok(cs) == TOK_POUND) {
+            next_tok(cs);       /* 块内 item 同样可带 `;` / `#` 终止符 */
+        } else if (cur_tok(cs) == TOK_IDENTIFIER &&
+                   strcmp(cs->parser.lex->tok_str, "static_assert") == 0) {
             parse_static_assert(cs);
         } else if (cur_tok(cs) == TOK_CONST) {
             /* 编译期常量：const NAME [TYPE] = expr → 存 ct_vars */
             next_tok(cs);
-            if (cur_tok(cs) == TOK_IDENTIFIER) {
+            if (cur_tok(cs) != TOK_IDENTIFIER) {
+                nihao_error(cs, "cooking const: expected name");
+                skip_cooking_item(cs, item_line);
+            } else {
                 const char *cname = cs->parser.lex->tok_str;
                 next_tok(cs);
                 if (is_type_token(cur_tok(cs))) next_tok(cs);
-                if (cur_tok(cs) == TOK_ASSIGN) {
+                if (cur_tok(cs) == TOK_LPAREN) {
+                    /* <ct-func-def> ::= const NAME ( params ) = expr（BNF §8）：
+                     * A 后端未实现（PA-58），报专属诊断而非 `expected '='` */
+                    nihao_error(cs, "cooking function '%s' is not implemented in 1.x; "
+                                    "use a plain 'const NAME = expr'", cname);
+                    skip_cooking_item(cs, item_line);
+                } else if (cur_tok(cs) == TOK_ASSIGN) {
                     next_tok(cs);
                     long long v = pc_or(cs);
                     if (ct_var_exist(cname)) {
@@ -2486,10 +2529,18 @@ static void parse_cooking_block(CompilerState *cs)
                     }
                 } else {
                     nihao_error(cs, "cooking const: expected '='");
+                    skip_cooking_item(cs, item_line);
                 }
             }
         } else {
-            next_tok(cs);       /* 其他编译期 item 跳过 */
+            /* BNF §8 <cooking-item> 的 <var-decl> / <ct-func-call> 两形态在 A 后端
+             * 既不支持也不报错过：`cooking { K i32 = 3 }` 被整条丢弃，直到 tcc 报
+             * 'K' undeclared（PA-59）。现即时报错并跳过该 item。 */
+            nihao_error(cs, "unsupported cooking item '%s'; 1.x provides only "
+                            "'const NAME = expr', 'static_assert(...)' in a cooking block",
+                        cur_tok(cs) == TOK_IDENTIFIER ? cs->parser.lex->tok_str
+                                                      : token_name(cur_tok(cs)));
+            skip_cooking_item(cs, item_line);
         }
         skip_newlines(cs);
     }
