@@ -16,7 +16,7 @@ Color enum { RED, GREEN, BLUE }
 
 func main() {
     /* struct 声明 + 初始化 + 成员读写 */
-    p Person = {100, 25, 90}
+    p Person = {"ann", 25, 90}
     if p.age == 25 {
         puts("age ok")
     } else {
@@ -61,11 +61,11 @@ func main() {
     } else {
         puts("enum blue bad")
     }
-    /* struct 整体赋值拷贝（逐成员；拷贝后独立） */
+    /* struct 整体赋值拷贝（逐成员；拷贝后独立）。age 是 u8，取值须在 0..255 内 */
     p2 Person
     p2 = p
-    p2.age = 999
-    if p2.age == 999 && p2.score == 90 && p.age == 25 {
+    p2.age = 200
+    if p2.age == 200 && p2.score == 100 && p.age == 26 {
         puts("struct copy ok")
     } else {
         puts("struct copy bad")

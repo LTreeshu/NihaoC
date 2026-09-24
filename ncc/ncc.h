@@ -38,6 +38,9 @@
 #define MAX_MODULES         256
 #define MAX_LINK_LIBS       64
 #define MAX_MULTIRETURN     16
+#define MAX_INIT_DESIGATORS 32
+/* 数组容量写法 `[...]` / `[..]` 省略容量时的默认容量（BNF §3，兼容保留档） */
+#define NH_DEFAULT_ARRAY_CAP 8
 
 #define match(a,b)  (strcmp(a,b) == 0)
 
@@ -136,6 +139,9 @@ struct Symbol {
     Symbol *borrow_source;      /* who this var borrows from (for unfreeze) */
     /* 指针当前所指对象的字节数，`.()` 越界检查用；0 = 静态未知（不检查） */
     unsigned int pointee_bytes;
+    /* 通用 `void` 槽位在声明处由 `malloc(T)` / `&x` 定下的所指类型，供省略类型的
+       裸 `.()` / `p[]` / `->` 还原成 `(*(T*)(p))`；NULL = 静态未知 */
+    CType *pointee_type;
     /* len(x) 内置函数的逻辑长度：数组=元素个数、动态字符串 char[]=字面量长度、
        切片变量=边界差 hi-lo；len_known = 0 表示静态不可知（len() 报错） */
     int len_known;
@@ -245,6 +251,10 @@ typedef struct {
     int *macro_ptr;
     int unget_buffer_enabled;
     unsigned int malloc_bytes;  /* 本次 malloc(T) 请求的字节数，供声明初始化记录 pointee_bytes */
+    CType *init_pointee;        /* 本次初值静态已知的所指类型（malloc(T) / &x），供声明记录 pointee_type */
+    int init_has_designator;    /* 本次初始化列表用了 `.成员 = 值` 指定形式 */
+    char *init_desigs[MAX_INIT_DESIGATORS];   /* 被指定式初值点名的成员名 */
+    int init_desig_count;
     int lhs_was_deref;          /* 赋值左侧是解引用链（`p.(T) = v`）而非对 p 本身赋值 */
     int rhs_was_slice;          /* 刚解析的表达式以切片读 `[a..b]` 结尾（数组声明据此走复制） */
     int slice_lmark;            /* 该切片读文本在 cgen 缓冲里的起点，用于确认它是赋值左侧整体 */

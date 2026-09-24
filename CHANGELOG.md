@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 1.0 线语法标准对齐轮（PA-57，2026-09-24，代码 + 门禁用例）
+
+> 落在本地 tag `v1.0.2`（→ `18f9c77`）之后，**不计入 v1.0.2**。ltree 口径「先修 bug，按新的语法标准检查门禁测试，缺的就补上」：以 `BNF.md` v2.11 逐产生式普查 1.0 线 A 后端与门禁用例，**修掉 11 处、补 1 处覆盖**，新增 11 条用例。上一基线是 PA-49 + PA-50 轮的 c/native 各 39P/0F/5S。**本小节所在提交仅在本地，未推送**（推送授权门禁见 `docs/GIT_CONVENTIONS.md` §3.1）。
+
+- **用户可见缺陷修复（A 后端 `ncc/parser.c`，除词法/模块侧外）**：① 语句与顶层终止符 `;` / `#`（含 `module main;`、`};`、`}#` 与独立成句者）此前大面积报错，改为 `parse_statement` 包装层统一吞（`eat_stmt_terminator`）；② 一元 `+` 前缀（`x = +5`、`is +5`）不再被拒；③ 二进制字面量取值从 `strtoll(buf, NULL, 0)` 改为显式 base 2——原写法在 C23 之前的 CRT 下把 `0b1011` 解成 `0`，**静默算错不报错**（`ncc/lexer.c`）；④ 括号类型声明 `v (i32) = 7` / `a (i32)[3]` 整条链路缺失，现补 `parse_type` 的分组分支与三处前瞻识别（形参 / 声明 / for 头部），前瞻要求 `(` 后紧跟基本类型且紧随 `)`，避免把 `f(GREEN)` 误读成声明；⑤ `<array-size>` 四档七种写法对齐（含 `[N..]` `[...]` `[..N]`，省略容量取新常量 `NH_DEFAULT_ARRAY_CAP = 8`，结案 **PA-51**）；⑥ `<designator>` 指定式初值 `{ .x = 1 }` 由语法错误变为可用，且与 §3.1 成员默认值共存时按名过滤、不重复覆盖；⑦ `<for-init>` 的带类型声明形态；⑧ `<pattern>` 的带符号与负区间（`is -3` / `is +5` / `is -9..-5`）；⑨ `is` 闭区间在编译期校验 `lo <= hi`（`is 5..1` 即时报 `empty 'is' range`）；⑩ `use std.io` 点号多段模块名按目录层级找文件（`ncc/module.c`），并把顶层 `use` / `link` 两段独立循环合并为一个交错循环；⑪ `[[export ".section"]]` 带字面量参数的形态经核对**修复前即已被正确吞掉并忽略**（非缺陷），本项只补 `tests/pos/module_top_forms.nc` 的覆盖、未改代码，故本轮实为 11 修复 + 1 补覆盖；⑫ `void` 通用槽的所指类型从字节数记账升级为类型记账（新字段 `Symbol.pointee_type`），`ir_builtin` 一类「取址后写入再读出」的产物 C 由此从 `*(void**)` 非法解引用变成正确还原，结案 **PA-55**（含 `ir_struct.nc` 自身写错的两处：把 `{100, 25, 90}` 喂给 `char[]` 成员、期望串里 `p2.age = 300` 应为 `999` 且断言口径陈旧）。
+- **产物 C 抽查的排除名单整体删除**：PA-50 为 `ir_builtin` / `ir_struct` 设的 `STRICT_SKIP` 随 F10 修复一并移除（`ncc/xmake.lua`），当前 c 后端实际编译的 **55 份产物 C 全部**通过非 tcc 编译器的 `-fsyntax-only` 抽查。**回灌 PB 时须按无该名单的当前版本移植**，否则 PB 的 `ir_builtin` 会被抽查判红。
+- **新增 11 条门禁用例**：`tests/pos/` 的 `stmt_terminators` / `literal_forms` / `type_forms` / `array_capacity_tiers` / `designator_init` / `for_init_forms` / `is_pattern_forms` / `void_slot_infer` / `module_top_forms`（module 编译模式，无 `.expect`）与 `tests/err/` 的 `is_empty_range` / `void_member_unknown`；另为 `tests/pos/ir_struct.nc` 补齐缺失的 `.expect`——此前它因无期望文件只参与「跨后端一致性」段而不做值比对。9 条 pos 用例刻意不扩 `IR_SUBSET`、2 条 err 用例入 `IR_ERR_SKIP`（现十六条）。
+- **同轮结案与新增待办**：结案 **PA-51**（数组容量四档）、**PA-55**（产物 C 的 int↔pointer）。新登记 **PA-58**（`<ct-func-def>` / `<ct-func-call>` 未实现，是 examples 里 `06_cooking.nc` rc=1 的唯一成因）、**PA-59**（裸 `cooking { K i32 = 3 }` 的常量项被静默丢弃，错误延迟到 tcc 报 `'K' undeclared`）、**PA-60**（`BNF.md` 内部两处不一致：`[[export] ".section"]` 注释与产生式 `\"export\" [ <string-literal> ]` 口径不同、示例 `cooking PI = 3.1415926` 与 `<cooking-block>` 要求花括号矛盾；按「设计文档改动需 ltree 裁定」未擅自动设计文档）。**PA-52**（`linkas`）在同轮做了事实修正：原登记「写了不报错也不生效」不准，实测为即时报 `unexpected token 'linkas' at declaration level`，开放项收窄为「实现它，或给出专属的未实现诊断」。
+- **门禁（2026-09-24 实测 `xmake test --all`）**：c / native 各 **51 PASS / 0 FAIL / 5 SKIP**，ir-c / ir-native 各 **7 PASS / 0 FAIL / 45 SKIP**（IR 的 45 = 原 34 + 11 条新用例），examples **6/7**（仅 `06_cooking.nc`，成因见 PA-58）。全矩阵 0 FAIL。**PB 线待回灌**：本轮 11 处修复除 ⑪（只补覆盖）外都在 PA/PB 同源文件上，逐条差异与回归用例清单见 `docs/IMPLEMENTATION_STATUS.md` 文末「2.0 线（PB）差异」。
+
 ### 1.0 线代码轮（PA-49 / PA-50，2026-09-24，用户可见缺陷修复）
 
 > 同样落在本地 tag `v1.0.2`（→ `18f9c77`）之后，**不计入 v1.0.2**。本小节是 v1.0.2 之后第一个**含代码变更**的轮次，门禁基线随之由 c/native 各 38P/0F/5S 变为下述数值。**本小节所在提交仅在本地，未推送**（推送授权门禁见 `docs/GIT_CONVENTIONS.md` §3.1）。

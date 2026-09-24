@@ -152,11 +152,11 @@ end
 local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, elseif_chain = true}
 local IR_ONLY = {ir_builtin = true, ir_mr = true, ir_slice = true, ir_sparam = true, ir_cook = true}
 -- IR_ERR_SKIP: IR 前端未实现 M2 静态检查、不支持 `.(T)` 类型化解引用（含其宽度检查与
--- 通用 void 指针裸下标拒绝），也不支持从属/位域内置函数；`len()` 对静态不可知的标量
+-- 通用 void 指针裸下标/成员访问拒绝），也不支持从属/位域内置函数；`len()` 对静态不可知的标量
 -- 不发前端错误（返回 0），定长 char 数组的字符串初值既不检查容量也不拒绝非 char 元素，
--- 属 2.0 待对齐项，
+-- `is` 区间也不做 lo<=hi 校验，均属 2.0 待对齐项，
 -- 这些 err 用例对其无意义（其余 err 用例双前端都跑）
-local IR_ERR_SKIP = {m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, flow_move_frozen = true, deref_bounds = true, structof_bad_member = true, void_subscript = true, len_unknown = true, slice_str_overflow = true, str_array_overflow = true, str_array_bad_elem = true, multi_arr_overflow = true, multi_arr_nostr = true}
+local IR_ERR_SKIP = {m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, flow_move_frozen = true, deref_bounds = true, structof_bad_member = true, void_subscript = true, void_member_unknown = true, is_empty_range = true, len_unknown = true, slice_str_overflow = true, str_array_overflow = true, str_array_bad_elem = true, multi_arr_overflow = true, multi_arr_nostr = true}
 
 task("test")
     on_run(function ()
@@ -254,10 +254,6 @@ task("test")
                 end
             end
         end
-        -- clang/gcc 把 int↔pointer 隐式转换判为错误。这两例暴露的是另一类既有缺陷
-        -- （`void` 当通用指针槽、`char[]` 成员以整数初始化），与 F2 无关，先登记排除，
-        -- 见 docs/TODO-PA.md 的 PA-55。
-        local STRICT_SKIP = { ir_builtin = true, ir_struct = true }
         for _, b in ipairs(list) do
             local passed, failed, skipped = 0, 0, 0
             local is_ir = (b == "ir-c" or b == "ir-native")
@@ -313,7 +309,7 @@ task("test")
                     goto continue_pos
                 end
 
-                if b == "c" and strict_cc and not STRICT_SKIP[stem] then
+                if b == "c" and strict_cc then
                     local csrc = exe .. ".c"
                     if os.isfile(csrc) and
                        os.execv(strict_cc, {"-fsyntax-only", csrc},

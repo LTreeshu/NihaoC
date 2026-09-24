@@ -1,0 +1,8 @@
+age ok
+age set ok
+score ok
+union int ok
+union set ok
+enum ok
+enum blue ok
+struct copy ok
