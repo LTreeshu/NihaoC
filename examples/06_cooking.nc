@@ -7,8 +7,8 @@ use stdio
  * 演示：cooking 块 / static_assert 编译期断言 /
  *       const 编译期常量 / const NAME(p) 编译期函数（宏式展开）
  *
- * 1.0 可编译：否（IR_ONLY——cooking 为子集语法，全量 parser
- *             不支持；属 2.0 预览特性，需 -b ir-c / ir-native）
+ * 1.0 可编译：是（c / native / ir-c / ir-native 四后端均可编译运行；
+ *             cooking 块与编译期函数自 2026-09-25 起进入全量 parser）
  * ============================================================ */
 
 /* 编译期块：断言在编译期求值，不满足则编译报错 */
