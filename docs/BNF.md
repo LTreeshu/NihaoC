@@ -406,7 +406,7 @@
 
 <bracket-attr-list> ::= "[[" <bracket-attr> { "," <bracket-attr> } "]]"
 <bracket-attr>   ::= "local" | "inline" | "weak" | "used" | "unused"
-                   | "export" [ <string-literal> ]        (* [[export] ".section"] *)
+                   | "export" [ <string-literal> ]        (* [[export ".section"]] *)
 
 <param-list>     ::= <param> { "," <param> }
 <param>          ::= [ <param-attr> ] <identifier> <type-name>
@@ -453,7 +453,7 @@
 ```
 
 > 说明：
-> - `cooking`：编译期执行块。块内可声明编译期变量/常量、调用编译期函数（如 `cooking PI = 3.1415926` 定义编译期常量、`cooking { const X i32 = ... }` 计算常量、`static_assert` 编译期断言）。
+> - `cooking`：编译期执行块，块体必须由花括号包裹若干 `<cooking-item>`。块内可声明编译期变量/常量、调用编译期函数（如 `cooking { const BUF i32 = 1024 }` 定义编译期常量、`cooking { const X i32 = BUF * 2 }` 由已有常量计算、`static_assert(BUF > 0, "buf")` 编译期断言）。
 > - `align n { ... }`：块内类型按 n 字节对齐。
 
 ---

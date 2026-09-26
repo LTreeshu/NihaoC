@@ -92,7 +92,7 @@ NiHao is a new statically compiled language designed for system-level programmin
 - `[[local]]` — internal-linkage function attribute
 - `[[used]]` — force-keep function attribute
 - `[[unused]]` — deprecation function attribute
-- `[[export] ".my_section"]` — export to a specific section
+- `[[export ".my_section"]]` — export to a specific section
 
 > The complete keyword set and where each keyword sits in the grammar are defined by [`BNF.md`](./BNF.md) §1.2
 > (40 grammar keywords + 8 lexically reserved words + 16 primitive type names).
@@ -761,7 +761,7 @@ while opt {
 | `[[weak]]`               | weak symbol, overridable      | library default implementations|
 | `[[used]]`               | keep symbol even if unused    | functions called from asm/debuggers |
 | `[[unused]]`             | deprecated, emit a warning    | legacy transitional APIs       |
-| `[[export] ".section"]`  | export to a specific section  | special sections for linker scripts |
+| `[[export ".section"]]`  | export to a specific section  | special sections for linker scripts |
 
 **Combination rule:** bracket attributes and the return attribute may coexist; bracket attributes come first.
 
@@ -782,7 +782,7 @@ while opt {
 | inline, dynamic pointer   | `[[inline]] flow create_small() void { ... }`      | suggest inline |
 | weak, static pointer      | `[[weak]] static get_default() void { ... }`       | overridable default |
 | deprecated, dynamic pointer | `[[unused]] flow old_api() void { ... }`         | deprecation warning |
-| export-to-section, static pointer | `[[export]".init"] static init_data() void { ... }` | place into a specific section |
+| export-to-section, static pointer | `[[export ".init"]] static init_data() void { ... }` | place into a specific section |
 
 ---
 
@@ -947,7 +947,7 @@ flow old_create() void {
 }
 
 // export to .init section + static pointer
-[[export] ".init"] 
+[[export ".init"]] 
 static get_init_data() void {
     static data InitData = {.magic = 0xDEADBEEF}
     return &data

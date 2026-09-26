@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 1.0 线设计文档内部矛盾修正轮（PA-60，2026-09-26，纯文档、零代码）
+
+> 落在本地 tag `v1.0.2`（→ `18f9c77`）之后，紧接 2026-09-25 的 PA-58 实现轮，**不计入 v1.0.2**。对象是 PA-48 固定设计后登记的 `BNF.md` **文档内部**两处自相矛盾（`TODO-PA.md` PA-60）——按「设计文档改动需 ltree 裁定」的规矩等到本轮，ltree 三口径全部采纳推荐案。零代码、零用例，门禁数值与上一节（PA-58 轮：c / native 各 56P/0F/4S、ir-c / ir-native 各 8P/0F/49S，examples 7/7）逐字不变。**本小节所在提交仅在本地，未推送**（推送授权门禁见 `docs/GIT_CONVENTIONS.md` §3.1）。
+
+- **`export` 的字面量位置按产生式统一，实际范围是登记的 6 倍（9 处）**：`<bracket-attr> ::= … | "export" [ <string-literal> ]` 把字面量画在属性列表**内**，文档举例却写成 `[[export] ".section"]`（落在 `]]` 之外，整串不是任何产生式的合法句子）。原登记只有 `BNF.md:409` 的注释一条，普查后实为 **9 处**并全部改完：`BNF.md:409`、`Chinese.md` 的 §1.2 关键字表 80 / §7 属性表 735 / 组合示例表 756 / §9 代码样例 921，及 `English.md` 对应的 95 / 764 / 785 / 950；两份语法元素表不出现该形态。方向选择有实测支撑：A 后端只接受内侧形态（探针 `build/pr/t_attr_in.nc` 编译通过并输出 `1`），外侧形态报 `expected ']', got 'TOK_STRING_LITERAL'`（`build/pr/t_attr_out.nc`），门禁用例 `tests/pos/module_top_forms.nc:9` 早已按内侧形态写。故本项是**文档跟实现与产生式走**，未动代码。
+- **`cooking` 的越界举例换成花括号整型例子（`BNF.md:456`）**：原文举 `cooking PI = 3.1415926`，与 `<cooking-block> ::= "cooking" "{" { <cooking-item> } "}"` 强制花括号矛盾，A 后端按产生式拒绝（`cooking must be followed by { }`）。现写作 `cooking { const BUF i32 = 1024 }`，同句另附 `cooking { const X i32 = BUF * 2 }` 与 `static_assert(BUF > 0, "buf")`。**为何不用原登记的候选改法**（`cooking { PI f64 = 3.1415926 }` / `cooking { const PI f64 = 3.1415926 }`）：块内裸 `<var-decl>` 在 1.x 只给诊断不落地（PA-59 定案），浮点字面量又撞上下面新发现的缺口，两种改法读者照抄都编译不过。
+- **执行中发现并登记 PA-61（只登记，代码与设计文字均未动）**：编译期求值链只接受整型常量表达式。`cooking { const PI f64 = 3.1415926 }` 在 **c / native 报 `constant expression: unexpected token 'TOK_FLOAT_CONST'`、ir-c 报 `ir: constant expression: unexpected token 'TOK_FLOAT_CONST'`**（探针 `build/pr/t_cook_pi.nc`）；函数调用与成员访问同族被拒——`cooking { const BUILD_TIME = time.now() }` 在 c 报 `unknown identifier 'time'` + `unsupported cooking item '.'`、在 ir-c 报 `unknown identifier 'time'`（探针 `build/pr/t_spec92.nc`）。**该形态正是中英规范 §9.2 的代码样例本身**（`Chinese.md:1055` / `English.md:1084` 第 4 行），即读者照抄规范样例在两侧后端都编译不过；样例文字按裁定保留，三条走向（只登记 / A 后端扩 `double` 并定比较与截断规则 / 设计层收窄为「编译期表达式仅整型」）待 ltree 定。
+- **跨分支一致性**：改前 `git diff PB PA -- docs/BNF.md docs/Chinese.md docs/English.md` 为空（三份设计文档两侧逐字一致），故 PB 侧取 PA 现值即等价于三方合并的结果，已随本轮回灌 PB 分支并提交（同样仅在本地）；元素表的 4 行 `=>` / `?=` 差异是 PA-45 定案的合法分支差异，不受影响。设计层正文仍零行号、零实现状态、零 PA/PB 编号，本轮的全部状态与探针只写在 `TODO-PA.md` / 本文件与 `docs/IMPLEMENTATION_STATUS.md`（后者分支专属，未跨分支覆盖）。
+
 ### 1.0 线 cooking 编译期函数实现轮（PA-58，2026-09-25，代码 + 门禁用例）
 
 > 落在本地 tag `v1.0.2`（→ `18f9c77`）之后，紧接同日的 PA-52 / PA-59 诊断轮，**不计入 v1.0.2**。PA-58 的两个候选动作里选 **① 在 A 后端实现宏式编译期函数**（②「改窄示例并把 `<ct-func-def>` 标为 2.0 承诺」不采），依据是 PA-22 / PA-25 / PA-27 / PA-28 已确立的口径：设计文档承诺的语法形态缺实现 → 补实现，不降级文档。设计层四文档一字未改。上一基线是 PA-52 / PA-59 轮的 c / native 各 55P/0F/5S。**本小节所在提交仅在本地，未推送**（推送授权门禁见 `docs/GIT_CONVENTIONS.md` §3.1）。
