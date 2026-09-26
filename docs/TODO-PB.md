@@ -9,7 +9,7 @@
 ## 已完成
 
 - 28 条三地址码指令集定义；irparse 最小子集前端（func/局部变量/if/while/return/算术比较/puts）
-- ir_to_c（→C）、ir_to_native（→x86-64 AT&T，Windows x64 ABI 简化版）双后端
+- ir_to_c（→C）、ir_to_native（→x86-64 AT&T，Windows x64 ABI 简化版）双后端（**2026-09-26 追记：x86-64 与后来的 arm64 两档发射器均已删除，见 PB-34**）
 - 端到端跑通：用户函数直接 call、栈帧 16 字节对齐、隐式返回兜底、前置原型（c3c91dc）
 - hello.nc 四后端输出一致；13/13 回归通过
 
@@ -60,7 +60,7 @@
 - [x] **PB-17 IR_CALL 参数收集 bug（2026-08-07 验证已修复）**：sret/多返回机制重构时已改为收集模式（args[] 收集 → 按序发射 PARAM+CALL），嵌套调用 dbl(add(3,4))、多参数嵌套 add(dbl(2),dbl(3))、连续调用链、嵌套作 puts 参数——双后端全对（已验证）
 - [x] **PB-18 ir_to_c 类型化输出（2026-08-07 完成）**：字符串池地址参数包 `(char*)`（is_str_addr 检测 LD_ADDR __str_N——puts 等外部函数参数消除 pointer-from-integer）；malloc 返回值包 `(int64_t)(intptr_t)`（void* → int64 消除 integer-from-pointer）。生成 C 全矩阵 0 warning（assignment makes 类），行为不变 0 FAIL
 - [x] **PB-19 -run 内存执行（已于 2026-08-06 与 PA-1 一并文档化）**：Linux only，README 已说明原因与替代方案
-- [x] **PB-20 arch/ 多架构（2026-08-08 验证完成）**：**arm64 后端 ir_arm64.c 已就绪**（AAPCS64：stp x29,x30 帧、d0-d7 浮点参数、fadd/fsub/fmul/fdiv、ldp 恢复，全栈槽 x29-stride*(N+1)，只验汇编生成）——ir_fcall/ir_sparam/ir_float/ir_loop 汇编生成正确；riscv64（RV64I+D）+ arm64 + x86-64（Win64）**三架构后端全齐**。**loongarch64（2026-08-15 完成）——四架构收官**（PB-20 延伸，克隆 riscv64 + LA64 映射，汇编生成验证）
+- [x] **PB-20 arch/ 多架构（2026-08-08 验证完成）**：**arm64 后端 ir_arm64.c 已就绪**（**2026-09-26 追记：该文件与 ir_x86_64.c 一并删除，见 PB-34**）（AAPCS64：stp x29,x30 帧、d0-d7 浮点参数、fadd/fsub/fmul/fdiv、ldp 恢复，全栈槽 x29-stride*(N+1)，只验汇编生成）——ir_fcall/ir_sparam/ir_float/ir_loop 汇编生成正确；riscv64（RV64I+D）+ arm64 + x86-64（Win64）**三架构后端全齐**。**loongarch64（2026-08-15 完成）——四架构收官**（PB-20 延伸，克隆 riscv64 + LA64 映射，汇编生成验证）
 
 ### 测试与集成待办
 
@@ -144,3 +144,10 @@
 | P13 | 编译期求值链只接受整型常量表达式：浮点字面量与 `time.now()` 一类的调用 / 成员访问在 c 与 ir-c **两侧同样**被拒（`constant expression: unexpected token 'TOK_FLOAT_CONST'` / `unknown identifier 'time'`） | **等 `PA` 侧 PA-61 的三选一裁定（只登记 / 扩 `double` 并定比较与截断规则 / 设计层收窄为仅整型）之后一并落地，本分支不先行分叉** |
 | 核对项 | ~~PA-51 四档数组容量写法待回灌~~ | **PB 已满足，无需移植**：`parser.c:344–365` 早在 2026-09-01 就按 IR 前端口径实现了 `[N...]` / `[N..]` / `[..N]` / `[..]` / `[...]`（末者取默认容量 8），`PA` 侧是随后追上的一版。由此定下本表的操作口径：**每轮动手前先在 PB 复测该形态，不照 `PA` 的登记清单直接搬** |
 
+- [x] **PB-34 IR 机器码后端裁剪为 riscv64 + loongarch64（2026-09-26 完成，ltree 裁定）**：ltree 定「PB 后端只保留 riscv-v 与 loongarch 两个平台，其他删除，由 C 路线代劳」。本分支裁定回答的正是 `docs/PB24_DECISION.md` §6 决策点 3（「B 方案后端去留」）悬而未决的那一问。
+  - **删**：`ncc/ir_x86_64.c`（518 行）、`ncc/ir_arm64.c`（355 行）连同 `ir_backend.c` 注册表项与 `ir_backend.h` 的 extern；`ir.h` 的 `irgen_native_emit` 声明一并摘掉（该函数就定义在被删的 x86 文件里，无定义即无声明）。两文件合计净减 873 行发射代码（518 + 355），`ir_backend.c` 的平台无关骨架（帧计算、字符串池、三钩子调度）不动。
+  - **`-backend=ir-native` 改为按宿主分派**（三选一里 ltree 采「回退到 IR→C→cc（推荐）」，未选「报错拒绝」与「取消 ir-native 后端名」）：新 `ir_host_asm_backend()` 用 `__riscv`/`__loongarch_lp64` 等预定义宏判定宿主，riscv64 / loongarch64 宿主仍出汇编后交 tcc 汇编链接，其余宿主（含本机 Windows x86-64）走 `irgen_c_emit` 那条既有尾巴，`-v` 下打一行回退说明。**收益**：门禁四档在本机数值一字不变（c/native 24P/0F/6S、ir-c/ir-native 15P/0F/11S、一致性 36P/0F），而 `xmake.lua` 里那段「非 Windows 主机整体跳过 ir-native」（起因是 x86 汇编发射器生成的 ELF 在 Linux 运行时 segfault，2026-08-31 WSL 实测）随发射器一起删除——Linux 上 ir-native 现在等价 IR→C，不再需要跳过。
+  - **CLI 兼容性口径**：`ir-riscv64` 编号 4 不变，`ir-loongarch64` 由 6 改 5（`cs->backend` 只在 `ncc.c`→`ir_compile` 内部传递，无外部契约）；`-backend=ir-arm64` 与拼写猜测形态 `ir-x86_64` 走**专属诊断**（说明只剩两档 + 指向 ir-native/ir-c/c），不再混在 "unknown backend" 里，沿用 PA-52/PA-59 那套「已退出形态要给可读理由」的手法；`print_usage` 的后端清单同步补全（原先只列 c/native，`ir-*` 四档从未出现在帮助里）。**另合并两条分派链**：`-backend=<be>` 与 `-backend <be>` 原本各写一份 if 链，空格写法一直漏收 `ir-riscv64` / `ir-loongarch64`（帮助与错误文案列出却拒绝），本轮抽出共用的 `set_backend()`；不补这一步，本条给两条链写上的六档后端列表本身就成了一句谎。
+  - **实测**：`xmake -y` 无警告；`ir-native` 在本机产物为 `.c` 并经 tcc 出可执行（`-v` 可见 `Invoking: tcc "….c"`）；`ir-riscv64` / `ir-loongarch64` 仍出标准 GAS `.s`；`ir-arm64` / `ir-x86_64` rc=1 带专属诊断；顺带量到一条与本轮无关但值得入账的事实——`examples/` 走 `ir-native` 是 **7/7 全过**（含 `06_cooking.nc`），而 c/native 是 6/7，即 **P11 的 cooking 缺口纯粹在 A 后端**，IR 前端早就具备编译期函数。
+  - **未做**：不给 riscv64/loongarch64 增加门禁档（本机无交叉工具链，`ir-riscv64`/`ir-loongarch64` 仍只验汇编生成，转正评估记在 `docs/VERSIONING_ROADMAP.md` 未完成项）；`PA`（1.0 冻结线）分支的四个发射器**一律不动**，故 `README.md` / `docs/ROADMAP.md` / `docs/VERSIONING_ROADMAP.md` / `docs/GIT_CONVENTIONS.md` 四处提及已写成带日期与分支限定的措辞，两条线各自都成立；`docs/STAGE_SUMMARY.md` 与 `docs/LEGACY_CODEGEN.md` 里的 x86-64 发射器记述属**历史快照**，按既定口径不回改。
+  - **顺带核出的一条共享文档分叉（未处理，待裁定）**：本轮逐文件与 `PA` 对读时发现 `README.md` 的「1.0 范围」段两侧措辞不同——`PA` 侧已随 PA-58 改为「v1.0.2 **tag 时点**门禁实测…该形态已于 2026-09-25 落入全量 parser，examples 现为 **7/7**」，本分支仍是旧版「examples **6/7**，`06_cooking.nc` 为 2.0 预览示例，1.0 线两后端不接受」。**本分支那句对本分支现态是实话**（P11 未移植，c/native 确实 6/7），但同一段落在两条线上取不同措辞会让下次 3-way 同步留下永久冲突点，故登记待裁：要么并入 **P11** 那一轮随移植一起归一，要么把该段改成与 `docs/ROADMAP.md` 一致的「tag 时点 + 各分支现值注记」写法。本轮**不擅自改**，也未因此动过该行。

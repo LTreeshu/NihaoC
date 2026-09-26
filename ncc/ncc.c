@@ -205,6 +205,9 @@ static void print_usage(void)
         "  -shared         Generate shared library\n"
         "  -static         Generate static library\n"
         "  -backend <be>   Backend: c (default, external tcc) | native (libtcc)\n"
+        "                    IR pipeline: ir-c | ir-native (riscv64/loongarch64 hosts\n"
+        "                    emit asm, other hosts take the IR->C route) | ir-riscv64\n"
+        "                    | ir-loongarch64 (cross asm, .s only, not assembled)\n"
         "  -run            Native backend: compile to memory and run (Linux only)\n"
         "  -v, --verbose   Verbose output\n"
         "  -g              Generate debug information\n"
@@ -223,6 +226,38 @@ static void print_usage(void)
 }
 
 static void lexer_test(CompilerState *cs, const char *filename);
+
+/* 后端名 -> cs->backend；-backend=<be> 与 -backend <be> 两种写法共用，
+ * 避免两条分派链各自漂移（错误文案里的后端集合必须与实际接受的一致） */
+static int set_backend(CompilerState *cs, const char *be)
+{
+    if (strcmp(be, "native") == 0) {
+        cs->backend = 1;
+    } else if (strcmp(be, "c") == 0) {
+        cs->backend = 0;
+    } else if (strcmp(be, "ir-c") == 0) {
+        cs->backend = 2;
+    } else if (strcmp(be, "ir-native") == 0) {
+        cs->backend = 3;
+    } else if (strcmp(be, "ir-riscv64") == 0) {
+        cs->backend = 4;
+    } else if (strcmp(be, "ir-loongarch64") == 0) {
+        cs->backend = 5;
+    } else if (strcmp(be, "ir-arm64") == 0 || strcmp(be, "ir-x86_64") == 0) {
+        /* 2026-09-26 裁定：IR 机器码后端只留 riscv64 与 loongarch64，
+         * x86-64/arm64 两档发射器删除，由 C 路线代劳。 */
+        fprintf(stderr, "Error: backend '%s' was removed; the IR asm emitters are "
+                        "riscv64 and loongarch64 only — use -backend ir-native "
+                        "(falls back to IR->C on this host), ir-c or c\n", be);
+        return -1;
+    } else {
+        fprintf(stderr, "Error: unknown backend '%s' "
+                "(c|native|ir-c|ir-native|ir-riscv64|ir-loongarch64)\n", be);
+        return -1;
+    }
+    return 0;
+}
+
 static int parse_args(CompilerState *cs, int argc, char **argv)
 {
     int i;
@@ -274,48 +309,16 @@ static int parse_args(CompilerState *cs, int argc, char **argv)
                     cs->run_argv = argv + i + 1;
                 }
             }
-            /* Backend: c | native | ir-c (IR->C) | ir-native (IR->x86-64 asm) */
+            /* Backend: c | native | IR 线 ir-c / ir-native / ir-riscv64 / ir-loongarch64 */
             else if (strncmp(arg, "-backend=", 9) == 0) {
-                const char *be = arg + 9;
-                if (strcmp(be, "native") == 0) {
-                    cs->backend = 1;
-                } else if (strcmp(be, "c") == 0) {
-                    cs->backend = 0;
-                } else if (strcmp(be, "ir-c") == 0) {
-                    cs->backend = 2;
-                } else if (strcmp(be, "ir-native") == 0) {
-                    cs->backend = 3;
-                } else if (strcmp(be, "ir-riscv64") == 0) {
-                    cs->backend = 4;
-                } else if (strcmp(be, "ir-arm64") == 0) {
-                    cs->backend = 5;
-                } else if (strcmp(be, "ir-loongarch64") == 0) {
-                    cs->backend = 6;
-                } else {
-                    fprintf(stderr, "Error: unknown backend '%s' "
-                            "(c|native|ir-c|ir-native)\n", be);
-                    return -1;
-                }
+                if (set_backend(cs, arg + 9) != 0) return -1;
             }
             else if (strcmp(arg, "-backend") == 0) {
                 if (i + 1 < argc) {
-                    const char *be = argv[++i];
-                    if (strcmp(be, "native") == 0) {
-                        cs->backend = 1;
-                    } else if (strcmp(be, "c") == 0) {
-                        cs->backend = 0;
-                    } else if (strcmp(be, "ir-c") == 0) {
-                        cs->backend = 2;
-                    } else if (strcmp(be, "ir-native") == 0) {
-                        cs->backend = 3;
-                    } else {
-                        fprintf(stderr, "Error: unknown backend '%s' "
-                                "(c|native|ir-c|ir-native)\n", be);
-                        return -1;
-                    }
+                    if (set_backend(cs, argv[++i]) != 0) return -1;
                 } else {
                     fprintf(stderr, "Error: -backend requires an argument "
-                                    "(c|native|ir-c|ir-native)\n");
+                                    "(c|native|ir-c|ir-native|ir-riscv64|ir-loongarch64)\n");
                     return -1;
                 }
             }

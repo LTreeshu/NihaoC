@@ -14,7 +14,7 @@
 | **2.0** | B（irparse.c → IR → 多后端） | 下一代：平台中立 IR、多架构汇编、可优化 | 持续演进 → 就绪后接管 |
 
 两条线**共享**：lexer.c / token.h / ncc.h / sym.c / type.c / vis.c / stdlib.c / linker.c / module.c 与测试框架（xmake.lua）。
-两条线**独占**：A=parser.c/cgen.c/native.c；B=irparse.c/ir.c/ir_to_c.c/ir_backend.c/ir_x86_64.c/ir_riscv64.c/ir_arm64.c/ir_loongarch64.c。
+两条线**独占**：A=parser.c/cgen.c/native.c；B=irparse.c/ir.c/ir_to_c.c/ir_backend.c/ir_riscv64.c/ir_loongarch64.c（`PB` 分支 2026-09-26 起删去 ir_x86_64.c / ir_arm64.c，见 TODO-PB 的 PB-34；`PA` 分支两文件仍在）。
 
 ---
 
@@ -72,7 +72,7 @@
 
 - [x] **ir-c 输出质量：变量名保留（2026-09-05 完成，PB 阶段3 C 项）**：`IrFn` 新增 `vreg_name` 表（ir.h），`ir_new_vreg` 同步增长（ir.c），`var_declare` 在基 vreg 写入源码名（irparse.c，变量与参数均经此登记）；`ir_to_c` 构建 `vrid` 标识符表（有名用源码名、无名用 `tN`），局部变量声明与全部指令操作数引用均输出可读名。`xmake test --all` 全矩阵 0 FAIL、跨后端一致性一致。**结构体直出（真实结构体类型代替平铺 8 字节槽）依赖阶段 2 B 项「真实内存布局」，留待 B 完成后补**——届时 ir_to_c 可直出 `struct T { ... }` 并复用真实偏移。
 - [ ] **native 寄存器分配**（PB-15 决策的长期项：全栈槽保底已敲定，live range/spill 参考 LLVM RegAllocGreedy）
-- [ ] 汇编后端转正评估：riscv64/arm64/loongarch64 从"仅验汇编生成"→ 真编译（需交叉工具链环境）
+- [ ] 汇编后端转正评估：riscv64/loongarch64 从"仅验汇编生成"→ 真编译（需交叉工具链环境；arm64 发射器已于 2026-09-26 随 PB-34 删除）
 
 ### 阶段 4：新语言特性（2.0 独占，P2）
 

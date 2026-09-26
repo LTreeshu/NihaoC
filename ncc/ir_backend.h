@@ -37,12 +37,12 @@ typedef void (*FnEpilogue)(NBuf *b, const struct TargetBackend *tb,
                            const IrFn *f, int need_ret);
 
 struct TargetBackend {
-    const char *name;         /* "x86-64" | "riscv64" | "arm64" */
+    const char *name;         /* "riscv64" | "loongarch64"（IR 线只留这两档） */
     const char *asm_syntax;   /* "att"（GAS/AT&T） */
 
     /* ---- 栈帧布局 ---- */
     int slot_stride;          /* 槽间距（字节）：8 */
-    int stack_dir;            /* -1 向下（x86-64/riscv64/arm64 均向下） */
+    int stack_dir;            /* -1 向下（riscv64/loongarch64 均向下） */
     int callee_align;         /* 栈对齐：16 */
     int frame_extra;          /* 额外帧开销（影子空间等） */
 
@@ -70,9 +70,7 @@ const char *backend_name(int idx);
 int irgen_backend_emit(IrProg *p, const char *outfile, const char *backend);
 
 /* 各后端实例（定义于各自 .c） */
-extern const TargetBackend x86_64_backend;
-extern const TargetBackend riscv64_backend;   /* 阶段 3 */
-extern const TargetBackend arm64_backend;      /* PB-20 */
-extern const TargetBackend loongarch64_backend; /* 阶段 4 */
+extern const TargetBackend riscv64_backend;      /* 阶段 3 */
+extern const TargetBackend loongarch64_backend;  /* 阶段 4 */
 
 #endif /* IR_BACKEND_H */

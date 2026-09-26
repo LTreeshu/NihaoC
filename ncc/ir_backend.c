@@ -44,11 +44,10 @@ void nb_put(NBuf *b, const char *fmt, ...)
     b->len += (size_t)need;
 }
 
-/* 后端注册表（阶段 1：x86-64；阶段 3：+riscv64/arm64；阶段 4：+loongarch64） */
+/* 后端注册表：IR 线只保留 riscv64 与 loongarch64 两档机器码发射器；
+ * x86-64 / arm64 已删除，那些平台上由 C 路线（ir-c / ir-native 的回退）出可执行文件 */
 static const TargetBackend *g_backends[] = {
-    &x86_64_backend,
     &riscv64_backend,
-    &arm64_backend,
     &loongarch64_backend,
 };
 

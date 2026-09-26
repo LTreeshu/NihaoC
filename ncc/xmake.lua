@@ -66,7 +66,7 @@ target("ncc")
     add_files("ncc.c", "lexer.c", "parser.c", "linker.c",
               "module.c", "stdlib.c", "sym.c", "type.c", "vis.c", "cgen.c",
               "native.c", "ir.c", "irparse.c", "ir_to_c.c",
-              "ir_backend.c", "ir_x86_64.c", "ir_riscv64.c", "ir_arm64.c", "ir_loongarch64.c")
+              "ir_backend.c", "ir_riscv64.c", "ir_loongarch64.c")
     add_includedirs(".", path.join(tcc_dir, "libtcc"))
     if is_host("windows") and os.isfile(path.join(tcc_dir, "libtcc.dll")) then
         -- tcc 链接器不认 -l 与 GNU 导入库，直接链接 DLL 文件。
@@ -204,21 +204,6 @@ task("test")
                 cprint("${red}unknown backend '%s' (c|native|ir-c|ir-native)", b)
                 os.exit(1)
             end
-        end
-        if not is_host("windows") then
-            -- ir-native 是 2.0 预览后端（ir_x86_64 直接打包机器码）：
-            -- 生成的 ELF 在 Linux 上运行时 segfault（2026-08-31 WSL 实测，Windows PE
-            -- 正常）。发布门禁（路线图 §3.5）只要求 c/native 0 FAIL，Linux 下整体
-            -- 跳过，与 p0_link 的 kernel32 跳过同理。
-            local t = {}
-            for _, bb in ipairs(list) do
-                if bb ~= "ir-native" then
-                    t[#t + 1] = bb
-                else
-                    cprint("${yellow}  [SKIP] backend ir-native (Linux ELF 运行时崩溃，2.0 预览；Windows 已验证)")
-                end
-            end
-            list = t
         end
 
         local total_failed = 0

@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 2.0 线 IR 后端裁剪轮（PB-34：机器码发射器只留 riscv64 / loongarch64，2026-09-26）
+
+> ltree 裁定「PB 后端只保留 risc-v 与 loongarch 两个平台，其他删除，由 C 路线代劳」，本条即回答 `docs/PB24_DECISION.md` §6 决策点 3 悬置的「B 方案后端去留」。锚点按既定口径只写在 `IMPLEMENTATION_STATUS.md`。
+
+- **删两档发射器**：`ir_x86_64.c`（518 行）与 `ir_arm64.c`（355 行）整文件删除，连带 `ir_backend.c` 注册表里的两项与 `ir_backend.h` 的两条 extern；`ir.h` 的 `irgen_native_emit` 声明一并摘除——那个「兼容入口」就定义在被删的 x86 文件里（内容只是转手调 `irgen_backend_emit(..., "x86-64")`），没有实现就不留声明。`ir_backend.c` 的平台无关骨架（帧计算、字符串池、三钩子调度）与 `ir_to_c.c` 一字未动，剩余机器码路径为 riscv64 + loongarch64 两档。
+- **`-backend=ir-native` 由「硬绑 x86-64」改为按宿主分派**（三选一里采「回退到 IR→C→cc」，未选「报错拒绝」与「取消 ir-native 后端名」）：新增 `ir_host_asm_backend()` 依预定义宏判定宿主——riscv64 / loongarch64 宿主仍出本机汇编、再由 tcc 汇编链接；其余宿主（含本机 Windows x86-64）改走既有的 `irgen_c_emit` → `tcc` 尾巴，`-v` 下打一行回退说明。**这是本轮最要紧的一条收益**：门禁四档数值一字不变，而后端语义不再是「x86 专属」。
+- **Linux 的 ir-native 跳过硬码随之删除**：`xmake.lua` 原有一段「非 Windows 主机整体跳过 ir-native」，起因是 x86 汇编发射器生成的 ELF 在 Linux 运行时 segfault（2026-08-31 WSL 实测）。发射器没了之后该档在 Linux 上等价 IR→C，跳过理由不再成立，故整段移除而不是改判据；**本条只记 Windows 侧实测，Linux 侧待有环境时复跑再补数**。
+- **CLI 口径**：`ir-riscv64` 编号仍 4，`ir-loongarch64` 由 6 改为 5（该整数只在 `ncc.c` → `ir_compile` 内部传递，无外部契约）；`-backend=ir-arm64` 与猜测拼写 `-backend=ir-x86_64` 给**专属诊断**（说明只留两档并指向 `ir-native` / `ir-c` / `c`），不混进 `unknown backend`——沿用 PA-52 / PA-59 那套「已退出形态要给可读理由」的手法。`print_usage` 顺带补齐 IR 档后端清单（此前帮助里从未出现过 `ir-*`）。同轮把 `-backend=<be>` 与 `-backend <be>` 两份 if 链合并为共用的 `set_backend()`——空格写法一直漏收 `ir-riscv64` / `ir-loongarch64`（帮助与错误文案列出却拒绝），不合并的话本轮给两条链写上的六档列表本身就是一句谎。
+- **实测**：`xmake -y` 无警告；全矩阵 `xmake test --all` rc=0，c / native 各 **24P / 0F / 6S**、ir-c / ir-native 各 **15P / 0F / 11S**、一致性 **36P / 0F**——与裁剪前逐字相同；`ir-riscv64` / `ir-loongarch64` 仍产出标准 GAS `.s`，两个已删后端名 rc=1 带诊断。**顺带量到一条与本轮无关但值得入账的事实**：`examples/` 走 `ir-native` 是 **7/7 全过**（含 `06_cooking.nc`），而 c / native 是 6/7，即 PB-33 表 **P11** 的 cooking 缺口纯粹在 A 后端，IR 前端早就具备编译期函数。
+- **边界与不改写**：不给 riscv64 / loongarch64 增加门禁档（本机无交叉工具链，仍只验汇编生成，转正评估留在 `VERSIONING_ROADMAP.md` 未完成项）；`PA` 是 1.0 冻结线，其四个发射器**一律不动**，故 `README.md` / `docs/ROADMAP.md` / `docs/VERSIONING_ROADMAP.md` / `docs/GIT_CONVENTIONS.md` 四处提及改写成带日期与分支限定的措辞，两条线各自都成立；`docs/STAGE_SUMMARY.md`、`docs/LEGACY_CODEGEN.md` 与本文件 `[v1.0.0]` 段里提到 x86-64/arm64 发射器的句子均属历史快照，按既定口径不回改。**另核出一条既有分叉未处理**：`README.md` 的「1.0 范围」段两侧措辞不同（`PA` 侧随 PA-58 已改为「tag 时点实测 + examples 现 7/7」，本分支仍是旧的「examples 6/7，`06_cooking.nc` 为 2.0 预览示例」）——本分支那句对本分支现态是实话，但同一段落在两条线上取不同写法会让下次 3-way 同步留下永久冲突点，已登记在 `docs/TODO-PB.md` 的 PB-34 待裁，本轮不擅自改。
+
 ### 2.0 线回灌轮（PB-33 的 P3：`alignof` 改由编译期自算并输出字面量，2026-09-26）
 
 - **`alignof` 在 `c` / `native` 后端由「不可用」变为「可用」**（P3，对齐 `PA` 的 PA-24 定稿口径）：动手前在本分支复测——`alignof(Pack)` 与 `alignof(i32[4])` 的最小探针在 `c` 与 `native` 两侧都编译出 `_Alignof(T)`，libtcc 0.9.27 不提供该符号，链接期 `tcc: error: undefined symbol '_Alignof'`；`ir-c` 侧则能跑但结果全错（IR 前端对任何 `alignof` 固定返回 8，`alignof(u8)` / `alignof(i32)` 两条断言必反）。修法与 `PA` 一致：对齐值改由**编译器在编译期算出**，生成的 C 只剩整数字面量。

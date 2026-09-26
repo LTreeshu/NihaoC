@@ -8,7 +8,8 @@
  *   表达式: 整数常量、标识符、字符串字面量、+ - * /、比较、括号
  *   调用: puts("...")（外部 C 符号）
  *
- * 目的：验证 IR -> C 与 IR -> x86-64 双后端端到端可行；
+ * 目的：验证 IR -> C 与 IR -> riscv64/loongarch64 汇编两条出码路线端到端可行
+ *       （无机器码发射器的宿主上 ir-native 回退到 IR -> C）；
  *       全量语法迁移到 IR 是本骨架之后的迭代工作。
  * ============================================================ */
 #include "ir.h"
@@ -3402,6 +3403,19 @@ int ir_parse_file(CompilerState *cs, const char *filename)
     return 0;
 }
 
+/* ir-native 的宿主机器码后端：2026-09-26 裁定 IR 发射器只留 riscv64 与 loongarch64，
+ * 其余宿主返回 NULL，由 ir_compile 改走 IR→C→宿主 cc（机器码由 C 路线代劳）。 */
+static const char *ir_host_asm_backend(void)
+{
+#if defined(__riscv) && (__riscv_xlen == 64)
+    return "riscv64";
+#elif defined(__loongarch_lp64) || defined(__loongarch64__)
+    return "loongarch64";
+#else
+    return NULL;
+#endif
+}
+
 /* 后端统一入口 */
 int ir_compile(CompilerState *cs, const char *filename, int backend, int verbose)
 {
@@ -3437,19 +3451,25 @@ int ir_compile(CompilerState *cs, const char *filename, int backend, int verbose
         }
     }
 
+    /* ir-native 在无机器码发射器的宿主上回退到 IR→C，与 ir-c 同一条尾巴 */
+    const char *host_asm = (backend == 3) ? ir_host_asm_backend() : NULL;
+    int via_c = (backend == 2) || (backend == 3 && !host_asm);
+
     char out[1024];
     snprintf(out, sizeof(out), "%s.%s", cs->output_file ? cs->output_file : "a.out",
-             backend == 2 ? "c" : "s");
-    if (backend == 2) {
+             via_c ? "c" : "s");
+    if (via_c) {
+        if (backend == 3 && cs->verbose)
+            printf("ir-native: no IR asm emitter for this host, taking the IR->C route\n");
         if (irgen_c_emit(P, out) != 0) return -1;
-    } else if (backend == 4 || backend == 5 || backend == 6) {
-        /* riscv64/arm64/loongarch64：只生成汇编（本机 tcc 是 x86-64，交叉汇编留外部工具） */
-        const char *bn = (backend == 4) ? "riscv64" : (backend == 5) ? "arm64" : "loongarch64";
+    } else if (backend == 4 || backend == 5) {
+        /* riscv64/loongarch64 交叉档：只生成汇编（宿主工具链汇编不了别家指令集） */
+        const char *bn = (backend == 4) ? "riscv64" : "loongarch64";
         if (irgen_backend_emit(P, out, bn) != 0) return -1;
         if (cs->verbose) printf("%s asm written to %s (cross, not assembled)\n", bn, out);
         return 0;
     } else {
-        if (irgen_native_emit(P, out) != 0) return -1;
+        if (irgen_backend_emit(P, out, host_asm) != 0) return -1;
     }
 
     /* 用 tcc 汇编/编译 + 链接为可执行 */

@@ -95,8 +95,8 @@ int ir_new_vreg(IrFn *f);
 int ir_new_label(IrFn *f);
 int ir_add_string(IrProg *p, const char *data);   /* 返回符号名序号 */
 
-/* 后端入口（由 ncc 的 -backend=ir-c / ir-native 调用） */
+/* 后端入口（由 ncc 的 -backend=ir-c / ir-native / ir-riscv64 / ir-loongarch64 调用；
+ * 机器码发射器统一走 ir_backend.h 的 irgen_backend_emit） */
 int irgen_c_emit(IrProg *p, const char *outfile);        /* IR -> C */
-int irgen_native_emit(IrProg *p, const char *outfile);   /* IR -> x86-64 asm */
 
 #endif
