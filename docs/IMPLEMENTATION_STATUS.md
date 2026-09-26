@@ -2,7 +2,7 @@
 
 本文档记录 NihaoC 语言规范（Chinese.md / English.md）中各项指针安全规则与编译器（ncc）实际实现的对应状态。
 
-> 更新日期：2026-09-21。本表主体以 **1.0 冻结线（v1.0.2）** 的现态书写，行号基于 **本（`PB`）分支** 的 `parser.c` / `irparse.c`（`vis.c` 两侧同源，行号与 `PA` 一致），仅作导航用。`PA`/`main` 的行号口径见 `PA` 分支同文件。
+> 更新日期：2026-09-26（新增「本分支回灌前基线」一节，符号级普查结论同见该节）。本表主体以 **1.0 冻结线（v1.0.2）** 的现态书写，行号基于 **本（`PB`）分支** 的 `parser.c` / `irparse.c`（`vis.c` 两侧同源，行号与 `PA` 一致），仅作导航用。`PA`/`main` 的行号口径见 `PA` 分支同文件。
 > **PB（2.0 线）差异集中在文末「2.0 线（PB）差异」一节**：`vis.c` 的矩阵实现两侧同源（行号一致），`parser.c` / `irparse.c` 行号与部分状态不同。
 >
 > 本文件是**实现状态层**文档：`BNF.md` / `Chinese.md` / `English.md` / 两份语法元素表只写设计，不写落地情况；状态、行号、待办一律记在这里或 `TODO-PA.md` / `TODO-PB.md`。
@@ -115,6 +115,19 @@
 | tests/pos/transfer.nc | `flow` 返回值所有权转移 | ✅ |
 
 > 上表为 1.0 发布集（`tests/pos` + `tests/err`，c/native 双后端）。`tests/pos/ir_*.nc` 属 2.0 IR 线（PB 分支），不在 1.0 发布门禁内。`is` 模式匹配由 `tests/pos/pattern.nc` 覆盖，该用例含 `is _` 通配符分支（v1.0.2 / PA-15 起，四后端输出一致）；`is <identifier>` 的变量绑定形态无用例——BNF v2.11 已把它定为**按值比较**（见上表），变量绑定与解构属 2.0 范围。
+
+### 本分支回灌前基线（2026-09-26 实测复跑，commit `1f83523`）
+
+| 项目 | 现值 | 说明 |
+| --- | --- | --- |
+| `xmake test --all` c / native | **各 19P / 0F / 6S** | 6 条 SKIP 全是 `IR_ONLY`（`ir_builtin` / `ir_cook` / `ir_mr` / `ir_slice` / `ir_sparam` / `struct_param_prefix`） |
+| `xmake test --all` ir-c / ir-native | **各 13P / 0F / 8S** | 8 条 SKIP 是「IR 子集未覆盖」的全量用例（`borrow` / `features` / `flow` / `malloc_demo` / `mathmod` / `pattern` / `transfer` / `use_mod`） |
+| 跨后端一致性 | **36P / 0F** | |
+| `examples/`（c 与 native 各跑一遍） | **6/7** | 唯一失败 `06_cooking.nc`，原因是 A 后端缺 `<ct-func-def>` / `<ct-func-call>`（PB-33 表 **P11**），`ir-c` 侧可编译 |
+
+> 数字与 `PA` 分支现值（c/native 56P/0F/4S、ir 8P/0F/49S、examples 7/7）**不可直接对比**：两条线的用例集与 skip 名单不同（`PA` 自 merge-base `7d4c652` 起新增 43 份用例）。此后每完成一条 PB-33 移植项就复跑本表并在其下追加一行，**数字回落即回归信号**。
+>
+> 基线复跑同轮做符号级普查，核出两类既有事实（均 2026-09-26 实测，`git grep <symbol> PB -- ncc`）：① `PA` 侧 **PA-51** 的四档数组容量写法本分支**早已实现**（`parser.c:344–365`，2026-09-01 即对齐 IR 前端，`[...]` 取默认容量 8），故 PB-33 表把它从移植项降为**核对项**；② `PA-49` / `PA-50` / `PA-55` / `PA-57` / `PA-58` / `PA-59` 的实现符号 `def_init`、`member_default_text`、`default_init_text`、`cgen_string_lit`、`eat_stmt_terminator`、`is_paren_type_ahead`、`parse_linkas_decl`、`skip_cooking_item`、`ct_capture_body`、`MAX_INIT_DESIGATORS`，以及 `xmake.lua` 的产物 C `-fsyntax-only` 抽查，在本分支**全部零命中**（`ct_funcs` 仅存在于 `irparse.c`，`parser.c` 无）——即 P7 ~ P11 五行的缺口是实测而非推测。
 
 ---
 
