@@ -148,6 +148,8 @@ end
 -- IR_ONLY  : IR 专属用例——子集语法（如无类型指针声明），全量 parser 无法编译
 local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true}
 local IR_ONLY = {ir_builtin = true, ir_mr = true, ir_slice = true, ir_sparam = true, ir_cook = true, struct_param_prefix = true}
+-- IR_ERR_COVERED: err 用例中 IR 前端已实现对应诊断的（未列出的非 m2 用例仍在 IR 侧跳过）
+local IR_ERR_COVERED = {safe_assign_removed = true, safe_dot_removed = true}
 
 task("test")
     on_run(function ()
@@ -319,7 +321,7 @@ task("test")
                 if filt ~= "" and not (stem .. ".nc"):find(filt, 1, true) then
                     goto continue_err
                 end
-                if is_ir and not stem:startswith("m2") then
+                if is_ir and not stem:startswith("m2") and not IR_ERR_COVERED[stem] then
                     -- 非 M2 错误用例：IR 前端尚未实现对应静态检查，跳过
                     skipped = skipped + 1
                     cprint("  [SKIP] err/%s.nc (IR 前端暂未覆盖该静态检查)", stem)

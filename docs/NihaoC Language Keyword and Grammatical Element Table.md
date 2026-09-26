@@ -78,8 +78,6 @@
 
 - `&` – address‑of operator
 - `=` – assignment operator (every assignment performs the visibility-compatibility check, i.e. the former "safe assignment" semantics)
-- `?=` – safe assignment operator (with pointer checking)
-- `=>` – lexically reserved (historical single-statement form of `is <pattern> => <statement>`); removed in 2.0 (PB-27.6) — `is` keeps only the block form
 - `.` – struct/union member access
 - `.()` – void pointer dereference (performs the visibility check)
 - `.(type)` – typed dereference (performs the visibility check plus a compile-time out-of-bounds check)

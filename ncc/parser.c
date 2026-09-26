@@ -489,13 +489,13 @@ static int is_expr_continuer(TokenType t)
 {
     switch (t) {
         case TOK_LPAREN: case TOK_DOT: case TOK_LBRACKET: case TOK_ARROW:
-        case TOK_DOT_PAREN: case TOK_SAFE_DOT:
+        case TOK_DOT_PAREN:
         case TOK_PLUS: case TOK_MINUS: case TOK_STAR: case TOK_SLASH:
         case TOK_PERCENT: case TOK_EQ: case TOK_NE: case TOK_LT: case TOK_GT:
         case TOK_LE: case TOK_GE: case TOK_LOGICAL_AND: case TOK_LOGICAL_OR:
         case TOK_BITWISE_AND: case TOK_BITWISE_OR: case TOK_BITWISE_XOR:
         case TOK_LEFT_SHIFT: case TOK_RIGHT_SHIFT: case TOK_QUESTION:
-        case TOK_ASSIGN: case TOK_SAFE_ASSIGN:
+        case TOK_ASSIGN:
         case TOK_PLUS_ASSIGN: case TOK_MINUS_ASSIGN: case TOK_STAR_ASSIGN:
         case TOK_SLASH_ASSIGN: case TOK_PERCENT_ASSIGN:
         case TOK_INCREMENT: case TOK_DECREMENT:
@@ -1541,7 +1541,7 @@ void parse_statement(CompilerState *cs)
                 if (is_type_begin(nt) || nt == TOK_VOID || nt == TOK_IDENTIFIER) {
                     /* name Type / name UserType -> declaration */
                     parse_declaration(cs);
-                } else if (nt == TOK_ASSIGN || nt == TOK_SAFE_ASSIGN) {
+                } else if (nt == TOK_ASSIGN) {
                     /* name = expr: assignment if already declared,
                      * otherwise a type-inferred declaration */
                     if (sym_find(cs, cs->parser.lex->tok_str)) {
@@ -2166,8 +2166,18 @@ static void parse_deref_chain(CompilerState *cs, int line)
         vis_check_usable(cs, sym);
     }
     next_tok(cs);                       /* consume ident */
-    TokenType op = cur_tok(cs);         /* .( or ?. */
-    next_tok(cs);                       /* consume .( */
+    TokenType op = cur_tok(cs);         /* '.()'；'?.' 见下方拒绝分支 */
+    if (op == TOK_SAFE_DOT) {
+        /* '?.' 已从语法移除（BNF v2.3 / PA-21）：安全检查统一由 '.()' 承担。
+         * 词法上 '.(' 是单个 token 而 '?.' 不含左括号，故拒绝后补吞 '('，
+         * 让这条链按 '.()' 的同一路径继续展开，避免连带一串误报。 */
+        nihao_error(cs, "'?.' is not part of the grammar; use '.()' "
+                        "(dereference performs the visibility and bounds checks)");
+        next_tok(cs);                   /* consume ?. */
+        if (cur_tok(cs) == TOK_LPAREN) next_tok(cs);
+    } else {
+        next_tok(cs);                   /* consume .( */
+    }
 
     if (cur_tok(cs) == TOK_RPAREN) {
         /* .() : dereference pointer one level
@@ -2187,7 +2197,6 @@ static void parse_deref_chain(CompilerState *cs, int line)
         cgen_raw("(*(%s*)%s)", c_type_name(&tmp), name);
         expect(cs, TOK_RPAREN);
     }
-    (void)op;
 
     /* continue postfix chain */
     for (;;) {
@@ -2501,8 +2510,13 @@ static void parse_assign(CompilerState *cs, int line)
     TokenType t = cur_tok(cs);
     if (cs->parser.lex->line_num != line) return;
     switch (t) {
-        case TOK_ASSIGN:
-        case TOK_SAFE_ASSIGN: {
+        case TOK_SAFE_ASSIGN:
+            /* '?=' 已从语法移除（BNF v2.3 / PA-20）：词法保留 token，语法层拒绝。
+             * 拒绝后按普通 '=' 继续，让可见性检查照常执行，避免连带一串误报。 */
+            nihao_error(cs, "'?=' is not part of the grammar; use '=' "
+                            "(every assignment is checked for visibility compatibility)");
+            /* fall through */
+        case TOK_ASSIGN: {
             Symbol *lhs = cs->parser.last_ident;
             /* LHS must be writable (not frozen by an active borrow) */
             if (lhs && lhs->kind == SYM_VARIABLE) {

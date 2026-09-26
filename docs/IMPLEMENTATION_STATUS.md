@@ -2,7 +2,7 @@
 
 本文档记录 NihaoC 语言规范（Chinese.md / English.md）中各项指针安全规则与编译器（ncc）实际实现的对应状态。
 
-> 更新日期：2026-09-26（新增「本分支回灌前基线」一节，符号级普查结论同见该节）。本表主体以 **1.0 冻结线（v1.0.2）** 的现态书写，行号基于 **本（`PB`）分支** 的 `parser.c` / `irparse.c`（`vis.c` 两侧同源，行号与 `PA` 一致），仅作导航用。`PA`/`main` 的行号口径见 `PA` 分支同文件。
+> 更新日期：2026-09-26（「本分支回灌基线」一节改为**逐轮追加**格式并补入 P1 落地后数值；同轮 **PB-33 的 P1 落地**（`?=` / `?.` 语法层拒绝），文末「2.0 线（PB）差异」随之新增一行，`irparse.c` 的 1195 行以后行号整体 +7 已就地更正；符号级普查结论同见基线一节）。本表主体以 **1.0 冻结线（v1.0.2）** 的现态书写，行号基于 **本（`PB`）分支** 的 `parser.c` / `irparse.c`（`vis.c` 两侧同源，行号与 `PA` 一致），仅作导航用。`PA`/`main` 的行号口径见 `PA` 分支同文件。
 > **PB（2.0 线）差异集中在文末「2.0 线（PB）差异」一节**：`vis.c` 的矩阵实现两侧同源（行号一致），`parser.c` / `irparse.c` 行号与部分状态不同。
 >
 > 本文件是**实现状态层**文档：`BNF.md` / `Chinese.md` / `English.md` / 两份语法元素表只写设计，不写落地情况；状态、行号、待办一律记在这里或 `TODO-PA.md` / `TODO-PB.md`。
@@ -57,10 +57,10 @@
 | `is lo..hi` 闭区间 | `>= lo && __is_val <= hi` | parser.c:1128–1138 | ✅ 已实现 |
 | `is <visibility-enum>` | 比较 `NH_*` 常量 | parser.c:1140–1156 | ✅ 已实现 |
 | `is <enum-variant>` / 已知常量 | `TOK_IDENTIFIER` 分支按值比较 `== pat` | parser.c:1140–1147 | ✅ 已实现 |
-| `is _` 通配符恒匹配 | 恒真分支 `if (1)`（IR 侧不发比较与 JZ） | parser.c:1109–1119、irparse.c:2029–2032 | ✅ 已实现（v1.0.2 补全） |
+| `is _` 通配符恒匹配 | 恒真分支 `if (1)`（IR 侧不发比较与 JZ） | parser.c:1109–1119、irparse.c:2036–2039 | ✅ 已实现（v1.0.2 补全） |
 | `is <identifier>` 按值比较（BNF v2.11 定案，绑定/解构留 2.0） | 生成 `__is_val == pat`，不引入新绑定 | parser.c:1140–1147 | ✅ 与规范一致；变量绑定属 2.0（PB-27 类型感知后再议） |
-| 多个 `is-clause` 首个匹配即止（无 fallthrough） | 各 is-clause 生成**并列** `if`，条件重叠时连续执行 | parser.c:1163–1167、irparse.c:2140–2144 | ⚠️ **未实现**（R 规则缺口；`is _` 恒匹配更易触发，需改控制流生成，未纳入 v1.0.2；已登记 `TODO-PA.md` PA-16 待决策） |
-| `is <pat> => <stmt>` 单语句 | 已移除（BNF v2.2 / PA-13），双前端仅接受块形式 | parser.c:1163–1167、irparse.c:2140–2144 | ✅ 已按规范移除 |
+| 多个 `is-clause` 首个匹配即止（无 fallthrough） | 各 is-clause 生成**并列** `if`，条件重叠时连续执行 | parser.c:1163–1167、irparse.c:2147–2151 | ⚠️ **未实现**（R 规则缺口；`is _` 恒匹配更易触发，需改控制流生成，未纳入 v1.0.2；已登记 `TODO-PA.md` PA-16 待决策） |
+| `is <pat> => <stmt>` 单语句 | 已移除（BNF v2.2 / PA-13），双前端仅接受块形式 | parser.c:1163–1167、irparse.c:2147–2151 | ✅ 已按规范移除 |
 | 反向范围 `lo > hi` 编译期校验 | 无 | parser.c:1128–1138 | ⚠️ 未实现（2.0 范围，PB-27.4 已覆盖） |
 | 结构体解构 / ADT 变体解构 | 预留语法，未实现 | — | ⚠️ 预留（依赖类型系统，PB-27.10/11） |
 
@@ -116,7 +116,9 @@
 
 > 上表为 1.0 发布集（`tests/pos` + `tests/err`，c/native 双后端）。`tests/pos/ir_*.nc` 属 2.0 IR 线（PB 分支），不在 1.0 发布门禁内。`is` 模式匹配由 `tests/pos/pattern.nc` 覆盖，该用例含 `is _` 通配符分支（v1.0.2 / PA-15 起，四后端输出一致）；`is <identifier>` 的变量绑定形态无用例——BNF v2.11 已把它定为**按值比较**（见上表），变量绑定与解构属 2.0 范围。
 
-### 本分支回灌前基线（2026-09-26 实测复跑，commit `1f83523`）
+### 本分支回灌基线与逐轮复跑（PB-33；2026-09-26 起逐轮追加）
+
+**回灌前（commit `1f83523`，2026-09-26 实测复跑）**
 
 | 项目 | 现值 | 说明 |
 | --- | --- | --- |
@@ -125,7 +127,16 @@
 | 跨后端一致性 | **36P / 0F** | |
 | `examples/`（c 与 native 各跑一遍） | **6/7** | 唯一失败 `06_cooking.nc`，原因是 A 后端缺 `<ct-func-def>` / `<ct-func-call>`（PB-33 表 **P11**），`ir-c` 侧可编译 |
 
-> 数字与 `PA` 分支现值（c/native 56P/0F/4S、ir 8P/0F/49S、examples 7/7）**不可直接对比**：两条线的用例集与 skip 名单不同（`PA` 自 merge-base `7d4c652` 起新增 43 份用例）。此后每完成一条 PB-33 移植项就复跑本表并在其下追加一行，**数字回落即回归信号**。
+**P1 落地后（`?=` / `?.` 语法移除 + PB-31 两份元素表归一，2026-09-26 实测复跑）**
+
+| 项目 | 现值 | 说明 |
+| --- | --- | --- |
+| `xmake test --all` c / native | **各 21P / 0F / 6S** | 各 +2 PASS：新增 `err/safe_assign_removed`、`err/safe_dot_removed` |
+| `xmake test --all` ir-c / ir-native | **各 15P / 0F / 8S** | 各 +2 PASS 且 SKIP 数不变——`xmake.lua:152` 新增 `IR_ERR_COVERED` 白名单后，两份用例在 IR 侧由「跳过」变为「实跑并通过」 |
+| 跨后端一致性 | **36P / 0F** | 不变 |
+| `examples/` | **6/7** | 不变，仍缺 **P11** |
+
+> 数字与 `PA` 分支现值（c/native 56P/0F/4S、ir 8P/0F/49S、examples 7/7）**不可直接对比**：两条线的用例集与 skip 名单不同（`PA` 自 merge-base `7d4c652` 起新增 43 份用例，P1 已带进 2 份、余 41 份未进）。此后每完成一条 PB-33 移植项就复跑本表并在其下追加一行，**数字回落即回归信号**。
 >
 > 基线复跑同轮做符号级普查，核出两类既有事实（均 2026-09-26 实测，`git grep <symbol> PB -- ncc`）：① `PA` 侧 **PA-51** 的四档数组容量写法本分支**早已实现**（`parser.c:344–365`，2026-09-01 即对齐 IR 前端，`[...]` 取默认容量 8），故 PB-33 表把它从移植项降为**核对项**；② `PA-49` / `PA-50` / `PA-55` / `PA-57` / `PA-58` / `PA-59` 的实现符号 `def_init`、`member_default_text`、`default_init_text`、`cgen_string_lit`、`eat_stmt_terminator`、`is_paren_type_ahead`、`parse_linkas_decl`、`skip_cooking_item`、`ct_capture_body`、`MAX_INIT_DESIGATORS`，以及 `xmake.lua` 的产物 C `-fsyntax-only` 抽查，在本分支**全部零命中**（`ct_funcs` 仅存在于 `irparse.c`，`parser.c` 无）——即 P7 ~ P11 五行的缺口是实测而非推测。
 
@@ -140,10 +151,11 @@
 | §12.2 `flow`/`var`/`const` 参数前缀 | 前缀被忽略，统一 `VIS_DEFAULT`（parser.c:864–868、879） | **已实现**：`param->vis = pv` 记录前缀（parser.c:934），调用点 `vis_check_call_arg()` 执行 M2 检查（parser.c:2125）；IR 前端由 `vvis` 状态机等价实现（irparse.c，PB-26） |
 | 返回值可见性前缀（§12.3 后半） | 无 | **已实现**：`ret_vis` 调用点检查（parser.c:1105）+ IR 侧 PB-29（含 PB-29.1 六条禁止路径 err 用例） |
 | 检查范围表「IR 后端所有权检查」 | ⚠️ 未实现 | **已实现**（PB-26/M2 移植进 irparse.c，err 用例 m2a~m2d 在 ir-c/ir-native 下同样拒绝） |
-| `is` 各模式行号 | parser.c:1102–1168 | parser.c:1194–1258（`_` 通配符 1201/`if (1)` 1204；错误信息 `expected block after 'is' pattern` 1258）；`is` 块由 irparse.c:2234 起的 `_` 分支处理 |
+| `is` 各模式行号 | parser.c:1102–1168 | parser.c:1194–1258（`_` 通配符 1201/`if (1)` 1204；错误信息 `expected block after 'is' pattern` 1258）；`is` 块由 irparse.c:2241 起的 `_` 分支处理 |
 | `is _` 通配符 | v1.0.2 补全（PA-15） | PB-27.5 先于 1.0 线完成（parser.c + irparse.c 双前端） |
-| 反向范围 `lo > hi` 校验 | ⚠️ 未实现 | **IR 前端已实现**（irparse.c:2259–2261 编译期报错）；A 后端 `parser.c` 仍不校验 |
+| 反向范围 `lo > hi` 校验 | ⚠️ 未实现 | **IR 前端已实现**（irparse.c:2266–2268 编译期报错）；A 后端 `parser.c` 仍不校验 |
 | `__is_val` 类型 | `int` 固定 | **类型感知**，等于 `while` 条件表达式类型（PB-27.7） |
 | 循环体外使用 `is` | A 后端按 `if` 展开，不报错 | IR 前端报错拒绝（PB-27.1）；A 后端与 1.0 相同仍按 `if` 展开 |
 | 多个 `is-clause` 无 fallthrough | ⚠️ 未实现（PA-16 登记待决策） | **同样未实现**（并列 `if` / 独立比较跳转），待与 PA-16 一并决策 |
+| `?=` 安全赋值 / `?.` 安全解引用 | 1.0 线已移除（BNF v2.3 / PA-20、PA-21），`token.h` 保留 token | **2026-09-26 起与本分支设计层归一（PB-33 的 P1）**：语法层拒绝——A 后端 parser.c:2513–2516（`'?='`，诊断后 fall through 到普通 `=`）、parser.c:2169–2177（`'?.'`，诊断后补吞 `(` 按 `.()` 展开，顺带删去失效的 `(void)op;`）、is_expr_continuer 的 parser.c:492/498 两处判据去掉 SAFE_*；IR 前端 irparse.c:1195–1201 的 `ir_primary` 补同文案拒绝分支。`TOK_SAFE_ASSIGN` / `TOK_SAFE_DOT` 仍留词法层，用例 `err/safe_assign_removed` / `err/safe_dot_removed` 四后端一致拒绝（文案与 `PA` 逐字相同；恢复路径两侧略异，同一 `?.` 用例 `PA` 的 c 后端多 1 条级联、本分支只报 1 条） |
 | 测试覆盖 | 1.0 门禁 12P/0F/5S | `xmake test --all` 全矩阵（c/native/ir-c/ir-native），见 `ROADMAP.md` 里程碑「验收」行 |
