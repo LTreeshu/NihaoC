@@ -77,7 +77,7 @@ NiHao 是一种新型静态编译语言，专为系统级编程和高性能应�
 - `[[local]]` 内部链接函数属性修饰
 - `[[used]]` 强制保留函数属性修饰
 - `[[unused]]` 强制弃用函数属性修饰
-- `[[export] ".my_section"]` 导出到指定段函数属性修饰
+- `[[export ".my_section"]]` 导出到指定段函数属性修饰
 
 > 关键字全集与产生式位置以 [`BNF.md`](./BNF.md) §1.2 为准（语法关键字 40 个 + 词法保留 8 个 + 基本类型名 16 个）。
 > 其中 **`register` / `restrict` / `volatile` 与 `short` / `int` / `long` / `float` / `double` 仅词法保留**：本版没有任何产生式使用它们，写进源码只会得到保留字冲突。
@@ -732,7 +732,7 @@ while opt {
 | `[[weak]]`             | 弱符号定义，可被同名强符号覆盖 | 库提供的默认实现     |
 | `[[used]]`             | 强制保留符号，即使未被引用   | 被调试器或汇编调用的函数 |
 | `[[unused]]`           | 标记为已弃用，触发编译警告   | 过渡期旧接口       |
-| `[[export] ".section"]` | 导出到指定的段         | 链接器脚本控制的特殊段  |
+| `[[export ".section"]]` | 导出到指定的段         | 链接器脚本控制的特殊段  |
 
 **组合规则**：方括号属性与返回值属性**可共存**，方括号属性在前。
 
@@ -753,7 +753,7 @@ while opt {
 | 内联，返回动态指针   | `[[inline]] flow create_small() void { ... }`       | 建议内联          |
 | 弱符号，返回静态指针  | `[[weak]] static get_default() void { ... }`        | 允许覆盖的默认实现     |
 | 弃用，返回动态指针   | `[[unused]] flow old_api() void { ... }`            | 触发弃用警告        |
-| 导出到段，返回静态指针 | `[[export]".init"] static init_data() void { ... }` | 放入指定段         |
+| 导出到段，返回静态指针 | `[[export ".init"]] static init_data() void { ... }` | 放入指定段        |
 
 ---
 
@@ -918,7 +918,7 @@ flow old_create() void {
 }
 
 // 导出到初始化段 + 返回静态指针
-[[export] ".init"] 
+[[export ".init"]] 
 static get_init_data() void {
     static data InitData = {.magic = 0xDEADBEEF}
     return &data
