@@ -146,7 +146,7 @@ nihao <command> [options]
 > 详见 CHANGELOG v1.0.1 记录）。
 > **2.0 预览**：`ir-*` 为下一代演进线（路线图 B 方案）。IR 线的机器码发射器**只保留 riscv64 与 loongarch64 两档**
 > （2026-09-26 裁定，见 `docs/TODO-PB.md` 的 PB-34）：二者生成标准 GAS 汇编（`-backend=ir-riscv64 -o out.s`），
-> 且产物已逐份过**外部汇编器与链接器**（2026-09-26 起，见 PB-35：riscv64 走 msys2 `riscv64-unknown-elf-as`，
+> 且产物已逐份过**外部汇编器与链接器**（2026-09-27 起，见 PB-35：riscv64 走 msys2 `riscv64-unknown-elf-as`，
 > loongarch64 走 zig 内嵌的 LLVM LoongArch MC；两档各 46/46 过汇编、各 45/46 过链接，**但本机无 `qemu-user`，
 > 执行正确性仍未验证**）；x86-64 / arm64 的发射器已删除，这些平台上 `ir-native` 自动改走
 > IR → C → 宿主 cc，即由 C 路线代劳（`-backend=ir-arm64` 报专属诊断后退出）。版本规划详见

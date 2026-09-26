@@ -87,3 +87,8 @@ STAGE_SUMMARY §3.1 十四行特性矩阵：**IR 前端与全量 parser 差距�
    - **2026-09-26 已由 ltree 裁定并落地**：IR 机器码后端只保留 riscv64 与 loongarch64，x86-64 / arm64 两档
      发射器删除，那些平台由 C 路线代劳（`ir-native` 在非 riscv/loong 宿主回退 IR→C→宿主 cc）。详见
      `TODO-PB.md` 的 **PB-34**。本节原文按裁定时点保留不改。
+   - **2026-09-27 本问的另一半（「保持仅验汇编生成」）随 PB-35 改掉**：两档产物改由本机真汇编器与链接器
+     逐份验证（riscv64 走 msys2 `riscv64-unknown-elf-as`，loongarch64 走 zig 内嵌的 LLVM LoongArch MC），
+     并据此修掉 loongarch64 发射器一整套非法语法与两档共有的大帧立即数越界。**仍差的只有执行**——本机只有
+     `qemu-system-*` 而无 `qemu-user`，两档也没有可跑起来的原生工具链，故本决策点所谓「转正」判据仍未满足。
+
