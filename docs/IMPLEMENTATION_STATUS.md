@@ -136,7 +136,16 @@
 | 跨后端一致性 | **36P / 0F** | 不变 |
 | `examples/` | **6/7** | 不变，仍缺 **P11** |
 
-> 数字与 `PA` 分支现值（c/native 56P/0F/4S、ir 8P/0F/49S、examples 7/7）**不可直接对比**：两条线的用例集与 skip 名单不同（`PA` 自 merge-base `7d4c652` 起新增 43 份用例，P1 已带进 2 份、余 41 份未进）。此后每完成一条 PB-33 移植项就复跑本表并在其下追加一行，**数字回落即回归信号**。
+**P2 落地后（`structof` / `unionof` / `holdof` / `bitoffsetof` 进 A 后端，2026-09-26 实测复跑）**
+
+| 项目 | 现值 | 说明 |
+| --- | --- | --- |
+| `xmake test --all` c / native | **各 23P / 0F / 6S** | 各 +2 PASS：新增 `pos/ownerof`（三参反推首地址 + 三档位偏移，输出逐行比对 `.expect`）、`err/structof_bad_member` |
+| `xmake test --all` ir-c / ir-native | **各 15P / 0F / 10S** | 两份用例在 IR 侧各落一条 SKIP（`pos` 走「IR 子集未覆盖」、`err` 走「IR 前端暂未覆盖」）——**A 后端已实现、IR 前端仍拒绝**，与 `PA` 的 IR 现态同口径，故刻意**不入** `IR_ERR_COVERED` 白名单 |
+| 跨后端一致性 | **36P / 0F** | 不变 |
+| `examples/` | **6/7** | 不变（native 逐条复跑），仍缺 **P11** |
+
+> 数字与 `PA` 分支现值（c/native 56P/0F/4S、ir 8P/0F/49S、examples 7/7）**不可直接对比**：两条线的用例集与 skip 名单不同（`PA` 自 merge-base `7d4c652` 起新增 43 份用例，P1 + P2 已带进 4 份、余 39 份未进）。此后每完成一条 PB-33 移植项就复跑本表并在其下追加一行，**数字回落即回归信号**。
 >
 > 基线复跑同轮做符号级普查，核出两类既有事实（均 2026-09-26 实测，`git grep <symbol> PB -- ncc`）：① `PA` 侧 **PA-51** 的四档数组容量写法本分支**早已实现**（`parser.c:344–365`，2026-09-01 即对齐 IR 前端，`[...]` 取默认容量 8），故 PB-33 表把它从移植项降为**核对项**；② `PA-49` / `PA-50` / `PA-55` / `PA-57` / `PA-58` / `PA-59` 的实现符号 `def_init`、`member_default_text`、`default_init_text`、`cgen_string_lit`、`eat_stmt_terminator`、`is_paren_type_ahead`、`parse_linkas_decl`、`skip_cooking_item`、`ct_capture_body`、`MAX_INIT_DESIGATORS`，以及 `xmake.lua` 的产物 C `-fsyntax-only` 抽查，在本分支**全部零命中**（`ct_funcs` 仅存在于 `irparse.c`，`parser.c` 无）——即 P7 ~ P11 五行的缺口是实测而非推测。
 
@@ -144,11 +153,11 @@
 
 ## 2.0 线（PB）差异
 
-以下为 PB 与上表（1.0 现态）不同的条目，行号基于 PB `8079ad0`：
+以下为 PB 与上表（1.0 现态）不同的条目，行号基于 PB `8079ad0`，**2026-09-26 已按 P1 / P2 两轮改动逐个复核**（`parser.c` 在 1603 行以后因插入 `agg_member_sym` 与两段内置函数体整体后移：`vis_check_call_arg` 调用点 2125→2253、`?.` 拒绝块 2169→2297、`?=` 拒绝 case 2513→2641；`irparse.c` 在 1195 行以后整体 +7）：
 
 | 条目 | 1.0 线（上表） | 2.0 线（PB）现态 |
 |------|---------------|-----------------|
-| §12.2 `flow`/`var`/`const` 参数前缀 | 前缀被忽略，统一 `VIS_DEFAULT`（parser.c:864–868、879） | **已实现**：`param->vis = pv` 记录前缀（parser.c:934），调用点 `vis_check_call_arg()` 执行 M2 检查（parser.c:2125）；IR 前端由 `vvis` 状态机等价实现（irparse.c，PB-26） |
+| §12.2 `flow`/`var`/`const` 参数前缀 | 前缀被忽略，统一 `VIS_DEFAULT`（parser.c:864–868、879） | **已实现**：`param->vis = pv` 记录前缀（parser.c:934），调用点 `vis_check_call_arg()` 执行 M2 检查（parser.c:2253）；IR 前端由 `vvis` 状态机等价实现（irparse.c，PB-26） |
 | 返回值可见性前缀（§12.3 后半） | 无 | **已实现**：`ret_vis` 调用点检查（parser.c:1105）+ IR 侧 PB-29（含 PB-29.1 六条禁止路径 err 用例） |
 | 检查范围表「IR 后端所有权检查」 | ⚠️ 未实现 | **已实现**（PB-26/M2 移植进 irparse.c，err 用例 m2a~m2d 在 ir-c/ir-native 下同样拒绝） |
 | `is` 各模式行号 | parser.c:1102–1168 | parser.c:1194–1258（`_` 通配符 1201/`if (1)` 1204；错误信息 `expected block after 'is' pattern` 1258）；`is` 块由 irparse.c:2241 起的 `_` 分支处理 |
@@ -157,5 +166,6 @@
 | `__is_val` 类型 | `int` 固定 | **类型感知**，等于 `while` 条件表达式类型（PB-27.7） |
 | 循环体外使用 `is` | A 后端按 `if` 展开，不报错 | IR 前端报错拒绝（PB-27.1）；A 后端与 1.0 相同仍按 `if` 展开 |
 | 多个 `is-clause` 无 fallthrough | ⚠️ 未实现（PA-16 登记待决策） | **同样未实现**（并列 `if` / 独立比较跳转），待与 PA-16 一并决策 |
-| `?=` 安全赋值 / `?.` 安全解引用 | 1.0 线已移除（BNF v2.3 / PA-20、PA-21），`token.h` 保留 token | **2026-09-26 起与本分支设计层归一（PB-33 的 P1）**：语法层拒绝——A 后端 parser.c:2513–2516（`'?='`，诊断后 fall through 到普通 `=`）、parser.c:2169–2177（`'?.'`，诊断后补吞 `(` 按 `.()` 展开，顺带删去失效的 `(void)op;`）、is_expr_continuer 的 parser.c:492/498 两处判据去掉 SAFE_*；IR 前端 irparse.c:1195–1201 的 `ir_primary` 补同文案拒绝分支。`TOK_SAFE_ASSIGN` / `TOK_SAFE_DOT` 仍留词法层，用例 `err/safe_assign_removed` / `err/safe_dot_removed` 四后端一致拒绝（文案与 `PA` 逐字相同；恢复路径两侧略异，同一 `?.` 用例 `PA` 的 c 后端多 1 条级联、本分支只报 1 条） |
+| `?=` 安全赋值 / `?.` 安全解引用 | 1.0 线已移除（BNF v2.3 / PA-20、PA-21），`token.h` 保留 token | **2026-09-26 起与本分支设计层归一（PB-33 的 P1）**：语法层拒绝——A 后端 parser.c:2641–2647（`'?='`，诊断后 fall through 到普通 `=`）、parser.c:2297–2308（`'?.'`，诊断后补吞 `(` 按 `.()` 展开，顺带删去失效的 `(void)op;`）、is_expr_continuer 的 parser.c:492/498 两处判据去掉 SAFE_*；IR 前端 irparse.c:1195–1201 的 `ir_primary` 补同文案拒绝分支。`TOK_SAFE_ASSIGN` / `TOK_SAFE_DOT` 仍留词法层，用例 `err/safe_assign_removed` / `err/safe_dot_removed` 四后端一致拒绝（文案与 `PA` 逐字相同；恢复路径两侧略异，同一 `?.` 用例 `PA` 的 c 后端多 1 条级联、本分支只报 1 条） |
+| 从属查询与位域偏移内置函数（§2.3，BNF v2.4） | `PA` 侧同文件该节标 ✅ 已实现（v1.0.2 / PA-22，仅 c/native；IR 前端未实现）；**本文件此前无该节** | **2026-09-26 随 PB-33 的 P2 落到本分支 A 后端**：`parse_builtin_kw` 新增 `structof`/`unionof`/`holdof(Type, member, ptr)` → `((void*)((char*)(ptr) - offsetof(Type, member)))`（parser.c:1682–1719；`structof` 只认 struct、`unionof` 只认 union、`holdof` 通用；成员不存在 / 类型非聚合体 / 缺第三参各有专属诊断）与 `bitoffsetof(Type, member)` → 按声明序折成编译期常量表达式（parser.c:1721–1799；以前置非位域成员为锚点，用 C 的 `offsetof`/`sizeof` 定位存储单元起点，目标非位域、基类型宽度未知、同组存储类型不一致均报错）；成员查询助手 `agg_member_sym()` 在 parser.c:1603，`parse_primary` 的分派 case 在 parser.c:2035。**IR 前端仍拒绝**（`ir: unexpected token 'structof' in expression`，与 `PA` 的 IR 现态逐字相同）——8 字节槽模型无真实布局，属模型边界而非移植缺口。用例 `pos/ownerof.nc` / `err/structof_bad_member.nc` 自 `PA` 带来，c/native PASS、IR 侧 SKIP |
 | 测试覆盖 | 1.0 门禁 12P/0F/5S | `xmake test --all` 全矩阵（c/native/ir-c/ir-native），见 `ROADMAP.md` 里程碑「验收」行 |

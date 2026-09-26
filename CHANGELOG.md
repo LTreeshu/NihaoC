@@ -4,11 +4,20 @@
 
 ## [Unreleased]
 
+### 2.0 线回灌轮（PB-33 的 P2：从属查询与位域偏移内置函数进 A 后端，2026-09-26）
+
+> PB-33 逐条移植的第二轮。基线数值记在 `IMPLEMENTATION_STATUS.md` 的「本分支回灌基线与逐轮复跑」。
+
+- **`structof` / `unionof` / `holdof` / `bitoffsetof` 由「只有关键字」变为「A 后端可用」（P2，PA-22 口径移植）**：本分支此前四个 token 只在 `token.h` 注册、两个前端零消费，写出来即 `unexpected token 'structof' in expression`。现 `parse_builtin_kw()` 补两段——① 三参从属查询 `structof/unionof/holdof(Type, member, ptr)` 生成 `((void*)((char*)(ptr) - offsetof(Type, member)))`（由成员地址反推聚合体首地址），`structof` 只接受 `struct`、`unionof` 只接受 `union`、`holdof` 两者通用，成员不存在 / 类型非聚合体 / 缺第三参各有一条专属诊断；② `bitoffsetof(Type, member)` 按**声明顺序**的位布局折成编译期常量表达式：以前置最近一个非位域成员为锚点，用 C 自身的 `offsetof`/`sizeof` 求存储单元起点，再累加整单元与单元内位数，故不依赖编译器自算结构体布局；目标非位域、基类型宽度未知、同一组成员存储类型不一致均报错。配套新增成员查询助手 `agg_member_sym()`，`parse_primary` 的分派 case 加上这四个关键字 token。实现与用例均与 `PA` 逐字同构（成员名先复制到本地缓冲，不持有 `tok_str` 指针）。
+- **IR 前端保持拒绝，且这是模型边界而非缺口**：`ir: unexpected token 'structof' in expression` 与 `PA` 的 IR 现态逐字相同。理由即本分支 PB-6 当年写下的判断——IR 的 8 字节槽模型没有真实结构体布局，从属查询与位域偏移都建立在布局之上。已在 `TODO-PB.md` 的 PB-6 追记结案一半（`*p op= e` 复合赋值解引用仍未做，不属 PB-33 在册范围）。
+- **门禁 +2 用例**：`tests/pos/ownerof.nc`（含 `.expect`，三参反推 + 三档位偏移逐行比对）与 `tests/err/structof_bad_member.nc`（含 `.expect`）自 `PA` 原样带来。复跑：c / native 各 **23P / 0F / 6S**（+2 PASS），ir-c / ir-native 各 **15P / 0F / 10S**（两份在 IR 侧落 SKIP，故**刻意不入** `IR_ERR_COVERED` 白名单），跨后端一致性 **36P / 0F**，examples **6/7**（native 逐条复跑，仍缺 P11）。
+- **随轮勘误（锚点治理）**：本轮在 `parser.c` 1600 行以后插入代码，使 P1 轮记下的三处锚点整体后移，`IMPLEMENTATION_STATUS.md` 已按实测逐个复核（`vis_check_call_arg` 调用点、`?.` 拒绝块、`?=` 拒绝 case），P1 一节的 CHANGELOG 条目同时**去掉行号**；此后源码锚点只写在 `IMPLEMENTATION_STATUS.md`，本文件按函数名与符号指路。另核对到：`PA` 侧同文件的「内置查询与输出内建」整节在本分支缺失（不只是这四行），故 P2 的状态先记入文末「2.0 线（PB）差异」表。
+
 ### 2.0 线回灌轮（PB-33 的 P1：`?=` / `?.` 语法移除 + PB-31 元素表归一，2026-09-26）
 
 > 本节起为 **PB-33 逐条移植的第一轮**（ltree 裁定「逐条移植 P1~P13」，不做整支合并）。承上面的「2.0 线簿记轮」一节所记基线。
 
-- **`?=` 安全赋值与 `?.` 安全解引用在本分支退出语法（P1，用户可见语法变更）**：对齐 BNF v2.3 与 `PA` 侧 PA-20 / PA-21 的定稿口径——安全检查由 `=` 与 `.()` 自身承担，不设专用记号。A 后端 `parser.c` 四处：`is_expr_continuer` 的判据去掉 `TOK_SAFE_DOT` / `TOK_SAFE_ASSIGN`（492、498），`parse_statement` 的 `nt == TOK_ASSIGN || nt == TOK_SAFE_ASSIGN` 收窄为仅 `TOK_ASSIGN`（1544），`parse_deref_chain` 遇 `?.` 报专属诊断后**补吞左括号并按 `.()` 同一路径展开**（2169–2177；词法上 `.(` 是单个 token 而 `?.` 不含 `(`；顺带删掉该函数里已失效的 `(void)op;`），`parse_assign` 的 `TOK_SAFE_ASSIGN` case 报错后 fall through 到普通 `=`（2513–2516，让可见性检查照常执行、避免连带误报）。IR 前端 `irparse.c` 的 `ir_primary` 补同文案拒绝分支（1195–1201）。`TOK_SAFE_ASSIGN` / `TOK_SAFE_DOT` **保留在词法层**，与 `PA` 的「死 token 冻结不摘」一致。诊断**文案与 `PA` 逐字相同**，故 `PA` 的两份 `.expect` 可直接复用；恢复路径两侧略异——同一 `err/safe_dot_removed` 用例 `PA` 的 c 后端报 2 条（把 `(` 当函数调用后多出 1 条级联），本分支只报 1 条，门禁只校验首条片段。
+- **`?=` 安全赋值与 `?.` 安全解引用在本分支退出语法（P1，用户可见语法变更）**：对齐 BNF v2.3 与 `PA` 侧 PA-20 / PA-21 的定稿口径——安全检查由 `=` 与 `.()` 自身承担，不设专用记号。A 后端 `parser.c` 四处：`is_expr_continuer` 的判据去掉 `TOK_SAFE_DOT` / `TOK_SAFE_ASSIGN`，`parse_statement` 的 `nt == TOK_ASSIGN || nt == TOK_SAFE_ASSIGN` 收窄为仅 `TOK_ASSIGN`，`parse_deref_chain` 遇 `?.` 报专属诊断后**补吞左括号并按 `.()` 同一路径展开**（词法上 `.(` 是单个 token 而 `?.` 不含 `(`；顺带删掉该函数里已失效的 `(void)op;`），`parse_assign` 的 `TOK_SAFE_ASSIGN` case 报错后 fall through 到普通 `=`（让可见性检查照常执行、避免连带误报）。IR 前端 `irparse.c` 的 `ir_primary` 补同文案拒绝分支。`TOK_SAFE_ASSIGN` / `TOK_SAFE_DOT` **保留在词法层**，与 `PA` 的「死 token 冻结不摘」一致。诊断**文案与 `PA` 逐字相同**，故 `PA` 的两份 `.expect` 可直接复用；恢复路径两侧略异——同一 `err/safe_dot_removed` 用例 `PA` 的 c 后端报 2 条（把 `(` 当函数调用后多出 1 条级联），本分支只报 1 条，门禁只校验首条片段。本条不复述源码行号——锚点统一记在 `IMPLEMENTATION_STATUS.md` 的「2.0 线（PB）差异」表，逐轮复核后随代码插入更新。
 - **新增门禁用例 `err/safe_assign_removed.nc` / `err/safe_dot_removed.nc`**（自 `PA` 原样带来），并把 `ncc/xmake.lua` 的 err 侧规则「非 `m2` 前缀一律在 IR 后端跳过」改为**额外认 `IR_ERR_COVERED` 白名单**（`xmake.lua:152`）——否则这两份用例只会落进 SKIP，IR 侧的诊断等于没被验证。改后四后端全部 PASS。
 - **复跑门禁（对照簿记轮所记回灌前基线）**：c / native 各 **21P/0F/6S**（+2 PASS）、ir-c / ir-native 各 **15P/0F/8S**（+2 PASS、SKIP 与基线同为 8）、跨后端一致性 **36P/0F**、examples **6/7** 不变（`06_cooking.nc` 仍缺 P11）。数值已按「逐轮追加」格式记入 `IMPLEMENTATION_STATUS.md` 的基线一节。
 - **PB-31 结案（文档-only）**：两份语法元素表删除 `?=` / `=>` 两行，中/英实测各由 **118 → 116**，且与 `PA` 现值**逐字相同**（`diff` 零输出）——PA-45 判定的最后一处分支差异随 P1 落地而消除。
