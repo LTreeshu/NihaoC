@@ -340,11 +340,11 @@ static const char *rv_fp_arg_regs[]  = { "fa0", "fa1", "fa2", "fa3", "fa4", "fa5
 
 const TargetBackend riscv64_backend = {
     .name         = "riscv64",
-    .asm_syntax   = "att",
     .slot_stride  = 8,
     .stack_dir    = -1,
     .callee_align = 16,
     .frame_extra  = 16,           /* ra + s0 保存 */
+    .max_frame    = 2047,         /* addi/sd/ld 只用 12 位带符号立即数寻址（PB-35） */
     .int_arg_regs = rv_int_arg_regs,
     .int_arg_count = 8,
     .fp_arg_regs  = rv_fp_arg_regs,

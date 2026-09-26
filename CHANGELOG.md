@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### 2.0 线保留发射器验证轮（PB-35：两档 IR 汇编产物首次过外部汇编器，2026-09-26）
+
+> 紧接 PB-34：裁到只剩两档机器码发射器之后，第一次拿**真汇编器**当判据把两档产物逐份过了一遍。锚点仍只写在 `IMPLEMENTATION_STATUS.md`。工具是本机现成的，未新装任何东西。
+
+- **量到的两条既有缺陷（改前）**：① **loongarch64 发射器 0/34 能汇编**——它的产物从来没有被任何汇编器接受过；② 两档共有的**帧越界**：槽位用「帧指针 + 12 位带符号立即数」寻址，而槽模型给每个 vreg 一个 8 字节槽，函数一大就越界（`pos/ir_slice.nc` 实测帧 2208 字节 → riscv 侧 `Error: illegal operands 'addi sp,sp,-2208'`、`sd a0,-2056(s0)`）。PB-34 那条「只验汇编生成」的说法因此是**自我豁免**：从来没人验过生成物能不能编。
+- **loongarch64 语法层返工（逐条以汇编器 + `zig cc -S` 参考产物为据）**：访存操作数改成**基址在前的三操作数**形式（`ld.d $a0, $s0, -8`，AT&T 的 `-8($s0)` 被 GAS 与 LLVM 双双拒绝）；逻辑与比较类**去掉 `.d` 后缀**（`and`/`or`/`xor`/`nor`/`slt`/`sltu`，发射器原先写的 `xor.d`/`slt.d` 不存在）；`IR_CMP_NE` 由 `sltui $a0, $zero, $a0` 改 `sltu`（`sltui` 是「寄存器 + 小立即数」形式）；整型↔浮点转换改**两步**（`movgr2fr.d` 后接 `ffint.d.l`，反之 `ftintrz.l.d` 后接 `movfr2gr.d`——`ffint.d.l` 两个操作数都必须是浮点寄存器）；浮点比较改 `fcmp.ceq/clt/cle.d $fccN, …` 写**条件码寄存器**再 `movcf2gr` + `andi …,1` 取回 0/1（`fcmp.eq.d`、`mov.d` 在本汇编器里没有），gt/ge 无独立条件码故交换操作数用 clt/cle；隐式 double 返回原发 `mov.d $fa0, $zero`，改 `ori $a0,$zero,0` + `movgr2fr.d`。这些语法事实一并写进文件头注释，避免下次再凭记忆写。
+- **帧越界的处置＝可读拒绝，不是硬编**：`TargetBackend` 新增 `max_frame`，两档都填 **2047**（两档的槽位与 `addi` 都受 12 位带符号立即数约束，且帧大小由 `irgen_backend_emit` 里同一个中央公式算出，故护栏放在共享骨架而不是各发射器自查）。超界时诊断形如 `ir-backend: main: frame of 2208 bytes exceeds the 2047-byte addressing limit of the riscv64 emitter (too many values in one function)` 并退出，**不再产出一份编不过的 `.s`**。真正的解法（次级基址寄存器或寄存器分配）属 PB-15 那条「全栈槽保底」决策的未来性能优化项，本轮不做；`ir_slice` 在两档交叉后端下由「出坏码」变成「明确拒绝」，它本就不在门禁矩阵，四档数值不动。
+- **实测（同口径复跑）**：语料 `tests/pos/*.nc`(47) + `examples/*.nc`(7)，两档各出码 46 份（另 8 份不出码：7 份卡 IR 前端既有缺口、1 份即上述 `ir_slice`），改后 **riscv64 46/46、loongarch64 46/46 全部通过汇编**；再往下**链接**：riscv64 经 `riscv64-unknown-elf-gcc -specs=nosys.specs -static` **45/46**、loongarch64 经 `zig cc -target loongarch64-linux-gnu` **45/46**，两侧**唯一**失败同为 `pos/use_mod.nc`（`undefined reference to 'add'`——跨模块符号要等多文件链接才闭合，与发射器无关）。门禁与 examples 一字未动：c / native 各 **24P / 0F / 6S**、ir-c / ir-native 各 **15P / 0F / 11S**、一致性 **36P / 0F**、examples c/native **6/7** 与 ir-native **7/7**。
+- **本机验证的天花板（明确记账，不当成已验完）**：**执行仍然做不到**——本机只有 `qemu-system-*`（整机模拟，需内核 + rootfs）而无 `qemu-user`，loongarch64 也没有可用的 GNU binutils / libc（链接用的是 zig 自带 musl）。所以「两档产物语义正确」这句话至今**没有任何一侧被证明过**，本轮证明的只是「写得出的汇编能被汇编器与链接器接受」。
+- **顺带扫掉 PB-34 删档留下的两处悬空引用**：`TargetBackend.asm_syntax` **整字段删除**（无任何读取点，且它恒为 `"att"` 的填法在本轮之后已成假话——loongarch64 的访存恰恰不是 AT&T 形式）；`ir_backend.h` 调用约定注释与 `ir.h` 的 `IR_FADD` 注释里残留的 `rcx`/`rdx`/`xmm0`/`rax` 示例改成两档现名，`frame_extra` 的「影子空间」改述为「ra + fp 各 8 字节」。`docs/LEGACY_CODEGEN.md` 提到 `ir_x86_64.c` 的句子按历史快照口径保留（与 PB-34 同一处置）。
+- **顺带核出的一条 CLI 现态**：交叉档的输出文件名由 `ir_compile` 自己拼（`<output>.<c|s>`），故 `-backend=ir-riscv64 -o foo.s` 的产物实为 `foo.s.s`。本轮只记录，不改名——`-o` 在 c / native 两档同样被当基名使用，单改交叉档会造成两条 CLI 语义分叉。
+
+
 ### 2.0 线 IR 后端裁剪轮（PB-34：机器码发射器只留 riscv64 / loongarch64，2026-09-26）
 
 > ltree 裁定「PB 后端只保留 risc-v 与 loongarch 两个平台，其他删除，由 C 路线代劳」，本条即回答 `docs/PB24_DECISION.md` §6 决策点 3 悬置的「B 方案后端去留」。锚点按既定口径只写在 `IMPLEMENTATION_STATUS.md`。

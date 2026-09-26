@@ -134,8 +134,9 @@ nihao <command> [options]
 | `native` | **1.0 正式支持** | libtcc 进程内编译生成的 C 为机器码（无需外部 tcc） |
 | `ir-c` | 2.0 预览 | IR 中间层 → C 文本，交外部 tcc |
 | `ir-native` | 2.0 预览 | 按宿主分派：riscv64 / loongarch64 宿主出本机汇编再汇编链接，其余宿主（含 x86-64 / arm64）**回退 IR → C → 宿主 cc** |
-| `ir-riscv64` | 2.0 预览 | IR → RISC-V 64 汇编（RV64I + D 浮点扩展，交叉 `.s` only，不汇编） |
-| `ir-loongarch64` | 2.0 预览 | IR → LoongArch64 汇编（LA64 基础指令集，交叉 `.s` only，不汇编） |
+| `ir-riscv64` | 2.0 预览 | IR → RISC-V 64 汇编（RV64I + D 浮点扩展，交叉 `.s` only；产物经外部汇编器与链接器验证，本机不执行） |
+| `ir-loongarch64` | 2.0 预览 | IR → LoongArch64 汇编（LA64 基础指令集，交叉 `.s` only；产物经外部汇编器与链接器验证，本机不执行） |
+
 
 > **1.0 范围**：`c` / `native` 两后端为对外可用产品线（路线图 A 方案），v1.0.2 门禁实测：全量语法回归每后端 **38 PASS / 0 FAIL / 5 SKIP**，examples **6/7** ——
 > `06_cooking.nc` 为 2.0 预览示例（`cooking` 编译期块与编译期函数尚未纳入 1.0 语法），1.0 线两后端不接受、`ir-c` / `ir-native` 可通过。
@@ -145,9 +146,12 @@ nihao <command> [options]
 > 详见 CHANGELOG v1.0.1 记录）。
 > **2.0 预览**：`ir-*` 为下一代演进线（路线图 B 方案）。IR 线的机器码发射器**只保留 riscv64 与 loongarch64 两档**
 > （2026-09-26 裁定，见 `docs/TODO-PB.md` 的 PB-34）：二者生成标准 GAS 汇编（`-backend=ir-riscv64 -o out.s`），
-> 本机无交叉汇编器时仅验证汇编生成正确性；x86-64 / arm64 的发射器已删除，这些平台上 `ir-native` 自动改走
+> 且产物已逐份过**外部汇编器与链接器**（2026-09-26 起，见 PB-35：riscv64 走 msys2 `riscv64-unknown-elf-as`，
+> loongarch64 走 zig 内嵌的 LLVM LoongArch MC；两档各 46/46 过汇编、各 45/46 过链接，**但本机无 `qemu-user`，
+> 执行正确性仍未验证**）；x86-64 / arm64 的发射器已删除，这些平台上 `ir-native` 自动改走
 > IR → C → 宿主 cc，即由 C 路线代劳（`-backend=ir-arm64` 报专属诊断后退出）。版本规划详见
 > [`docs/VERSIONING_ROADMAP.md`](./docs/VERSIONING_ROADMAP.md)。
+
 
 TCC 安装目录通过 `NIHAO_TCC_DIR` 环境变量指定（如 `/d/devtools/tcc`，MSYS 路径自动归一化），否则从 PATH 探测。
 

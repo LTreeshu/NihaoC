@@ -21,7 +21,7 @@ typedef enum {
     IR_NOT,         /* dst = ~a（按位取反）            */
     IR_CMP_EQ, IR_CMP_NE, IR_CMP_LT, IR_CMP_LE,
     IR_CMP_GT, IR_CMP_GE,
-    IR_FADD, IR_FSUB, IR_FMUL, IR_FDIV,   /* dst = a op b（double，xmm） */
+    IR_FADD, IR_FSUB, IR_FMUL, IR_FDIV,   /* dst = a op b（double） */
     IR_FCMP,        /* dst = (a cmp b) double 比较；imm: 0=EQ 1=NE 2=LT 3=LE 4=GT 5=GE */
     IR_ITOD,        /* dst = (double)a（int64 → double 符号转换，混合类型提升） */
     IR_DTOI,        /* dst = (int64)a（double → int64 截断，配 ITOD 的反向转换） */

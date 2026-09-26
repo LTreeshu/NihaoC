@@ -103,6 +103,17 @@ int irgen_backend_emit(IrProg *p, const char *outfile, const char *backend)
         if (frame % tb->callee_align != 0)
             frame += tb->callee_align - (frame % tb->callee_align);
 
+        /* 槽位靠帧指针的 12 位立即数寻址，超界会发出汇编器拒绝的指令（PB-35）：
+         * 宁可在这里拒绝出码，也不产出一份编不过的 .s */
+        if (tb->max_frame > 0 && frame > tb->max_frame) {
+            fprintf(stderr,
+                    "ir-backend: %s: frame of %d bytes exceeds the %d-byte addressing "
+                    "limit of the %s emitter (too many values in one function)\n",
+                    f->name, frame, tb->max_frame, tb->name);
+            if (b.buf) free(b.buf);
+            return -1;
+        }
+
         if (f->is_main) {
             nb_put(&b, ".globl main\n");
         }
