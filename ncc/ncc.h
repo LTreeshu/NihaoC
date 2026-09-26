@@ -386,6 +386,7 @@ Symbol *sym_register_builtins(CompilerState *cs);
 /* type.c */
 CType *type_new(CompilerState *cs, TypeKind kind);
 CType *type_array(CompilerState *cs, void *elem_type, int size);
+unsigned int type_align(CType *t);
 
 /* vis.c */
 void visibility_init(CompilerState *cs);

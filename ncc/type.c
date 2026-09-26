@@ -65,6 +65,43 @@ static unsigned int type_default_align(TypeKind kind)
 }
 
 /* ============================================================
+ * Compile-time Alignment
+ * ============================================================ */
+
+static unsigned int type_align_r(CType *t, int depth)
+{
+    unsigned int best, a;
+    Symbol *m;
+
+    if (!t || depth > 16) return 1;
+
+    switch (t->kind) {
+        /* generic pointer (§5.1), same width cgen emits for 'void' */
+        case TYPE_VOID:   return 8;
+        case TYPE_ARRAY:
+        case TYPE_ALIAS:  return type_align_r(t->ref, depth + 1);
+        case TYPE_STRUCT:
+        case TYPE_UNION:
+            best = 1;
+            for (m = t->sym ? t->sym->members : NULL; m; m = m->next) {
+                if (!m->type || m->type->bit_size > 0) continue;
+                a = type_align_r(m->type, depth + 1);
+                if (a > best) best = a;
+            }
+            return best;
+        default:
+            /* parse_type builds scalar CType on the stack without .align */
+            a = t->align ? t->align : type_default_align(t->kind);
+            return a ? a : 1;
+    }
+}
+
+unsigned int type_align(CType *t)
+{
+    return type_align_r(t, 0);
+}
+
+/* ============================================================
  * Type Construction
  * ============================================================ */
 

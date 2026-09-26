@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 2.0 线回灌轮（PB-33 的 P3：`alignof` 改由编译期自算并输出字面量，2026-09-26）
+
+- **`alignof` 在 `c` / `native` 后端由「不可用」变为「可用」**（P3，对齐 `PA` 的 PA-24 定稿口径）：动手前在本分支复测——`alignof(Pack)` 与 `alignof(i32[4])` 的最小探针在 `c` 与 `native` 两侧都编译出 `_Alignof(T)`，libtcc 0.9.27 不提供该符号，链接期 `tcc: error: undefined symbol '_Alignof'`；`ir-c` 侧则能跑但结果全错（IR 前端对任何 `alignof` 固定返回 8，`alignof(u8)` / `alignof(i32)` 两条断言必反）。修法与 `PA` 一致：对齐值改由**编译器在编译期算出**，生成的 C 只剩整数字面量。
+- **`type.c` 新增编译期对齐递归**（`type_align_r` + 对外入口 `type_align`，原型进 `ncc.h`）：数组与别名经 `CType.ref` 取元素对齐；`struct` / `union` 取成员里**最宽的非位域**对齐并递归（深度上限 16 防自引用类型死循环）；`void` 按 §5.1 通用指针计 8（与 `cgen` 发出的 `void` 宽度同源）；其余取 `CType.align`，为 0 时回落 `type_default_align(kind)`——`parse_type` 在栈上零初始化 `CType` 且标量分支不填 `align`，这一回落是必需的而非保险。
+- **两处分派同时改**：`parse_builtin_kw` 的 `TOK_ALIGNOF` 关键字路径，以及 `parse_primary` 里按标识符字符串比较的内置函数表分支。后一支按 **PB-6 已记录的既有事实实际不可达**（`alignof` 是关键字 token，永远进不了标识符分支），改它只为与 `PA` 同源、不新增任何覆盖主张——本轮不把它算作「修了两处行为」。
+- **IR 前端一字未改**：`irparse.c` 仍按 8 字节槽模型对所有 `alignof` 返回 8，这是槽模型的边界而非移植缺口，与 `PA` 的 IR 现态同口径。因此用例 `pos/alignof_builtin.nc`（九项断言：标量三档 / `void` 通用指针 / 结构体 / 嵌套结构体 / union / `i32[4]` / `char[8]`，用 `puts` 输出以便与 `.expect` 逐行比对）**刻意不列入** `IR_SUBSET`——它自 `PA` 原样带来，连注释里的 PA-24 溯源也未改，以便与 PB-33 表的 P3 行对号。
+- **门禁复跑（实测）**：`xmake test --all` → c / native 各 **24P / 0F / 6S**（各 +1 PASS），ir-c / ir-native 各 **15P / 0F / 11S**（PASS 不变、SKIP +1 即上述用例），跨后端一致性 **36P / 0F**，`examples/` native 逐条复跑仍 **6/7**（只缺 **P11** 的 `06_cooking.nc`）。承 P1 定的记账口径：本条不复述源码行号，锚点统一在 `IMPLEMENTATION_STATUS.md` 的「2.0 线（PB）差异」表新增一行，同处已把三轮改动的行号位移一次性复核完毕。
+
 ### 2.0 线回灌轮（PB-33 的 P2：从属查询与位域偏移内置函数进 A 后端，2026-09-26）
 
 > PB-33 逐条移植的第二轮。基线数值记在 `IMPLEMENTATION_STATUS.md` 的「本分支回灌基线与逐轮复跑」。
