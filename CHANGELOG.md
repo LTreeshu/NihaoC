@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 2.0 线回灌轮（PB-33 的 P4：`is` 首匹配即止与 `while` 上下文守卫、`flow` 存储来源与转移豁免，2026-09-27）
+
+- **动手前在本分支逐形态复测，四条缺口全部成立**：`is` 写在循环体外仍按 `if` 展开，生成的 C 里 `break` 落在循环外（编译期即非法）；重叠 `is` 子句连续执行（同一轮迭代打出两行）；`flow p string = "…"` 在块退出时对静态只读段 `free()`，运行期 rc=127 静默崩溃、没有任何诊断；`flow b = a` 之后紧跟的自转移被误报两条 `'a' is invalidated`。修法照 `PA` 的 PA-16 / PA-32 / PA-33 移植，**诊断文案逐字相同**，因此 6 份用例（`pos/is_no_fallthrough`、`pos/flow_no_free`、`pos/flow_move`、`err/is_outside_while`、`err/is_in_do_body`、`err/flow_move_frozen`）自 `PA` 原样复制即通过。
+- **`is` 的两条**：`cs->while_depth` 让 `is` 只在 `while` 体内合法（`do` 体进体前清零、出体恢复，故嵌在外层 `while` 里的 `do` 也不能沿用外层的 `__is_val`）；首匹配即止用 `__is_matched`，while 脚手架声明它并在每轮迭代重置，各子句守卫写成 `if (!__is_matched && <比较> && (__is_matched = 1))`——**置位必须写在条件里**，因为块体由 `parse_statement` 整体输出、无法在其 `{` 之后插入语句。
+- **`flow` 的两条**：`no_auto_free` 按右值首 token 登记「这个 `flow` 不持有堆所有权」（字符串字面量 / `&x` / `{…}` 三类），函数级与块级两处 free 循环随之跳过；整变量重绑定处重新登记，而 `p.(T) = v` / `p[i] = v` 改的是所指对象、不动标记。`flow→flow` 转移新增 `moved_src`：转移发生的那条语句内豁免对失效源的读取（右值取值点就在检查之后），下一条语句进入 `parse_statement` 即清除，同时给源符号置 `ownership_transferred` 以免块/函数退出时对同一堆对象 `free` 两次；源若正被 `const`/`var` 借用（冻结）则改为**拒绝转交**，杜绝借用句柄悬垂。
+- **一处与本分支结构有关的适配**：`PA` 把 `(T)` 解引用折进 `parse_postfix` 主循环并用 `chained` 标志判定左值形态，本分支另有前置的 `parse_deref_chain` 路径，故该路径显式把 `lhs_bare_ident` 置 0，否则解引用赋值会被当成整变量重绑定而错改存储来源标记。
+- **IR 前端不动**（沿用 `PA` 侧 PA-16 的裁定「只修 A 后端、IR 留 2.0」），且六份用例一律**不入** `IR_SUBSET` / `IR_ERR_COVERED`。实测记账：`pos/is_no_fallthrough` 在 ir-c 能编译运行但输出翻倍（IR 仍生成并列 `if`）；`err/is_outside_while`、`err/is_in_do_body` 在 ir-c 同样被拒，但文案带 `ir: ` 前端前缀，不能与 A 后端共用 `.expect`；`pos/flow_no_free`、`pos/flow_move`、`err/flow_move_frozen` 三份在 ir-c **连解析都过不了**——顺带量到一条与本轮无关的既有缺口：**带类型解引用作赋值左值（`p.(i32) = v`）在 IR 前端全线不可用**，已记在 `docs/TODO-PB.md` 的 PB-33 表 P4 行，本轮不扩大范围。
+- **门禁复跑（实测）**：`xmake test --all` → c / native 各 **29P / 0F / 6S**（各 +5 PASS；`pos/flow_move.nc` 无 `.expect`，按 `xmake.lua` 的一致性防线只进跨后端比对不计 PASS 位，故 +5 而非 +6），ir-c / ir-native 各 **15P / 0F / 17S**（PASS 不变、SKIP +6），跨后端一致性 **37P / 0F**（+1 即 `pos/flow_move`），`examples/` c / native **6/7**、ir-native **7/7** 不变。四档 0 FAIL。锚点仍只写在 `IMPLEMENTATION_STATUS.md`，同轮把该文件里 `parser.c` / `vis.c` 的既有锚点按本轮位移逐行重算。
+
 ### 2.0 线保留发射器验证轮（PB-35：两档 IR 汇编产物首次过外部汇编器，2026-09-27）
 
 > 紧接 PB-34：裁到只剩两档机器码发射器之后，第一次拿**真汇编器**当判据把两档产物逐份过了一遍。锚点仍只写在 `IMPLEMENTATION_STATUS.md`。工具是本机现成的，未新装任何东西。

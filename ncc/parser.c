@@ -1085,6 +1085,15 @@ void parse_declaration(CompilerState *cs)
             next_tok(cs);
         }
         cgen_raw(" = ");
+        /* 登记 flow 变量的存储来源（§11.1）：字符串字面量在静态只读段、`&x` 指向
+           栈帧或他方对象、`{...}` 是聚合存储，都不是堆所有权，退出时不得 free()；
+           malloc 等其余表达式按堆所有权处理。 */
+        if (var_sym && var_sym->vis == VIS_FLOW) {
+            TokenType rt = cur_tok(cs);
+            var_sym->no_auto_free = (rt == TOK_STRING_LITERAL ||
+                                     rt == TOK_BITWISE_AND ||
+                                     rt == TOK_LBRACE) ? 1 : 0;
+        }
         /* Ownership/lifetime check: single-identifier initializer */
         if (cur_tok(cs) == TOK_IDENTIFIER) {
             LexerState *lex = cs->parser.lex;
@@ -1161,7 +1170,7 @@ void parse_function(CompilerState *cs, Symbol *func_sym)
         if (s->vis == VIS_FLOW && s->type &&
             (s->type->kind == TYPE_VOID || s->type->kind == TYPE_POINTER ||
              s->type->kind == TYPE_STRING) &&
-            !s->ownership_transferred) {
+            !s->ownership_transferred && !s->no_auto_free) {
             cgen_line("free(%s);", s->name);
         }
     }
@@ -1195,13 +1204,16 @@ static void parse_is_stmt(CompilerState *cs)
 {
     /* Pattern match inside a while loop:
      *   is -1 { ... }   /   is 0..50 { ... }   /   is _flow => expr
-     * Matches against the implicit __is_val temp (set by while). */
+     * Matches against the implicit __is_val temp (set by while).
+     * 多个 is-clause 按源码顺序求值、首个匹配者执行（§6.1 无 fallthrough）：
+     * 每子句在守卫中检查并置位 __is_matched，置位放在条件里是因为块体由
+     * parse_statement 整体输出，无法在其 { 之后插入语句。 */
     next_tok(cs);
     TokenType t = cur_tok(cs);
     if (t == TOK_IDENTIFIER && strcmp(cs->parser.lex->tok_str, "_") == 0) {
         /* 通配符：匹配任意 __is_val（恒真）——文档 pattern 列表含 _ */
         next_tok(cs);
-        cgen_raw("if (1)");
+        cgen_raw("if (!__is_matched && (1) && (__is_matched = 1))");
         if (cur_tok(cs) == TOK_LBRACE) {
             parse_statement(cs);
         } else {
@@ -1209,7 +1221,7 @@ static void parse_is_stmt(CompilerState *cs)
         }
         return;
     }
-    cgen_raw("if (__is_val");
+    cgen_raw("if (!__is_matched && (__is_val");
     if (t == TOK_MINUS) {
         next_tok(cs);
         if (cur_tok(cs) == TOK_INT_CONST) {
@@ -1250,7 +1262,7 @@ static void parse_is_stmt(CompilerState *cs)
         nihao_error(cs, "invalid 'is' pattern");
         next_tok(cs);
     }
-    cgen_raw(")");
+    cgen_raw(") && (__is_matched = 1))");
 
     if (cur_tok(cs) == TOK_LBRACE) {
         parse_statement(cs);
@@ -1262,6 +1274,9 @@ static void parse_is_stmt(CompilerState *cs)
 void parse_statement(CompilerState *cs)
 {
     TokenType tok = cur_tok(cs);
+
+    /* 上一条语句的 flow→flow 转移豁免到此结束：失效源在新语句中不可再读 */
+    cs->parser.moved_src = NULL;
 
     /* 标签：name:（C 风格，lexer 注释 label suffix；peek 下一 token） */
     if (tok == TOK_IDENTIFIER) {
@@ -1297,6 +1312,7 @@ void parse_statement(CompilerState *cs)
             cgen_line("{");
             cgen_indent();
             cgen_line("int __is_val;");
+            cgen_line("int __is_matched = 0;");
             cgen_line("for (;;) {");
             cgen_indent();
             cgen_raw("__is_val = (");
@@ -1305,7 +1321,11 @@ void parse_statement(CompilerState *cs)
             cgen_line(";");
             /* 条件检查必须在 body 前（修复 do-while 语义 bug） */
             cgen_line("if (!__is_val) break;");
+            /* 每轮迭代重置匹配标记，供 is 子句实现"首个匹配者执行" */
+            cgen_line("__is_matched = 0;");
+            cs->while_depth++;
             parse_statement(cs);           /* body */
+            cs->while_depth--;
             cgen_dedent();
             cgen_line("}");
             cgen_dedent();
@@ -1318,7 +1338,11 @@ void parse_statement(CompilerState *cs)
             cgen_raw("while (");
             parse_expression(cs);
             cgen_raw(")");
+            /* do 不支持 is：体内容器深度清零，避免外层 while 的 __is_val 被静默匹配 */
+            int save_depth = cs->while_depth;
+            cs->while_depth = 0;
             parse_statement(cs);
+            cs->while_depth = save_depth;
             break;
 
         case TOK_FOR:
@@ -1425,6 +1449,13 @@ void parse_statement(CompilerState *cs)
             break;
 
         case TOK_IS:
+            /* `is` 模式匹配仅配合 while 循环体（BNF §6）：块形式，无单语句。
+             * 循环体外没有 __is_val 可匹配，前端直接拒绝而非留到 C 编译期。 */
+            if (cs->while_depth == 0) {
+                nihao_error(cs, "'is' pattern match only valid inside while loop body");
+                next_tok(cs);
+                break;
+            }
             parse_is_stmt(cs);
             break;
 
@@ -1502,7 +1533,7 @@ void parse_statement(CompilerState *cs)
                         (s->type->kind == TYPE_VOID ||
                          s->type->kind == TYPE_POINTER ||
                          s->type->kind == TYPE_STRING) &&
-                        !s->ownership_transferred) {
+                        !s->ownership_transferred && !s->no_auto_free) {
                         cgen_line("free(%s);", s->name);
                     }
                 }
@@ -2398,6 +2429,7 @@ static void parse_postfix(CompilerState *cs, int line)
         lexer_peek(lex);
         if (lex->peek_tok == TOK_DOT_PAREN || lex->peek_tok == TOK_SAFE_DOT) {
             lex->peek_valid = 0;
+            cs->parser.lhs_bare_ident = 0;  /* 解引用链不是裸标识符 */
             parse_deref_chain(cs, cs->parser.lex->line_num);
             return;
         }
@@ -2406,6 +2438,7 @@ static void parse_postfix(CompilerState *cs, int line)
 
     parse_primary(cs);
 
+    int chained = 0;
     for (;;) {
         TokenType tok = cur_tok(cs);
         if (tok == TOK_LPAREN) {
@@ -2466,7 +2499,9 @@ static void parse_postfix(CompilerState *cs, int line)
         } else {
             break;
         }
+        chained = 1;                    /* 前缀不再是裸标识符 */
     }
+    cs->parser.lhs_bare_ident = !chained;
 }
 
 static void parse_unary(CompilerState *cs, int line)
@@ -2665,6 +2700,15 @@ static void parse_assign(CompilerState *cs, int line)
                         vis_check_assign(cs, lhs->vis, rhs, lhs, lhs->name);
                     }
                 }
+            }
+            /* 整变量重绑定即重新登记 flow 的存储来源（§11.1）：右值不是堆所有权时
+               块/函数退出不得 free()。`p.(T)=v`、`p[i]=v` 改的是所指对象，不动标记。 */
+            if (lhs && lhs->kind == SYM_VARIABLE && lhs->vis == VIS_FLOW &&
+                cs->parser.lhs_bare_ident) {
+                TokenType rt = cur_tok(cs);
+                lhs->no_auto_free = (rt == TOK_STRING_LITERAL ||
+                                     rt == TOK_BITWISE_AND ||
+                                     rt == TOK_LBRACE) ? 1 : 0;
             }
             parse_assign(cs, line);
             break;

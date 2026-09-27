@@ -128,6 +128,10 @@ int vis_check_usable(CompilerState *cs, Symbol *s)
 {
     if (!s) return 0;
     if (s->borrow_state == BS_INVALID) {
+        /* 本语句自身刚刚把 s 转移出去：转移右值必须能读到 s 的值，取值点在
+           检查之后（`flow b void = a` / `b = a`）。豁免仅限本语句，下一条
+           语句进入 parse_statement 即清除。 */
+        if (cs->parser.moved_src == s) return 0;
         nihao_error(cs, "'%s' is invalidated: its ownership has been moved",
                     s->name);
         return 1;
@@ -187,8 +191,24 @@ void vis_check_assign(CompilerState *cs, Visibility dst_vis, Symbol *src_sym,
         return;
     }
 
+    /* §14.2：被借用（冻结）的源不得转交所有权——否则新所有者在借用者仍
+       指向同一对象时把它释放，借用句柄随即变成悬垂指针 */
+    if (src_sym->borrow_state == BS_FROZEN && dst_vis == VIS_FLOW) {
+        nihao_error(cs, "cannot transfer ownership of '%s': it is borrowed "
+                        "(frozen) by an active const/var", src_sym->name);
+        return;
+    }
+
     /* Update borrow state on the source */
     vis_update_source(src_vis, dst_vis, src_sym);
+
+    if (src_sym->borrow_state == BS_INVALID) {
+        /* flow → flow 所有权转移：本语句的右值取值放行（见 vis_check_usable），
+           并且源自此放弃自动释放责任——接收方成为唯一所有者，否则块/函数退出
+           会对同一堆对象 free 两次（§11.1 / §12.1）。 */
+        cs->parser.moved_src = src_sym;
+        src_sym->ownership_transferred = 1;
+    }
 
     /* Record the borrow relationship so the source can be unfrozen
      * when the borrow variable's scope ends (ch.13.1) */

@@ -122,6 +122,9 @@ struct Symbol {
     int is_extern;              /* external symbol */
     int is_builtin;             /* built-in function */
     int ownership_transferred;  /* flow ptr returned: skip auto-free */
+    /* flow 变量的初值（或最后一次整变量赋值）不是堆所有权：字符串字面量在静态只读段、
+       `&x` 指向栈帧或他方对象，两者在块/函数退出时 free() 都是非法释放（§11.1） */
+    int no_auto_free;
 
     /* Ownership/borrow state (NihaoC ch.12): */
     /* 0 = valid, 1 = frozen (borrowed), 2 = invalid (ownership moved) */
@@ -219,6 +222,10 @@ typedef struct {
     Symbol *cur_func;
     Symbol *cur_struct;
     Symbol *last_ident;         /* last identifier referenced in an expr */
+    /* 刚解析的后缀链是裸标识符（无任何后缀步），赋值即整变量重绑定 */
+    int lhs_bare_ident;
+    /* 本语句自身转移出去的 flow 源：右值取值仍须放行，语句结束即失效（§12.1） */
+    Symbol *moved_src;
     int scope_depth;
     
     /* Parsing flags */
@@ -286,6 +293,7 @@ struct CompilerState {
     
     /* Parser state */
     ParserState parser;
+    int while_depth;              /* >0 表示处于 while 循环体内，`is` 仅此上下文合法 */
     
     /* Symbol tables */
     TokenSym **table_ident;
