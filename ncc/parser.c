@@ -525,6 +525,26 @@ static CType *init_elem_type(CType *base, int k)
     return NULL;
 }
 
+/* 固定数组的元素总个数（多维取各维乘积）；含省略维度/动态维时返回 0（未知） */
+static int type_array_count(CType *t)
+{
+    int n = 1;
+    if (!t || t->kind != TYPE_ARRAY) return 0;
+    while (t->kind == TYPE_ARRAY && t->ref) {
+        if (t->param_count <= 0) return 0;
+        n *= t->param_count;
+        t = t->ref;
+    }
+    return n;
+}
+
+/* 数组最深元素类型（`void[4][5]` -> void 槽）；非数组原样返回 */
+static CType *type_deepest_elem(CType *t)
+{
+    while (t && t->kind == TYPE_ARRAY && t->ref) t = t->ref;
+    return t;
+}
+
 /* 指针类类型：NihaoC 的 char[]/void/具名指针 → C 的 char* / void* / T*，
  * 整数赋之需显式转换，否则触发 'makes pointer from integer without a cast' */
 static int is_pointer_like(CType *t)
@@ -750,6 +770,8 @@ void parse_declaration(CompilerState *cs)
         int nnames = 0;
         int has_init[8] = {0};
         int init_seg[8] = {0};      /* 每个 init 表达式在 C 缓冲的段起点 */
+        int init_str[8] = {0};      /* 初值是字符串字面量（定长 char 数组存储的判据） */
+        long long init_len[8] = {0};/* 字符串字面量长度（不含结尾 NUL） */
         skip_newlines(cs);
         while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF && nnames < 8) {
             if (cur_tok(cs) != TOK_IDENTIFIER) {
@@ -762,6 +784,9 @@ void parse_declaration(CompilerState *cs)
             if (cur_tok(cs) == TOK_ASSIGN) {
                 has_init[nnames] = 1;
                 next_tok(cs);
+                init_str[nnames] = (cur_tok(cs) == TOK_STRING_LITERAL);
+                if (init_str[nnames] && cs->parser.lex->tok_str)
+                    init_len[nnames] = (long long)strlen(cs->parser.lex->tok_str);
                 init_seg[nnames] = cgen_mark();
                 parse_expression(cs); /* 值 emit 到 [seg, len) 段，生成时重排 */
             }
@@ -772,6 +797,9 @@ void parse_declaration(CompilerState *cs)
         expect(cs, TOK_RBRACE);
         CType bt;
         parse_type(cs, &bt);
+        /* 定长数组类型（`char[3]`）与单变量分支同口径：保留数组存储而不是把后缀
+           丢掉生成 `char aa = "aa"` 这种错误 C（§5.1.2 / PA-31） */
+        int arr_cap = (bt.kind == TYPE_ARRAY) ? type_array_count(&bt) : 0;
         /* 先收集每个 init 值段文本（段边界 = 相邻 init 起点 / 当前 len），
          * 再 truncate 掉原始位置，最后按 name 顺序重排输出 */
         char init_text[8][512];
@@ -791,8 +819,27 @@ void parse_declaration(CompilerState *cs)
         }
         if (had_any_init) cgen_truncate(init_seg[0]);  /* 清原始值段 */
         for (int i = 0; i < nnames; i++) {
-            cgen_raw("%s%s %s", vis == VIS_CONST ? "const " : "",
-                     c_type_name(&bt), names[i]);
+            if (arr_cap > 0) {
+                if (!init_str[i]) {
+                    nihao_error(cs, "'%s' has fixed array type but no string literal "
+                                    "initializer; use a single-variable declaration "
+                                    "for this form", names[i]);
+                    continue;
+                }
+                if (type_deepest_elem(&bt)->kind != TYPE_CHAR) {
+                    nihao_error(cs, "cannot initialize array '%s' with a string literal; "
+                                    "its elements are not 'char', use a value list "
+                                    "{v0, v1, ...}", names[i]);
+                }
+                if (init_len[i] + 1 > arr_cap) {
+                    nihao_error(cs, "string needs %lld bytes with terminator, "
+                                    "array '%s' holds %d",
+                                init_len[i] + 1, names[i], arr_cap);
+                }
+            }
+            cgen_raw("%s%s %s%s", vis == VIS_CONST ? "const " : "",
+                     c_type_name(&bt), names[i],
+                     arr_cap > 0 ? c_type_suffix(&bt) : "");
             if (has_init[i] && init_text[i][0]) {
                 char *p = init_text[i];
                 while (*p == ' ' || *p == '\t') p++;   /* 段含缩进前导，trim */
@@ -800,12 +847,21 @@ void parse_declaration(CompilerState *cs)
             }
             cgen_line(";");
             /* 注册符号表（否则后续赋值被当推断声明 → redeclaration） */
+            Symbol *vs;
             if (cs->parser.cur_func) {
-                Symbol *vs = sym_push_local(cs, cs->parser.cur_func, names[i], &bt);
-                vs->vis = vis;
+                vs = sym_push_local(cs, cs->parser.cur_func, names[i], &bt);
             } else {
-                Symbol *vs = sym_push(cs, SYM_VARIABLE, names[i], &bt);
-                vs->vis = vis;
+                vs = sym_push(cs, SYM_VARIABLE, names[i], &bt);
+            }
+            vs->vis = vis;
+            /* `len(x)` 的逻辑长度登记（§2.3）：定长数组=声明容量、动态字符串=字面量长 */
+            if (arr_cap > 0) {
+                vs->len_known = 1;
+                vs->logical_len = arr_cap;
+            } else if (init_str[i] &&
+                       (bt.kind == TYPE_ARRAY || bt.kind == TYPE_STRING)) {
+                vs->len_known = 1;
+                vs->logical_len = init_len[i];
             }
         }
         return;
@@ -1080,9 +1136,28 @@ void parse_declaration(CompilerState *cs)
     }
 
     /* initializer（inferred_eq：'=' 已消费，cur_tok 已是 RHS；否则 '=' 待消费） */
+    long long str_lit_len = -1;   /* 字符串字面量初值的长度，供容量检查与 `len(x)`（§2.3） */
     if (inferred_eq || cur_tok(cs) == TOK_ASSIGN) {
         if (!inferred_eq) {
             next_tok(cs);
+        }
+        /* `T[n] x = "..."`：定长数组配字符串字面量的两条即时诊断（§5.1.1）——
+           元素非 char 时 C 侧只会吐一串语法错误，超容量时 tcc 仅告警并静默截断，
+           两者都必须在诊断里指名变量与容量，口径与多变量分支一致 */
+        if (cur_tok(cs) == TOK_STRING_LITERAL && cs->parser.lex->tok_str)
+            str_lit_len = (long long)strlen(cs->parser.lex->tok_str);
+        if (str_lit_len >= 0 && vtype.kind == TYPE_ARRAY &&
+            type_array_count(&vtype) > 0) {
+            int cap = type_array_count(&vtype);
+            if (type_deepest_elem(&vtype)->kind != TYPE_CHAR) {
+                nihao_error(cs, "cannot initialize array '%s' with a string literal; "
+                                "its elements are not 'char', use a value list "
+                                "{v0, v1, ...}", name);
+            }
+            if (str_lit_len + 1 > cap) {
+                nihao_error(cs, "string needs %lld bytes with terminator, "
+                                "array '%s' holds %d", str_lit_len + 1, name, cap);
+            }
         }
         cgen_raw(" = ");
         /* 登记 flow 变量的存储来源（§11.1）：字符串字面量在静态只读段、`&x` 指向
@@ -1138,6 +1213,20 @@ void parse_declaration(CompilerState *cs)
             parse_init_list(cs, &vtype);
         } else {
             parse_expression(cs);
+        }
+    }
+    /* 登记 `len(x)` 的逻辑长度（§2.3）：数组=元素个数（多维取各维乘积）、
+       动态字符串（`char[]` 与推断的字符串字面量）=字面量长度；
+       其余形态静态不可知，`len()` 即时报错而非返回过期值 */
+    if (var_sym) {
+        if (vtype.kind == TYPE_ARRAY && type_array_count(&vtype) > 0) {
+            var_sym->len_known = 1;
+            var_sym->logical_len = type_array_count(&vtype);
+        } else if (str_lit_len >= 0 &&
+                   (vtype.kind == TYPE_STRING ||
+                    (vtype.kind == TYPE_ARRAY && vtype.param_count < 0))) {
+            var_sym->len_known = 1;
+            var_sym->logical_len = str_lit_len;
         }
     }
     cgen_line(";");
@@ -2116,10 +2205,32 @@ static void parse_primary(CompilerState *cs)
                 break;
             }
 
-            /* Builtin calls: sizeof/typeof/alignof/offsetof/visof/malloc/... */
+            /* Builtin calls: len/sizeof/typeof/alignof/offsetof/visof/malloc/... */
             if (cur_tok(cs) == TOK_LPAREN) {
                 next_tok(cs); /* ( */
 
+                if (strcmp(name, "len") == 0) {
+                    /* len(x)：数组=元素个数、动态字符串=字面量长、切片变量=hi-lo（§2.3） */
+                    char arg[128];
+                    if (cur_tok(cs) != TOK_IDENTIFIER) {
+                        nihao_error(cs, "len expects an identifier");
+                        next_tok(cs);
+                    } else {
+                        snprintf(arg, sizeof(arg), "%s",
+                                 cs->parser.lex->tok_str ? cs->parser.lex->tok_str : "");
+                        Symbol *s = sym_find(cs, arg);
+                        next_tok(cs);
+                        if (!s || s->kind != SYM_VARIABLE || !s->len_known) {
+                            nihao_error(cs, "len: logical length of '%s' is not statically known",
+                                        arg);
+                            cgen_raw("0");
+                        } else {
+                            cgen_raw("%lld", s->logical_len);
+                        }
+                    }
+                    expect(cs, TOK_RPAREN);
+                    break;
+                }
                 if (strcmp(name, "sizeof") == 0) {
                     /* sizeof(type) or sizeof(expr) */
                     CType tmp;
@@ -2436,6 +2547,13 @@ static void parse_postfix(CompilerState *cs, int line)
         lex->peek_valid = 0;
     }
 
+    /* 裸下标的元素宽度只在「前缀仍是裸标识符」时可知，故在主元解析前记下符号 */
+    Symbol *base_sym = NULL;
+    if (cur_tok(cs) == TOK_IDENTIFIER) {
+        Symbol *s = sym_find(cs, cs->parser.lex->tok_str);
+        if (s && s->kind == SYM_VARIABLE) base_sym = s;
+    }
+
     parse_primary(cs);
 
     int chained = 0;
@@ -2458,6 +2576,14 @@ static void parse_postfix(CompilerState *cs, int line)
         } else if (tok == TOK_LBRACKET) {
             /* [i] index or [a..b] slice */
             next_tok(cs);
+            if (!chained && base_sym && base_sym->kind == SYM_VARIABLE &&
+                base_sym->type && base_sym->type->kind == TYPE_VOID) {
+                /* 通用 `void` 指针的元素宽度静态未知，裸下标无法翻译成合法 C；
+                   先用 `.(T)` 固定元素类型（§5.1.2） */
+                nihao_error(cs, "cannot subscript the generic 'void' pointer '%s'; "
+                                "write %s.(T)[i] to fix the element type first",
+                            base_sym->name, base_sym->name);
+            }
             if (cur_tok(cs) == TOK_RANGE) {
                 /* slice read: not directly expressible in C */
                 next_tok(cs);
@@ -2681,6 +2807,10 @@ static void parse_assign(CompilerState *cs, int line)
             /* fall through */
         case TOK_ASSIGN: {
             Symbol *lhs = cs->parser.last_ident;
+            /* 整变量重新赋值（LHS 是裸标识符）：声明期登记的逻辑长度不再可信，
+               撤销记录，让 `len(x)` 保守报错而非返回过期值（§2.3） */
+            if (lhs && lhs->kind == SYM_VARIABLE && cs->parser.lhs_bare_ident)
+                lhs->len_known = 0;
             /* LHS must be writable (not frozen by an active borrow) */
             if (lhs && lhs->kind == SYM_VARIABLE) {
                 vis_check_writable(cs, lhs);

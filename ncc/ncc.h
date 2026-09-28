@@ -130,6 +130,10 @@ struct Symbol {
     /* 0 = valid, 1 = frozen (borrowed), 2 = invalid (ownership moved) */
     int borrow_state;
     Symbol *borrow_source;      /* who this var borrows from (for unfreeze) */
+    /* len(x) 内置函数的逻辑长度：数组=元素个数、动态字符串 char[]=字面量长度、
+       切片变量=边界差 hi-lo；len_known = 0 表示静态不可知（len() 报错） */
+    int len_known;
+    long long logical_len;
     
     /* Location in source */
     char *filename;

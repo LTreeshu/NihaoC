@@ -241,16 +241,25 @@ const char *c_type_name(CType *t)
     }
 }
 
-/* Array suffix for C declarations: "[N]" for fixed arrays, "" otherwise */
+/* Array suffix for C declarations: "[N][M]" for fixed arrays, "" otherwise。
+ * 多维必须逐维输出：只发最外层一维会让 `i32[2][3]` 变成 `int m[2]`，
+ * 而 `len(m)` 按 §2.3 报各维乘积 6，两者不一致即是错码。 */
 const char *c_type_suffix(CType *t)
 {
-    static char buf[32];
+    static char buf[64];
+    int dims[8];
+    int n = 0;
     if (!t) return "";
-    if (t->kind == TYPE_ARRAY && t->ref && t->param_count > 0) {
-        snprintf(buf, sizeof(buf), "[%d]", t->param_count);
-        return buf;
+    while (t->kind == TYPE_ARRAY && t->ref && t->param_count > 0 && n < 8) {
+        dims[n++] = t->param_count;
+        t = t->ref;
     }
-    return "";
+    if (!n) return "";
+    size_t off = 0;
+    buf[0] = 0;
+    for (int i = n - 1; i >= 0 && off + 8 < sizeof(buf); i--)
+        off += (size_t)snprintf(buf + off, sizeof(buf) - off, "[%d]", dims[i]);
+    return buf;
 }
 
 /* ============================================================
