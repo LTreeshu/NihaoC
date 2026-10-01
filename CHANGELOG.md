@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 2.0 线回灌轮（PB-33 的 P6：编译器版本号改构建期注入做单一真源，2026-10-01）
+
+- **复测先在 `HEAD` 上做，缺口成立且比在册描述更具体**：本分支同时存在**三套**版本值——`xmake.lua` 的 `set_version("1.0.0")`、`ncc.h` 的 `#define NIHAO_VERSION "0.1.0"`、以及 `ncc.c` 里 `nihao init` 生成 `nihao.toml` 时**另一处**硬编码的 `"0.1.0"`；用户可见的 `--version`、帮助横幅、`-v` verbose 启动行因此全打印 `v0.1.0`。`PA` 的 PA-35 登记里推测「PB 侧 `set_version` 为 2.0 口径」，实测不成立（本分支是 `1.0.0`），故本轮**取本分支现值 `1.0.0` 作单一真源**，不自造一个 2.0 号——上抬版本号属发布动作，留给 ltree 决定。
+- **实现与 `PA` 逐字同源**（便于后续 3-way 同步不留冲突点）：① `xmake.lua` 顶部新增 `local nihao_version`，`set_version(nihao_version)` 与 `add_defines("NIHAO_VERSION_TAG=" .. nihao_version)` 同源于这一处，注释里写明「发布时只改这一处」；② `ncc.h` 撤掉独立版本常量，改为 `NIHAO_STR_` / `NIHAO_STR` 两级字符串化宏把注入的裸 token（`1.0.0`）转成字符串，未注入时落到占位值 `"0.0.0-unknown"`，并注明它不代表任何对外发布口径；③ `ncc.c` 的 `nihao.toml` 脚手架版本改由 `NIHAO_VERSION` 拼接（脚手架项目版本即编译器版本）。
+- **两条分支都做了实测而非引用 `PA` 的结论**：xmake 构建下 `ncc --version` 与帮助横幅输出 `NihaoC Compiler v1.0.0`，`nihao init` 产出的 `nihao.toml` 为 `version = "1.0.0"`；不经 xmake（无注入）时把该宏块单独取出编成探针，`NIHAO_VERSION` 落到 `0.0.0-unknown`——占位分支确实可达，不是纸面设定。本分支 `ncc/tests` 与 `examples/` 无版本字符串断言（`grep` 零命中），因此门禁与 examples 一字不变。
+- **簿记**：`docs/VERSIONING_ROADMAP.md` §3.2 的「版本号单一真源」条款此前已随共享文档同步到本分支，本轮是代码追上文档；`ncc.h` 在第 25 行处净增 8 行，`docs/IMPLEMENTATION_STATUS.md` 的五处 `ncc.h` 锚点（`no_auto_free` / `len_known`–`logical_len` / `moved_src` / `while_depth` / `type_align` 原型）按 +8 位移更正并逐个 `grep -n` 复核。
+- **门禁复跑（同轮实测）**：c / native 各 **38P / 0F / 6S**，ir-c / ir-native 各 **15P / 0F / 26S**，跨后端一致性 **37P / 0F**，examples c **6/7**（仍只有 `06_cooking.nc`，即下表 P11）、ir-native **7/7**——全部与 P5 落地后基线逐字相同。
+
 ### 2.0 线回灌轮（PB-33 的 P5：数组与字符串初值口径的前端诊断 + `len()` 内置函数，2026-09-28）
 
 - **动手前在本分支逐形态复测，在册五条里四条成立、一条不成立**（改前实测口径统一为「六条诊断文案与 `Symbol.len_known` / `logical_len` 两个字段在 `HEAD` 全为零命中」，逐条 `git show HEAD:ncc/parser.c | grep -c` 复核）：`char[3] s = "abcd"` 超容量**没有任何前端诊断**，截断与否全交给 tcc 判；`i32[3] x = "abc"` 同样没有诊断，产物 C 由 C 编译器报语法错误；`var {aa = "aa",bb = "bb"} char[3]` **静默丢掉数组后缀**，生成既不是数组也不是合法赋值的 C；`len(x)` 在本分支**根本不存在**（`parse_primary` 的标识符内置函数表里没有这一档）；`void p = …` 之后写 `p[i]` 直接把 `p[i]` 原样发给 tcc。**不成立的一条**是 PA-51 的四档容量写法：本分支 `parser.c:344–365` 早已与 IR 前端一致（省略容量取默认 8），故 P5 对它只做量测复核、代码零改动，并把它写成回归用例 `pos/array_capacity_tiers.nc`。
