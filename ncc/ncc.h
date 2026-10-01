@@ -38,6 +38,10 @@
 #define MAX_MODULES         256
 #define MAX_LINK_LIBS       64
 #define MAX_MULTIRETURN     16
+#define MAX_INIT_DESIGATORS 32
+/* 成员默认值展开的缓冲上限（§3.1 × §5.1.2：聚合类型数组按元素逐项展开）；
+ * 超出时前端即时报错，不生成截断的初始化器 */
+#define DEFAULT_INIT_BUF 8192
 
 #define match(a,b)  (strcmp(a,b) == 0)
 
@@ -166,6 +170,8 @@ struct Symbol {
     int member_count;
     int total_size;
     int total_align;
+    /* 成员默认值（`x i32 = 7`）的 C 初值文本，仅成员 Symbol 用；NULL = 无默认值 */
+    char *def_init;
     
     /* For modules */
     Symbol *module_symbols;

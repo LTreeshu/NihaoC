@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+### 2.0 线回灌轮（PB-33 的 P8：聚合成员默认值整条机制，2026-10-02）
+
+- **动手前逐形态复测，在册缺口按字面成立**：`Symbol.def_init`、`member_default_text()`、`default_init_text()`、`MAX_INIT_DESIGATORS` 四个符号在本分支**全部零命中**；`struct P { i32 x = 7  y i32 }` 出成 `typedef struct P { int32_t x = 7; } P;`——C 的字段声明不允许初值，tcc 报 `invalid number`，即**实测表 F1** 在本分支原样复现；`.[ttl] = 7` 指定式与「聚合类型数组的成员默认值」则连失败形态都没有，直接语法即拒。
+- **成员默认值走「截文本 + 挂符号」，不当场出码**：`parse_member_list` 遇 `=` 先 `cgen_mark()` 记住输出位、`parse_expression()` 求值，再由 `cgen_take_prefix()` 回取表达式文本并从聚合体输出里**截掉**，挂到成员符号上（`sym_add_member` 整体清零，故无默认值的成员天然为 `NULL`）。必须截而不能留，是因为 C 没有字段初值语法、而本后端边解析边输出。
+- **展开点选在变量声明处（`PA-49` 的口径）**：`parse_declaration` 的无初值分支调 `default_init_text()`，返回正数才补 ` = { .x = 7, .y = 8 }`；成员级文本由 `member_default_text()` 逐成员拼成 C 指定初始化器，`union` 各成员共享槽位，故只取首个带默认值的成员，且用户一给位置初值就以用户为准。**F1 由此在本分支结案**。
+- **数组逐项展开与尾数补全（`PA-56`）**：`default_init_text()` 遇数组把元素默认文本重复声明容量次（容量静态不可知即返回 0、不展开）；`parse_init_list()` 的尾数补全只在「每一项都是 `{…}`」时按 `type_array_count()` 的元素个数乘积补齐，扁平的 `{ 1, 2, 3 }` 保持 C 的花括号可省略规则、不追加尾数——这一档由 `pos/array_member_default` 固定住。
+- **展开撑破缓冲上限时即时报错，绝不产出被截断的初始化器**：四处 `snprintf` 余量检查共用一个 `default_init_too_big()`，文案带 `DEFAULT_INIT_BUF`（8192 字节）的实际数值；`err/default_init_overflow` 以 `big P[400]` 打进该分支。声明点收到 `-1` 只是不再出初始化器，错误已在展开处报出。
+- **designator 名单必须各层局部记账（`PA-57⑥` 的坑）**：`char *desigs[MAX_INIT_DESIGATORS]` 是 `parse_init_list` 的局部数组，嵌套递归每层各建一份；若挂到 `ParserState` 上会被内层覆写，外层就漏补或重补默认值。指定式 `.名 = 表达式` 经三项前瞻（`.` / 标识符 / `=`）确认后原样透传成 C 的 `.名 = `，被点名的成员不再补默认值。
+- **用例与忠实性**：自 `PA` 逐字带来 4 份——`pos/struct_member_default`、`pos/array_member_default`、`pos/designator_init`、`err/default_init_overflow`。沿用 P5b 的判据（移植等价不看门禁数字，看产物 C）：三份 pos 的产物 C 与 `PA` **逐字节相同**。
+- **`xmake.lua` 零改动**：三份新 pos 全带 `.expect`，按一致性口径只进各后端 PASS 档；IR 侧四份用例在 `irparse` 的解析层全部不过，而本分支的 err 跳过规则按「IR 未覆盖即跳」粗筛，自然给出与 `PA` 显式 `IR_ERR_SKIP` 名单相同的结局，故既不进白名单、`irparse.c` 也一行未改。
+- **门禁复跑（实测）**：`xmake test --all` → c / native 各 **57P / 0F / 6S**（各 +4 PASS：3 份 pos + 1 份 err，SKIP 与改前逐字相同），ir-c / ir-native 各 **16P / 0F / 44S**（PASS 不变、SKIP +4），跨后端一致性 **36P / 0F** 不变，examples c / native **6/7**、ir-native **7/7**——唯一失败仍是既有的 `06_cooking.nc`（下表 P11 的 cooking 缺口，本轮无关，改前基线同值）。另把门禁全部产物逐份交 `clang -fsyntax-only`：由 P7 的 57 份增至 **60 份、60/60 绿**。
+- **登记一笔两线共同的上游缺陷（本轮不改行为）**：位置初值与指定式**混写**（`Cfg c = { 5, .ttl = 7 }`，成员默认值在 `port` / `host` 上）在 PB 与 `PA` 出成逐字节相同的产物 C——位置 `5` 落在第一个成员，`.port = 80` 又指定同一个成员，靠「后置指定初始化器覆盖前者」侥幸成立，与 §5.1.1 的裁定不符。两线一致 ⇒ 这是上游共同缺口，只在 PB 单侧修好会在 PB-33 正要消除的地方制造新分叉，故只登记、留待 `PA` 侧裁定。
+- **簿记**：`docs/IMPLEMENTATION_STATUS.md` 新增「聚合成员默认值与指定式初值」一节，并把上一轮 P7 表里那行「⚠️ 未落地，整条登记为 **P8**」翻成已落地；`parser.c` 本轮净增 142 行、`ncc.h` 净增 6 行，插入点分散且位移非单调，故依旧不列位移表，改为把该两份文件的全部锚点按新行号逐个 grep 复核，其中无 `parser.c:` 前缀的**续接裸行号**需人工对照代码确认，跨分支引用（`PA` 侧同一函数的行号）不随本分支偏移。`docs/TODO-PB.md` 的 P8 行转为已落地，下一轮 **P9**（`-fsyntax-only` 抽查接线）。
+
 ### 2.0 线回灌轮（PB-33 的 P7：`PA-57` 语法标准对齐轮的剩余合规项，2026-10-01）
 
 - **动手前逐形态复测，在册清单被砍掉三分之一**：`PA` 的 PA-57 一轮修 11 处，其中**四档数组容量写法**（P5 已作核对项）、`void` 槽的 `Symbol.pointee_type`（P5b 已带）、`[[export "…"]]` 的字符串字面量写法（属性循环本就吞掉字符串参数，对 C 输出无效但不报错）三条在本分支**早已成立**，不是移植项；**designator 初始化**（PA-57⑥）则相反——本分支连基础形态都没有（`Symbol.def_init` / `member_default_text()` / `default_init_text()` / `MAX_INIT_DESIGATORS` 全零命中），整条降给 **P8**；`linkas` 专属诊断降给 **P10**。教训与 PA-51 那条「每轮动手前先在 PB 复测」完全同型。

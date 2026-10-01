@@ -145,8 +145,10 @@ static CType *ctype_persist(CompilerState *cs, CType *t)
 }
 
 /* Parse a struct/union/enum member list in NihaoC order:
- *   [vis] name Type [:bitwidth]
+ *   [vis] name Type [:bitwidth] [= expr]
  * Emits the C member declaration while parsing. */
+static char *cgen_take_prefix(CompilerState *cs, int mark, int *indent);
+
 static void parse_member_list(CompilerState *cs, Symbol *owner, int is_union)
 {
     (void)is_union;
@@ -180,14 +182,18 @@ static void parse_member_list(CompilerState *cs, Symbol *owner, int is_union)
                 next_tok(cs);
             }
         }
-        /* default value: member Type = expr  (ignored in C output) */
+        /* default value: member Type = expr。C 没有「字段默认值」语法，且本后端
+         * 一边解析一边输出，所以初值表达式的文本先取出再从聚合体里截掉，
+         * 挂到成员符号上，由该类型的变量声明处展开成指定初始化器（BNF §3.1） */
+        char *def_text = NULL;
         if (cur_tok(cs) == TOK_ASSIGN) {
             next_tok(cs);
+            int dmark = cgen_mark();
             parse_expression(cs);
+            def_text = cgen_take_prefix(cs, dmark, NULL);
         }
-        if (owner) {
-            sym_add_member(cs, owner, mname, &mtype);
-        }
+        Symbol *member = owner ? sym_add_member(cs, owner, mname, &mtype) : NULL;
+        if (member && def_text && def_text[0]) member->def_init = def_text;
         /* emit C member declaration */
         if (mtype.bit_size > 0) {
             cgen_line("%s %s : %u;", c_type_name(&mtype), mname, mtype.bit_size);
@@ -649,38 +655,139 @@ static int is_pointer_like(CType *t)
            t->kind == TYPE_VOID;
 }
 
+/* 成员默认值展开（定义在聚合体段），初始化列表按层补默认值时调用 */
+static int member_default_text(const CType *t, int skip, const char **names,
+                               int n_names, char *out, size_t sz);
+static int default_init_text(CompilerState *cs, CType *t, char *out, size_t sz);
+
+/* 默认值展开撑破缓冲上限：即时报错，绝不生成截断的初始化器 */
+static void default_init_too_big(CompilerState *cs)
+{
+    nihao_error(cs, "aggregate initializer is too large to expand its member "
+                    "defaults (%d byte buffer)", DEFAULT_INIT_BUF);
+}
+
 /* 初始化列表（嵌套递归）：已消费 {，元素逐项 parse_expression；遇 { 递归。
  * base：被初始化变量类型（struct/union/array）；按位置对"整数 → 指针成员/元素"加 (T*)
  *       显式转换，消除 C 编译器 'assignment makes pointer from integer without a cast' 告警——
  *       NihaoC 把 char[]/void 当作 8 字节不透明槽，整数初值合法（与 IR 槽模型一致），但
- *       cgen 生成的 C 为 char* / void*，裸整数赋值触发告警。base 为 NULL 时退化为原样输出。*/
-static void parse_init_list(CompilerState *cs, CType *base)
+ *       cgen 生成的 C 为 char* / void*，裸整数赋值触发告警。base 为 NULL 时退化为原样输出。
+ * 返回本层顶层项数，供调用方按层补成员默认值（§3.1 / §5.1.3）。 */
+static int parse_init_list(CompilerState *cs, CType *base)
 {
     cgen_raw("{");
     next_tok(cs);
     skip_newlines(cs);
     int k = 0;
+    int all_braced = 1;                    /* 每项都是 `{...}`，才可按元素补默认值 */
+    char *desigs[MAX_INIT_DESIGATORS];      /* 本层被点名的成员，嵌套层各自记账 */
+    int ndesig = 0;
+    int has_d = 0;
     if (cur_tok(cs) != TOK_RBRACE) {
         for (;;) {
+            if (cur_tok(cs) == TOK_RBRACE) break;   /* 尾逗号 `{1, 2,}` */
             if (k > 0) cgen_raw(", ");
             if (cur_tok(cs) == TOK_LBRACE) {
-                CType *sub = init_elem_type(base, k);
-                parse_init_list(cs, sub);
+                parse_init_list(cs, init_elem_type(base, k));
+            } else if (cur_tok(cs) == TOK_DOT &&
+                       peek_ahead(cs, 1) == TOK_IDENTIFIER &&
+                       peek_ahead(cs, 2) == TOK_ASSIGN) {
+                /* <designator> ::= "." <identifier> "=" <expr>（BNF §5）：
+                 * 与 C 指定初始化器同形，原样透传；被点名的成员不再补默认值 */
+                next_tok(cs);                                   /* . */
+                cgen_raw(".%s = ", cs->parser.lex->tok_str);    /* 成员名 */
+                if (ndesig < MAX_INIT_DESIGATORS)
+                    desigs[ndesig++] = cs->parser.lex->tok_str;
+                has_d = 1;
+                next_tok(cs);                                   /* name */
+                next_tok(cs);                                   /* = */
+                parse_expression(cs);
+                all_braced = 0;
             } else {
                 CType *et = init_elem_type(base, k);
                 if (et && is_pointer_like(et) && cur_tok(cs) == TOK_INT_CONST) {
                     cgen_raw("(%s)", c_type_name(et));
                 }
                 parse_expression(cs);
+                all_braced = 0;
             }
             k++;
+            skip_newlines(cs);
             if (cur_tok(cs) != TOK_COMMA) break;
             next_tok(cs);
             skip_newlines(cs);
         }
     }
+    /* 省略的成员/元素取定义处的默认值：聚合按位置跳过前 k 员、按名排除指定式；
+     * 数组只在整个元素都未给出时补尾数元素（§3.1 × §5.1.2） */
+    char extra[DEFAULT_INIT_BUF];
+    extra[0] = '\0';
+    int n_extra = 0;
+    if (base && (base->kind == TYPE_STRUCT || base->kind == TYPE_UNION)) {
+        n_extra = member_default_text(base, has_d ? 0 : k,
+                                     has_d ? (const char **)desigs : NULL,
+                                     has_d ? ndesig : 0, extra, sizeof(extra));
+    } else if (base && base->kind == TYPE_ARRAY && k > 0 && all_braced) {
+        int cap = type_array_count(base);
+        char elem[DEFAULT_INIT_BUF];
+        if (cap > 0 && default_init_text(cs, base->ref, elem, sizeof(elem)) == 1) {
+            size_t used = 0;
+            for (int i = k; i < cap; i++) {
+                int w = snprintf(extra + used, sizeof(extra) - used, "%s%s",
+                                 used ? ", " : "", elem);
+                if (w < 0 || (size_t)w >= sizeof(extra) - used) {
+                    default_init_too_big(cs);
+                    break;
+                }
+                used += (size_t)w;
+            }
+            n_extra = used ? 1 : 0;
+        }
+    }
+    if (n_extra) cgen_raw(", %s ", extra);
     expect(cs, TOK_RBRACE);
     cgen_raw("}");
+    return k;   /* 顶层初值个数；嵌套 {...} 只算一个 */
+}
+
+/* 一个声明槽位的「全默认值」初始化文本（自带花括号），供聚合类型数组逐项展开：
+ *   struct/union 成员默认值 -> `{ .a = 7, .b = 9 }`
+ *   数组 -> 把元素默认文本重复声明容量次
+ * 返回 1 = 写出内容；0 = 该类型没有成员默认值；-1 = 展开超出缓冲上限。 */
+static int default_init_text(CompilerState *cs, CType *t, char *out, size_t sz)
+{
+    out[0] = '\0';
+    if (!t) return 0;
+    if (t->kind == TYPE_ARRAY) {
+        int cap = t->param_count;
+        if (cap <= 0) return 0;             /* 容量静态不可知：不展开 */
+        char elem[DEFAULT_INIT_BUF];
+        int r = default_init_text(cs, t->ref, elem, sizeof(elem));
+        if (r != 1) return r;               /* -1 已由递归报出 */
+        size_t used = (size_t)snprintf(out, sz, "{ ");
+        for (int i = 0; i < cap; i++) {
+            int w = snprintf(out + used, sz - used, "%s%s", i ? ", " : "", elem);
+            if (w < 0 || (size_t)w >= sz - used) {
+                default_init_too_big(cs);
+                return -1;
+            }
+            used += (size_t)w;
+        }
+        int w = snprintf(out + used, sz - used, " }");
+        if (w < 0 || (size_t)w >= sz - used) {
+            default_init_too_big(cs);
+            return -1;
+        }
+        return 1;
+    }
+    char defs[DEFAULT_INIT_BUF];
+    if (!member_default_text(t, 0, NULL, 0, defs, sizeof(defs))) return 0;
+    int w = snprintf(out, sz, "{ %s }", defs);
+    if (w < 0 || (size_t)w >= sz) {
+        default_init_too_big(cs);
+        return -1;
+    }
+    return 1;
 }
 
 /* postfix 前缀文本回取（定义在表达式解析段） */
@@ -821,6 +928,36 @@ static int infer_init_type(CompilerState *cs, CType *out)
             out->size = 4;
             return 0;
     }
+}
+
+/* 成员默认值展开（BNF §3.1 `<field-decl> ... [ "=" <expr> ]`）：声明聚合类型变量时，
+ * 初值未覆盖的成员取定义处的默认值，用 C 指定初始化器实现。把 `.a = 7, .b = 9`
+ * 写进 `out`，返回补上的成员数；`skip` = 用户已按位置给出的初值个数。
+ * union 各成员共享同一槽位：只取首个带默认值的成员，且用户一给初值就以用户为准。 */
+static int member_default_text(const CType *t, int skip, const char **names,
+                               int n_names, char *out, size_t sz)
+{
+    Symbol *s = t ? t->sym : NULL;
+    out[0] = '\0';
+    if (!s || (s->kind != SYM_STRUCT && s->kind != SYM_UNION) || !s->members)
+        return 0;
+    if (s->kind == SYM_UNION && skip > 0) return 0;
+
+    int idx = 0, n = 0;
+    for (Symbol *m = s->members; m; m = m->next, idx++) {
+        if (!m->def_init || idx < skip) continue;
+        /* 指定成员初值 `.m = v` 已覆盖该成员，默认值不再重复拼 */
+        int desig = 0;
+        for (int i = 0; i < n_names; i++)
+            if (names[i] && strcmp(names[i], m->name) == 0) { desig = 1; break; }
+        if (desig) continue;
+        if (s->kind == SYM_UNION && n > 0) break;
+        size_t used = strlen(out);
+        snprintf(out + used, sz - used, "%s.%s = %s", n ? ", " : "",
+                 m->name, m->def_init);
+        n++;
+    }
+    return n;
 }
 
 /* 声明初始化收尾：把初值携带的「所指对象」信息记到符号上，
@@ -1464,6 +1601,11 @@ void parse_declaration(CompilerState *cs)
         /* malloc(T)/&x 初始化：把静态可知字节数与所指类型记到符号，供 `.()` 越界
            检查与裸 `void` 槽还原使用（§12.1 / §5.1.2） */
         record_init_pointee(cs, var_sym);
+    } else {
+        char defs[DEFAULT_INIT_BUF];
+        /* 超出缓冲上限时 default_init_text 已报错，这里只是不再产出初始化器 */
+        if (default_init_text(cs, &vtype, defs, sizeof(defs)) > 0)
+            cgen_raw(" = %s", defs);
     }
     cgen_line(";");
 }
