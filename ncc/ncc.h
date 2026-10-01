@@ -138,6 +138,11 @@ struct Symbol {
     /* 0 = valid, 1 = frozen (borrowed), 2 = invalid (ownership moved) */
     int borrow_state;
     Symbol *borrow_source;      /* who this var borrows from (for unfreeze) */
+    /* 指针当前所指对象的字节数，`.()` 越界检查用；0 = 静态未知（不检查） */
+    unsigned int pointee_bytes;
+    /* 通用 `void` 槽位在声明处由 `malloc(T)` / `&x` 定下的所指类型，供省略类型的
+       裸 `.()` / `p[]` / `->` 还原成 `(*(T*)(p))`；NULL = 静态未知 */
+    CType *pointee_type;
     /* len(x) 内置函数的逻辑长度：数组=元素个数、动态字符串 char[]=字面量长度、
        切片变量=边界差 hi-lo；len_known = 0 表示静态不可知（len() 报错） */
     int len_known;
@@ -248,6 +253,13 @@ typedef struct {
     /* Expression parsing */
     int *macro_ptr;
     int unget_buffer_enabled;
+    unsigned int malloc_bytes;  /* 本次 malloc(T) 请求的字节数，供声明初始化记录 pointee_bytes */
+    CType *init_pointee;        /* 本次初值静态已知的所指类型（malloc(T) / &x），供声明记录 pointee_type */
+    int lhs_was_deref;          /* 赋值左侧是解引用链（`p.(T) = v`）而非对 p 本身赋值 */
+    int rhs_was_slice;          /* 刚解析的表达式以切片读 `[a..b]` 结尾（数组声明据此走复制） */
+    int slice_lmark;            /* 该切片读文本在 cgen 缓冲里的起点，用于确认它是赋值左侧整体 */
+    int slice_len_known;        /* 最近一次切片读的上下界是否都是字面量（`len(切片变量)` 据此求值） */
+    long long slice_len;        /* 该切片的逻辑长度 hi-lo */
     
     /* Error handling */
     int error_count;

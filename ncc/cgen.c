@@ -121,7 +121,13 @@ const char *cgen_slice(int mark)
 }
 void cgen_truncate(int mark)
 {
-    if (mark >= 0 && mark <= cg.len) cg.len = mark;
+    if (mark >= 0 && mark <= cg.len) {
+        cg.len = mark;
+        if (cg.buf) cg.buf[cg.len] = '\0';
+        /* 缩进状态是惰性发射的（cgen_raw 见 at_line_start 才补空格），回退后必须
+         * 按残留文本重新判定，否则截掉一段输出会把下一行的缩进一起丢掉 */
+        cg.at_line_start = (cg.len == 0 || !cg.buf) ? 1 : (cg.buf[cg.len - 1] == '\n');
+    }
 }
 
 /* ============================================================

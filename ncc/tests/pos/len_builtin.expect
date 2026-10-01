@@ -1,0 +1,8 @@
+len array ok
+len multidim ok
+len dynstr ok
+len strlit ok
+len slice ok
+len slice open ok
+len sliced copy ok
+len stable ok

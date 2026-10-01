@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### 2.0 线回灌轮（PB-33 的 P5b：切片读写链路 + `.(T)` 通用后缀链 + `void` 槽静态还原，2026-10-01）
+
+- **动手前逐形态复测，在册缺口全部成立**：改前 `.(T)` 只能出现在 postfix 开头（走独立的 `parse_deref_chain`），`p[i].(i32)`、`p.().()`、切片读 `p[a..b]`、切片写 `p[a..b] = {…}` / `= "abc"`、`T[n] x = malloc(T[n])`、推断的切片变量 `s = a[lo..hi]` 六类写法要么语法即拒，要么产出非法 C 交给 tcc；`p void = &x` 之后的裸 `p[]` / `q->m` 也还原不出所指类型。
+- **结构按 `PA` 现态改造**：`.(T)` 折进 `parse_postfix` 的通用 postfix 循环，**删除** `parse_deref_chain`（其裸标识符可读性检查与 `last_ident` 记录在 `parse_primary` 里已有，不构成行为缺口）。「已生成的前缀 C 文本」由既有的 `cgen_mark` / `cgen_slice` / `cgen_truncate` 支撑，新增 `cgen_take_prefix()` 截回前缀文本（连同缩进一起截掉，再按 `%*s` 重发），`c_cast_name()` 让数组类型写成合法的 `T (*)(dims)` 而不是 `T**`，`deref_prefix()` / `deref_step()` 各负责一层解引用与 `.()` 的越界检查（§12.1：读取宽度超过指针所指对象的静态字节数即报错，前缀不是裸标识符时保守不检查）。
+- **声明体改成「先解析右值、后出声明头」**：原结构先出声明头再出右值，而切片与退化两种形态要求先知道右值是什么。声明头据此四档成形：函数指针、推断的切片变量 `T *name`（视图，不复制）、数组退化 `T (*name)[…]`（新增 `c_decay_suffix()`，只省略最前一个维度）、普通声明。`&x` 与 `malloc(T)` 在声明处把所指类型与字节数登记进 `Symbol.pointee_bytes` / `pointee_type`（新增 `peek_ahead_ident()` / `ctype_persist()` / `record_init_pointee()`），`void` 槽上的裸 `.()` / `p[]` / `->m` 据此静态还原（`PA-55`）；还原不出时 `->m` 与带索引下标各给专属报错，绝不产出非法 C。
+- **切片状态经 `ParserState` 传给接收方**：新增 `rhs_was_slice` / `slice_lmark` / `slice_len_known` / `slice_len` 四个字段，把「刚解析的表达式以切片读结尾」及其边界从 `parse_postfix` 带到使用点；`parse_assign` 用 `slice_lmark == lmark` 门控，保证只有「赋值左侧整体就是这次切片读」才走写回——值列表逐元素写成逗号表达式，字符串右值按字节 `memcpy`（含结尾 `\0`），`strlen > b-a` 报 `string needs N bytes with terminator, slice holds M`，其余右值形态专属报错。`parse_expression` 末尾统一复位五个标志（含 `lhs_was_deref`），不再由解引用链单独清零；`cgen_truncate()` 换成按残留文本末字符重算 `at_line_start` 的版本，否则回退后重发缩进会错位。
+- **一处在册清单外的必要修复（`infer_init_type()`）**：`pos/slice_str_infer.nc` 带来后编译失败——`talk = xiaoming.say;` 这类成员访问把**变量符号当类型符号**用。按 `PA` 现态重写其标识符分支：右值为调用时取被调（或函数指针）的返回类型、为成员访问时取成员类型（数组成员退化成 `T*`）、聚合体变量本身作右值时保留标签符号。口径与 P5 的 `c_type_suffix` 先例一致：移植项的既有依赖一并跟上，不在本分支另造第二套语义。
+- **刻意不回灌的一条**：`PA` 的 `cgen_string_lit()`（产物 C 字符串字面量的转义归一，`PA-50`，即在册 **P9**）不属于本轮结构，切片写的字符串右值仍按现有口径直出字面量，代码注释与 `IMPLEMENTATION_STATUS.md` 都点名了这笔欠账。
+- **用例与忠实性**：自 `PA` 逐字带来 7 份——`pos/deref_slice`、`pos/len_builtin`、`pos/slice_str_infer`、`pos/void_slot_infer`、`err/deref_bounds`、`err/slice_str_overflow`、`err/void_member_unknown`（各带 `.expect`，文案与 `PA` 逐字相同故直接可用）。另按**产物 C 逐字节比对**验证移植忠实：四个切片相关用例在本分支与 `PA` 生成的 C 完全相同。
+- **IR 前端零改动**：七份新用例逐条实测，全部在 `irparse` 的**解析层**即被拒（多维/切片声明、`.(T)`、切片写都不是 IR 子集），`IR_SUBSET` / `IR_ERR_COVERED` 名单一份都不加，加进去等于把「IR 未实现」标成已完成。
+- **门禁复跑（实测）**：`xmake test --all` → c / native 各 **45P / 0F / 6S**（各 +7 PASS），ir-c / ir-native 各 **15P / 0F / 33S**（PASS 不变、SKIP +7），跨后端一致性 **37P / 0F** 不变（新增 pos 全带 `.expect`，按 `xmake.lua` 的一致性口径不进比对档），examples c / native **6/7**、ir-native **7/7** 与 P6 基线一字不变——唯一失败仍是既有的 `06_cooking.nc`（下表 P11 的 cooking 缺口，本轮无关，改前基线同值）。
+- **簿记**：`docs/IMPLEMENTATION_STATUS.md` 新增「指针后缀链与切片」一节；本轮 `parser.c` 净增 288 行且**位移非单调**（解引用链整段替换使中段先加后减），故不列位移表，把该文件的 `parser.c` 锚点全部按新行号逐个 grep 复核，顺带改正三处自 1.0 冻结线后从未重算的既有失准锚点（`is lo..hi` 行、`is_const`/`is_static` 行、§12.2 的参数前缀解析行）。`docs/TODO-PB.md` 的 P5b 行转 ✅，PB-33 至此 **P1 ~ P6 与 P5b 全部落地**，下一轮 **P7**（`PA-57` 剩余合规项）。
+
 ### 2.0 线回灌轮（PB-33 的 P6：编译器版本号改构建期注入做单一真源，2026-10-01）
 
 - **复测先在 `HEAD` 上做，缺口成立且比在册描述更具体**：本分支同时存在**三套**版本值——`xmake.lua` 的 `set_version("1.0.0")`、`ncc.h` 的 `#define NIHAO_VERSION "0.1.0"`、以及 `ncc.c` 里 `nihao init` 生成 `nihao.toml` 时**另一处**硬编码的 `"0.1.0"`；用户可见的 `--version`、帮助横幅、`-v` verbose 启动行因此全打印 `v0.1.0`。`PA` 的 PA-35 登记里推测「PB 侧 `set_version` 为 2.0 口径」，实测不成立（本分支是 `1.0.0`），故本轮**取本分支现值 `1.0.0` 作单一真源**，不自造一个 2.0 号——上抬版本号属发布动作，留给 ltree 决定。
