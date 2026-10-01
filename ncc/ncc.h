@@ -368,6 +368,7 @@ int is_visibility_token(TokenType tok);
 /* cgen.c - C backend */
 void cgen_init(void);
 void cgen_raw(const char *fmt, ...);
+void cgen_string_lit(const char *s);   /* 字面量按 C 转义序列重新编码后输出 */
 void cgen_line(const char *fmt, ...);
 void cgen_blank(void);
 void cgen_indent(void);

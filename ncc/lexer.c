@@ -258,7 +258,12 @@ static void parse_number(LexerState *lex, int first_char)
         lex->tok_val.f = strtod(buf, NULL);
     } else {
         lex->tok = TOK_INT_CONST;
-        lex->tok_val.i = strtoll(buf, NULL, 0);
+        if (is_binary) {
+            /* base 0 只自动识别 `0x`，`0b` 会被截断成 0；二进制档显式按基 2 解析 */
+            lex->tok_val.i = strtoll(buf + 2, NULL, 2);
+        } else {
+            lex->tok_val.i = strtoll(buf, NULL, 0);
+        }
     }
 }
 

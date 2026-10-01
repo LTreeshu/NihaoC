@@ -130,6 +130,49 @@ void cgen_truncate(int mark)
     }
 }
 
+/* 字符串字面量落地：词法器已把 `\n` / `\t` 等解码成真字节，原样写进产物 C 会得到
+ * 一个内含换行的字面量——tcc 作为扩展容忍，gcc / clang / MSVC 会直接拒绝，
+ * 所以这里按 C 转义序列重新编码（>=0x80 的 UTF-8 字节原样保留） */
+void cgen_string_lit(const char *s)
+{
+    char out[1024];
+    int n = 0;
+
+    cgen_raw("\"");
+    for (; s && *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        char one[8];
+        const char *esc;
+        switch (c) {
+            case '\n': esc = "\\n"; break;
+            case '\t': esc = "\\t"; break;
+            case '\r': esc = "\\r"; break;
+            case '\a': esc = "\\a"; break;
+            case '\b': esc = "\\b"; break;
+            case '\f': esc = "\\f"; break;
+            case '\v': esc = "\\v"; break;
+            case '\\': esc = "\\\\"; break;
+            case '"':  esc = "\\\""; break;
+            default:
+                if (c < 0x20 || c == 0x7f)
+                    snprintf(one, sizeof(one), "\\%03o", c);
+                else { one[0] = (char)c; one[1] = '\0'; }
+                esc = one;
+                break;
+        }
+        int el = (int)strlen(esc);
+        if (n + el >= (int)sizeof(out)) {
+            out[n] = '\0';
+            cgen_raw("%s", out);
+            n = 0;
+        }
+        memcpy(out + n, esc, el);
+        n += el;
+    }
+    if (n > 0) { out[n] = '\0'; cgen_raw("%s", out); }
+    cgen_raw("\"");
+}
+
 /* ============================================================
  * Type name mapping: NihaoC CType -> C type string
  * Uses a small static buffer; caller must consume immediately.

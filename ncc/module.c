@@ -78,14 +78,25 @@ Module *module_import(CompilerState *cs, const char *name)
     static const char *candidates[8];
     char cwd_path[512], src_path[512], std_path[512];
     int ncand = 0;
-    snprintf(cwd_path, sizeof(cwd_path), "%s.nc", name);
+    /* 点号分隔的模块路径（`use std.io`）按目录层级找文件：std/io.nc。
+       模块名本身仍是点号形式，供符号查找使用。 */
+    char slashed[512];
+    size_t si = 0;
+    for (const char *q = name; *q && si + 1 < sizeof(slashed); q++)
+        slashed[si++] = (*q == '.') ? '/' : *q;
+    slashed[si] = '\0';
+    snprintf(cwd_path, sizeof(cwd_path), "%s.nc", slashed);
     candidates[ncand++] = cwd_path;
     if (dirbuf[0]) {
-        snprintf(src_path, sizeof(src_path), "%s/%s.nc", dirbuf, name);
+        snprintf(src_path, sizeof(src_path), "%s/%s.nc", dirbuf, slashed);
         candidates[ncand++] = src_path;
     }
-    snprintf(std_path, sizeof(std_path), "stdlib/%s.nc", name);
+    snprintf(std_path, sizeof(std_path), "stdlib/%s.nc", slashed);
     candidates[ncand++] = std_path;
+    /* 点号原样拼出的路径也试一次，兼容名为 `a.b` 的单段模块文件 */
+    char dotted_path[512];
+    snprintf(dotted_path, sizeof(dotted_path), "stdlib/%s.nc", name);
+    candidates[ncand++] = dotted_path;
 
     source = NULL;
     for (int ci = 0; ci < ncand; ci++) {

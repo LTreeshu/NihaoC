@@ -1,0 +1,5 @@
+for decl init ok
+for assign step ok
+for infer init ok
+for paren init ok
+for call step ok

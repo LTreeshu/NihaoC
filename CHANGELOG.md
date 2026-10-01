@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+### 2.0 线回灌轮（PB-33 的 P7：`PA-57` 语法标准对齐轮的剩余合规项，2026-10-01）
+
+- **动手前逐形态复测，在册清单被砍掉三分之一**：`PA` 的 PA-57 一轮修 11 处，其中**四档数组容量写法**（P5 已作核对项）、`void` 槽的 `Symbol.pointee_type`（P5b 已带）、`[[export "…"]]` 的字符串字面量写法（属性循环本就吞掉字符串参数，对 C 输出无效但不报错）三条在本分支**早已成立**，不是移植项；**designator 初始化**（PA-57⑥）则相反——本分支连基础形态都没有（`Symbol.def_init` / `member_default_text()` / `default_init_text()` / `MAX_INIT_DESIGATORS` 全零命中），整条降给 **P8**；`linkas` 专属诊断降给 **P10**。教训与 PA-51 那条「每轮动手前先在 PB 复测」完全同型。
+- **语句终止符改成包装层**：`;` / `#` 原先由每条语句分支各自处理，现由 `parse_statement()` 进门先吃掉连续终止符（单独成句即空语句）、出口再吃掉尾随终止符，原先的一次性大函数改名 `parse_statement_impl`。这一改顺带把「`#` 是兼容语句终止符」这条设计裁定真正接到实现上。
+- **`(T)` 括号类型带有限前瞻**：`parse_type` 新增 `TOK_LPAREN` 档（括号只分组，其后 `[N]` 仍由后缀循环接住）。直接加这一档会让 `f(GREEN)`、`add(i32 a, b)` 这类调用被误读成「括号类型声明」，故新增词法状态快照式的前瞻 `peek_ahead()` 与判据 `is_paren_type_ahead()`（`(` 后只认基本类型 token 且紧跟 `)`），由四处「像调用还是声明」的分派共用；整份源码常驻且 token 字符串新分配，因此还原快照是安全的。
+- **`for` 头补声明式 init**：`for i i32 = 0; …` 走「标记 → `parse_declaration` → 回取文本 → 去掉收尾 `;` 与空白 → 拼进 `for (`」，因此 `cgen_raw("for (")` 从公共前置下放到各分支；推断档 `for i = 0` 同时改为按 `PA` 用 `infer_init_type` 输出声明。推断档里的常量可见性**保留本分支的 `VIS_VAR` 口径**——`Visibility` 枚举两侧不兼容，不随本轮收敛。
+- **一元 `+` 只作字面量前缀**：`parse_primary` 头部只在 `+` 后紧跟整/浮字面量时消费并递归，C 侧不发正号；其余位置的 `+` 仍是二元运算符，没有借机放宽成一元加。
+- **`is` 的整数模式重写成带符号档**：`is -5` / `is +5` / `is -3..7` 两端各可带符号，`-` 后不是整数、区间上界不是整数各有专属诊断；反向区间 `is 5..1` 改为**编译期拒绝**（`empty 'is' range 5..1: lo must be <= hi`），不再生成一条永假的比较式。
+- **`0b1010` 的**值**是一处静默错值（词法层）**：本分支词法器早已能扫 `0b` / `0B`，但整数收尾用 `strtoll(buf, NULL, 0)`，base 0 只自动识别 `0x`，于是二进制字面量一律截成 **0**——不报错、不拒绝，直接给错值。改为二进制档显式按 base 2 收尾。
+- **顶层 `use` / `link` / 终止符可任意交错，且 `use a.b.c` 支持点号多段**：原先「先 `use` 后 `link`」两段顺序循环合成一个交错循环，点号累加段缺名即报 `expected module name after '.' in 'use'`；模块名保持点号形式供符号查找，查文件时由 `module.c` 另按目录层级试 `std/io.nc`（点号原样拼出的候选保留一次尝试，兼容单段命名）。
+- **一处在册清单外的必要修正（`cgen_string_lit()`）**：`pos/literal_forms` 带来后复测不过——产物 C 里出现 `warning: unknown escape sequence: '\q'` 与 `error: ';' expected`，根因正是**实测表 F2 / `PA` 的 PA-50**（词法器把 `\n` 解码成真字节后直出）。原计划留 P9，本轮被迫提前：新增 `cgen_string_lit()` 按 C 转义序列重新编码（控制符走短转义、其余 `<0x20` 与 `0x7f` 走八进制、`>=0x80` 的 UTF-8 字节原样保留、缓冲将溢出前先 flush），字面量出口与切片写的字符串出口两处改走它。改后**门禁全部 57 份产物 C 过 `clang -fsyntax-only`**，即 F2 在本分支结案，**P9** 只剩「把该抽查接进 `xmake.lua`」一件事。口径同 P5 的 `c_type_suffix` 与 P5b 的 `infer_init_type` 先例。
+- **一份用例自身的错误被顺手揪出**：`pos/ir_struct.nc` 是 `PA` 在 PA-57 **之前**的版本，末行实际打印 `struct copy bad`；因为它**没有** `.expect`，只进跨后端一致性档，四个后端同样错误即判定一致 → **长期静默 PASS**。换成 `PA` 修正版并补 8 行 `.expect` 后四后端逐行比对通过，代价是它移出一致性档（`xmake.lua` 的计数口径：带 `.expect` 的 pos 用例只计入各后端 PASS 列）——同一轮里 c/native 由 45P 升到 53P、ir-c 由 15P 升到 16P、一致性由 37P 降到 36P，三处数字变动都源于此。
+- **用例与忠实性**：自 `PA` 逐字带来 7 份——`pos/stmt_terminators`、`pos/type_forms`、`pos/for_init_forms`、`pos/literal_forms`、`pos/is_pattern_forms`、`pos/module_top_forms`、`err/is_empty_range`（`.expect` 走子串匹配，A 后端诊断文案与 `PA` 逐字相同故直接可用）。
+- **IR 前端零改动**：六份 pos 用例或不在 IR 子集、或在 `irparse` 解析层被拒，`IR_SUBSET` 一份不加。`err/is_empty_range` 是本轮唯一「IR 侧**本就有**同类检查」的例外——`irparse.c` 早已在编译期拒绝反向区间，但文案是 `ir: invalid range in 'is' pattern (5..1, lo > hi)`，与共用 `.expect` 的子串匹配口径不符，故刻意留 SKIP。这是「入白名单需要的不只是能力，还需要同文案」的又一例。
+- **门禁复跑（实测）**：`xmake test --all` → c / native 各 **53P / 0F / 6S**，ir-c / ir-native 各 **16P / 0F / 40S**，跨后端一致性 **36P / 0F**，examples c / native **6/7**、ir-native **7/7**——唯一失败仍是既有的 `06_cooking.nc`（下表 P11 的 cooking 缺口，本轮无关，改前基线同值）。另把门禁全部产物逐份交 `clang -fsyntax-only` 做语法体检，**57/57 全过**。
+- **簿记**：`docs/IMPLEMENTATION_STATUS.md` 新增「语句终止符与语法形态合规」一节；`parser.c` 本轮净增 130 行且**位移非单调**（`parse_is_stmt` 整数模式整段替换、`parse_module` 两段循环合成一段），故依旧不列位移表，该文件的 `parser.c` 锚点全部按新行号逐个 grep 复核，顺带改正一处**既有失准锚点**（`alignof` 标识符路径旧记 2357，实为现 2541；2357 一直是 `vis_check_usable()` 那处）。`docs/TODO-PB.md` 的 P7 行转 ✅，用例结转计数由 27/16 更正为 **34 已进 / 9 余**。
+
 ### 2.0 线回灌轮（PB-33 的 P5b：切片读写链路 + `.(T)` 通用后缀链 + `void` 槽静态还原，2026-10-01）
 
 - **动手前逐形态复测，在册缺口全部成立**：改前 `.(T)` 只能出现在 postfix 开头（走独立的 `parse_deref_chain`），`p[i].(i32)`、`p.().()`、切片读 `p[a..b]`、切片写 `p[a..b] = {…}` / `= "abc"`、`T[n] x = malloc(T[n])`、推断的切片变量 `s = a[lo..hi]` 六类写法要么语法即拒，要么产出非法 C 交给 tcc；`p void = &x` 之后的裸 `p[]` / `q->m` 也还原不出所指类型。
