@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 2.0 线回灌轮（PB-33 的 P9：产物 C 的可移植性抽查接进门禁，2026-10-02）
+
+- **本轮是纯构建配置回灌**：前端代码一行未动、用例零新增，只把 `PA` 侧早已存在的产物 C 语法抽查接到本分支的 `xmake.lua` 门禁里。三段接线**逐字取自 `PA`**——本分支与 `PA` 的 `xmake.lua` 差异只在后端名单与 IR 跳过名单，不在这三段，照抄可避免两条线各养一套抽查口径。
+- **补的是 F2 / `PA-50` 那一类缺陷的拦截面**：tcc 把「字符串字面量内含真换行字节」当作扩展容忍，gcc / clang / MSVC 会直接拒，而门禁全程跑在 tcc 下，所以此类产物 C 缺陷此前只能靠每轮**人工**逐份体检发现（P7、P8 两轮各手工量一次）。接线后转为门禁自动拦截。
+- **探测而非假定**：`task("test")` 内 `import("lib.detect.find_program")`，开跑前按 `clang` → `gcc` → `cc` 依次对一份最小探针源码（`build/.strict_probe.c`）跑 `-fsyntax-only`，探到可用的那个才赋给 `strict_cc`。理由记在 `PA` 侧的注释里：msys 的 gcc 缺 include 路径时会全线误报，若直接信任 `find_program` 的名字命中，门禁会红成一片；三者都探不到则 `strict_cc` 为空、抽查整体降级为不做。
+- **抽查点放在 c 档 pos 循环**：编译成功、产物可执行文件已就位之后，`b == "c"` 且 `strict_cc` 非空时把 `<exe>.c` 再交外部编译器 `-fsyntax-only`，非零即 `[FAIL] pos/<stem>.nc: 产物 C 被 <cc> 拒绝（tcc 之外的编译器不可解析）` 并计入 FAIL、跳过后续运行比对。
+- **覆盖面按实测数清，不引入 `STRICT_SKIP`**：66 份 pos 用例中，6 份 `IR_ONLY` 在 c 档本就先 SKIP，2 份无 `main` 的 module 用例在抽查点之前就走到「只出 `.c`、不产 exe」的分支，故真正到得了抽查的是 **58 份产物 C，全绿**。正因为当前零红，加跳过名单等于先承认有红，本轮**一个名单都不建**。
+- **配置类改动最坏是「接了但从不触发」，故做阴性对照**：临时把一份故意非法的 C 顶到某份产物上，门禁立刻给出 `[FAIL] pos/struct_member_default.nc: 产物 C 被 clang.exe 拒绝（tcc 之外的编译器不可解析）`、该 filter 下 `0 passed, 1 failed`；随后产物与临时文件全部还原。第一次对照（把抽查指向 `.nc` 源文件而非产物 C）判据不成立——`clang -fsyntax-only` 不看文件后缀，仍然 PASS，故改成构造非法 C 才测得出来。
+- **门禁复跑（实测）**：`xmake test --all` → c / native 各 **57P / 0F / 6S**，ir-c / ir-native 各 **16P / 0F / 44S**，跨后端一致性 **36P / 0F**，examples c / native **6/7**、ir-native **7/7**——四档与 P8 基线**逐项一字不变**，0 条新红本身就是 P7 手工基线（57/57）被自动复现的证据。唯一失败仍是既有的 `06_cooking.nc`（下表 P11 的 cooking 缺口，本轮无关，改前基线同值）。
+- **簿记**：`xmake.lua` 净增 34 行（415 → 449），插入点在被引用为 err 跳过规则那一行的**前面**，故该锚点在本分支文档里由 312 更正为 346（规则文本一字未改）；`docs/TODO-PB.md` 表内各轮的 `xmake.lua` 行号是逐轮快照，按「现值只查 `docs/IMPLEMENTATION_STATUS.md`」的约定不重算。`docs/IMPLEMENTATION_STATUS.md` 追加 P9 基线表、把符号级普查那行的「抽查未接线」转为结案、差异表 F2 行追记「由人工体检转为门禁自动拦截」；`docs/TODO-PB.md` 的 P9 行转 ✅，下一轮 **P10**（`linkas` 与 cooking 块的形态专属诊断）。
+
 ### 2.0 线回灌轮（PB-33 的 P8：聚合成员默认值整条机制，2026-10-02）
 
 - **动手前逐形态复测，在册缺口按字面成立**：`Symbol.def_init`、`member_default_text()`、`default_init_text()`、`MAX_INIT_DESIGATORS` 四个符号在本分支**全部零命中**；`struct P { i32 x = 7  y i32 }` 出成 `typedef struct P { int32_t x = 7; } P;`——C 的字段声明不允许初值，tcc 报 `invalid number`，即**实测表 F1** 在本分支原样复现；`.[ttl] = 7` 指定式与「聚合类型数组的成员默认值」则连失败形态都没有，直接语法即拒。
