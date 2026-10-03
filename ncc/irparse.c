@@ -1794,6 +1794,37 @@ static void ir_static_assert(CompilerState *cs)
     }
 }
 
+/* 跳过当前 cooking item 的剩余部分：词法器在括号与花括号内不发换行 token，故以 item
+ * 的起始行界定，换到下一行、遇到 `;` / `#` 终止符或块尾即停。与 A 后端 skip_cooking_item
+ * 同口径；用 last_line_num（当前 token 所在行）而非 line_num（缓冲区位置，滞后一个 token）。 */
+static void ir_skip_cooking_item(CompilerState *cs, int start_line)
+{
+    while (cur_tok(cs) != TOK_SEMICOLON && cur_tok(cs) != TOK_POUND &&
+           cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF &&
+           cs->parser.lex->last_line_num == start_line)
+        next_tok(cs);
+}
+
+/* 截取编译期函数体源文本：mark 是 '=' 之后的缓冲区位置，扫到行尾 / `;` / `#` / `}` 为止。
+ * 必须按字符扫而非按 token 流末位定位——旧写法在 next_tok 消费掉 `=` 之后才取 mark，
+ * 那时词法器已扫过体的首个 token，首 token 被静默丢掉（`x * x` 变成 `* x`）；而其
+ * end = buf_ptr 又要等 token 流走到换行/块尾，花括号内不发换行 token，于是一路吞掉
+ * 同块后续 item。返回长度，空体返回 0，超长返回 -1。 */
+static int ir_capture_body(CompilerState *cs, const char *mark, char *dst, int dst_sz)
+{
+    const char *p = mark;
+    const char *end = cs->parser.lex->buf_end;
+    while (p < end && *p != '\0' && *p != '\n' && *p != ';' && *p != '#' && *p != '}') p++;
+    while (p > mark && (p[-1] == ' ' || p[-1] == '\t' || p[-1] == '\r')) p--;
+    while (p > mark && (*mark == ' ' || *mark == '\t')) mark++;
+    int n = (int)(p - mark);
+    if (n <= 0) { dst[0] = '\0'; return 0; }
+    if (n >= dst_sz) return -1;
+    memcpy(dst, mark, (size_t)n);
+    dst[n] = '\0';
+    return n;
+}
+
 /* cooking { ... }：编译期块——执行 static_assert；`const NAME [TYPE] = expr`
  * 声明编译期变量（ct_vars 表，跨块共享）；其余 item 跳过 */
 static void ir_cooking(CompilerState *cs)
@@ -1835,23 +1866,22 @@ static void ir_cooking(CompilerState *cs)
                     }
                     expect(cs, TOK_RPAREN);
                     if (cur_tok(cs) == TOK_ASSIGN) {
-                        next_tok(cs);
-                        /* 截取表达式源文本（mark buf_ptr → 行尾） */
-                        LexerState *lx = cs->parser.lex;
-                        char *mark = lx->buf_ptr;
-                        while (cur_tok(cs) != TOK_NEWLINE && cur_tok(cs) != TOK_RBRACE &&
-                               cur_tok(cs) != TOK_EOF) next_tok(cs);
-                        char *end = lx->buf_ptr;
-                        int n = (int)(end - mark);
-                        if (n > 0 && n < (int)sizeof(ct_funcs[cf].expr_src)) {
-                            memcpy(ct_funcs[cf].expr_src, mark, (size_t)n);
-                            ct_funcs[cf].expr_src[n] = '\0';
+                        /* mark 取在消费 `=` 之前：此刻 buf_ptr 正好停在 '=' 之后 */
+                        char *mark = cs->parser.lex->buf_ptr;
+                        int body_line = cs->parser.lex->line_num;
+                        int n = ir_capture_body(cs, mark, ct_funcs[cf].expr_src,
+                                                (int)sizeof(ct_funcs[cf].expr_src));
+                        if (n > 0) {
                             ct_funcs[cf].name = cname;
                             ct_funcs[cf].param_count = pc;
                             ct_funcs_count++;
+                        } else if (n == 0) {
+                            nihao_error(cs, "ir: cooking function '%s' has empty body", cname);
                         } else {
                             nihao_error(cs, "ir: cooking function body too long");
                         }
+                        next_tok(cs);               /* '=' → 进入体，按行跳到行尾 */
+                        ir_skip_cooking_item(cs, body_line);
                     } else {
                         nihao_error(cs, "ir: cooking function: expected '='");
                     }

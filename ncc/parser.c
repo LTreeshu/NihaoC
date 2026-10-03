@@ -2382,6 +2382,83 @@ static long long ct_var_find(const char *name)
 }
 
 static long long pc_or(CompilerState *cs);
+
+/* ---- 编译期函数（<ct-func-def> / <ct-func-call>，BNF §8）----
+ * cooking 块内 `const NAME(p1, p2) = expr` 只登记体源文本；调用 NAME(a, b) 时
+ * 把形参名按词边界替换成实参字面量，再用临时词法器对替换结果跑一遍 pc_or。
+ * 实参须是编译期常量。 */
+#define PC_MAX_CTFUNC 32
+#define PC_MAX_CTFPARAM 4
+static struct {
+    const char *name;
+    char params[PC_MAX_CTFPARAM][64];
+    int param_count;
+    char expr_src[512];
+} ct_funcs[PC_MAX_CTFUNC];
+static int ct_funcs_count;
+
+static int ct_func_find(const char *name)
+{
+    for (int i = 0; i < ct_funcs_count; i++)
+        if (strcmp(ct_funcs[i].name, name) == 0) return i;
+    return -1;
+}
+static int ctf_ident_ch(int c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+}
+static long long ct_func_call(CompilerState *cs, int cf, long long *args, int ac)
+{
+    char buf[512];
+    int bi = 0;
+    const char *src = ct_funcs[cf].expr_src;
+    int i = 0, trunc = 0;
+    while (src[i] != '\0') {
+        int room = (int)sizeof(buf) - bi - 1;   /* 留出末尾 '\0' */
+        if (room <= 0) { trunc = 1; break; }
+        if (ctf_ident_ch((unsigned char)src[i])) {
+            int j = i;
+            while (ctf_ident_ch((unsigned char)src[j]) || (src[j] >= '0' && src[j] <= '9')) j++;
+            int plen = j - i;
+            int pi = -1;
+            for (int k = 0; k < ct_funcs[cf].param_count; k++)
+                if ((int)strlen(ct_funcs[cf].params[k]) == plen &&
+                    strncmp(src + i, ct_funcs[cf].params[k], (size_t)plen) == 0) {
+                    pi = k; break;
+                }
+            if (pi >= 0 && pi < ac) {
+                int w = snprintf(buf + bi, (size_t)room + 1, "%lld", args[pi]);
+                if (w < 0 || w > room) { trunc = 1; break; }
+                bi += w;
+            } else {
+                if (plen > room) { plen = room; trunc = 1; }
+                memcpy(buf + bi, src + i, (size_t)plen);
+                bi += plen;
+            }
+            i = j;
+        } else {
+            buf[bi++] = src[i++];
+        }
+    }
+    buf[bi] = '\0';
+    if (trunc) {
+        /* 展开后超过 512 字节：宁可报错也不求值一个被截断的表达式 */
+        nihao_error(cs, "cooking function '%s' expands beyond 512 bytes",
+                    ct_funcs[cf].name);
+        return 0;
+    }
+
+    /* 临时词法器求值：lexer_init 不复制源文本，栈上 buf 在嵌套求值期间有效 */
+    LexerState tlex;
+    LexerState *save = cs->parser.lex;
+    cs->parser.lex = &tlex;
+    lexer_init(cs, "<cooking-fn>", buf);
+    lexer_next(&tlex);
+    long long v = pc_or(cs);
+    cs->parser.lex = save;
+    return v;
+}
+
 static long long pc_prim(CompilerState *cs)
 {
     TokenType t = cur_tok(cs);
@@ -2416,6 +2493,41 @@ static long long pc_prim(CompilerState *cs)
     }
     if (t == TOK_IDENTIFIER) {
         const char *name = cs->parser.lex->tok_str;
+        int cf = ct_func_find(name);
+        if (cf >= 0) {
+            /* <ct-func-call> ::= NAME "(" <expr> { "," <expr> } ")"：宏式展开求值 */
+            LexerState *lx = cs->parser.lex;
+            lx->peek_valid = 0;
+            lexer_peek(lx);
+            TokenType pk = (TokenType)lx->peek_tok;
+            lx->peek_valid = 0;
+            if (pk == TOK_LPAREN) {
+                next_tok(cs);
+                next_tok(cs);                       /* NAME '(' */
+                long long args[PC_MAX_CTFPARAM];
+                int ac = 0, total = 0;
+                if (cur_tok(cs) != TOK_RPAREN) {
+                    for (;;) {
+                        long long a = pc_or(cs);
+                        if (ac < PC_MAX_CTFPARAM) args[ac] = a;
+                        ac++;
+                        total++;
+                        if (cur_tok(cs) != TOK_COMMA) break;
+                        next_tok(cs);
+                    }
+                }
+                if (cur_tok(cs) == TOK_RPAREN) next_tok(cs);
+                else nihao_error(cs, "cooking function '%s': expected ')'", name);
+                if (total != ct_funcs[cf].param_count) {
+                    /* 实参个数先校验再展开：体形参名若配不上实参，展开后会
+                     * 退化成 'unknown identifier'，一条错变成一串错 */
+                    nihao_error(cs, "cooking function '%s' takes %d arg(s), got %d",
+                                name, ct_funcs[cf].param_count, total);
+                    return 0;
+                }
+                return ct_func_call(cs, cf, args, ac);
+            }
+        }
         if (ct_var_exist(name)) { next_tok(cs); return ct_var_find(name); }
         Symbol *s = sym_find(cs, name);
         if (s && s->kind == SYM_ENUM) { next_tok(cs); return (long long)s->addr; }
@@ -2551,6 +2663,24 @@ static void skip_cooking_item(CompilerState *cs, int start_line)
         next_tok(cs);
 }
 
+/* 截取编译期函数体源文本：mark 是 '=' 之后的缓冲区位置，扫到行尾 / `;` / `#` / `}` 为止。
+ * 必须按字符扫而非按 token 流末位定位——括号与花括号内词法器不发换行 token，
+ * 用 token 定位会一路吞掉同块后续 item。返回长度，空体返回 0，超长返回 -1。 */
+static int ct_capture_body(CompilerState *cs, const char *mark, char *dst, int dst_sz)
+{
+    const char *p = mark;
+    const char *end = cs->parser.lex->buf_end;
+    while (p < end && *p != '\0' && *p != '\n' && *p != ';' && *p != '#' && *p != '}') p++;
+    while (p > mark && (p[-1] == ' ' || p[-1] == '\t' || p[-1] == '\r')) p--;
+    while (p > mark && (*mark == ' ' || *mark == '\t')) mark++;
+    int n = (int)(p - mark);
+    if (n <= 0) { dst[0] = '\0'; return 0; }
+    if (n >= dst_sz) return -1;
+    memcpy(dst, mark, (size_t)n);
+    dst[n] = '\0';
+    return n;
+}
+
 /* cooking { ... }：编译期块——static_assert 求值 + 编译期常量声明 */
 static void parse_cooking_block(CompilerState *cs)
 {
@@ -2579,13 +2709,63 @@ static void parse_cooking_block(CompilerState *cs)
                 next_tok(cs);
                 if (is_type_token(cur_tok(cs))) next_tok(cs);
                 if (cur_tok(cs) == TOK_LPAREN) {
-                    /* <ct-func-def>（BNF §8）是本分支要实现的范围（不是 1.x 那种永久出局），
-                     * 但当前尚未落地；旧写法一路落到 `cooking const: expected '='`，
-                     * 把「带参数的编译期函数」报成「缺等号」。现给专属诊断。 */
-                    nihao_error(cs, "cooking function '%s' is not implemented yet; a cooking "
-                                    "block supports only 'static_assert(...)' and "
-                                    "'const NAME = expr' for now", cname);
-                    skip_cooking_item(cs, item_line);
+                    /* <ct-func-def> ::= const NAME "(" <identifier> { "," <identifier> } ")"
+                     * "=" <expr>（BNF §8）：登记形参名与体源文本，调用时才求值。
+                     * 这一档在 P10 只有专属诊断（`is not implemented yet`），本轮补上实现。 */
+                    if (ct_funcs_count >= PC_MAX_CTFUNC) {
+                        nihao_error(cs, "too many cooking functions");
+                        skip_cooking_item(cs, item_line);
+                    } else {
+                        int cf = ct_funcs_count;
+                        int pc = 0;
+                        int too_many = 0;
+                        next_tok(cs);               /* '(' */
+                        while (cur_tok(cs) != TOK_RPAREN && cur_tok(cs) != TOK_EOF &&
+                               cur_tok(cs) != TOK_SEMICOLON && cur_tok(cs) != TOK_POUND &&
+                               cs->parser.lex->last_line_num == item_line) {
+                            if (cur_tok(cs) == TOK_IDENTIFIER) {
+                                if (pc >= PC_MAX_CTFPARAM) too_many = 1;
+                                else {
+                                    snprintf(ct_funcs[cf].params[pc], 64, "%s",
+                                             cs->parser.lex->tok_str);
+                                    pc++;
+                                }
+                            }
+                            next_tok(cs);
+                            if (cur_tok(cs) == TOK_COMMA) next_tok(cs);
+                        }
+                        if (too_many) {
+                            /* BNF §8 的参数列表无个数上限，两侧实现均取 4（IR 同）：
+                             * 超出即不登记，避免形参被静默截断后展开出错误常量 */
+                            nihao_error(cs, "cooking function '%s' supports at most %d params",
+                                        cname, PC_MAX_CTFPARAM);
+                            skip_cooking_item(cs, item_line);
+                        } else if (cur_tok(cs) != TOK_RPAREN) {
+                            nihao_error(cs, "cooking function '%s': expected ')'", cname);
+                            skip_cooking_item(cs, item_line);
+                        } else {
+                            next_tok(cs);           /* ')' */
+                            if (cur_tok(cs) != TOK_ASSIGN) {
+                                nihao_error(cs, "cooking function '%s': expected '='", cname);
+                                skip_cooking_item(cs, item_line);
+                            } else {
+                                char *mark = cs->parser.lex->buf_ptr;
+                                int n = ct_capture_body(cs, mark, ct_funcs[cf].expr_src,
+                                                        (int)sizeof(ct_funcs[cf].expr_src));
+                                if (n < 0) {
+                                    nihao_error(cs, "cooking function '%s' body too long", cname);
+                                } else if (n == 0) {
+                                    nihao_error(cs, "cooking function '%s' has empty body", cname);
+                                } else {
+                                    ct_funcs[cf].name = cname;
+                                    ct_funcs[cf].param_count = pc;
+                                    ct_funcs_count++;
+                                }
+                                next_tok(cs);       /* '=' → 进入体，交由按行跳过 */
+                                skip_cooking_item(cs, item_line);
+                            }
+                        }
+                    }
                 } else if (cur_tok(cs) == TOK_ASSIGN) {
                     next_tok(cs);
                     long long v = pc_or(cs);
@@ -2606,7 +2786,8 @@ static void parse_cooking_block(CompilerState *cs)
              * `cooking { K i32 = 3 }` 被逐 token 丢弃，直到 tcc 报 'K' undeclared。
              * 现即时报错并跳过该 item（手法取自 PA-59，文案按本分支口径改写）。 */
             nihao_error(cs, "unsupported cooking item '%s'; this branch provides only "
-                            "'const NAME = expr' and 'static_assert(...)' in a cooking block",
+                            "'const NAME = expr', 'const NAME(params) = expr' and "
+                            "'static_assert(...)' in a cooking block",
                         cur_tok(cs) == TOK_IDENTIFIER ? cs->parser.lex->tok_str
                                                       : token_name(cur_tok(cs)));
             skip_cooking_item(cs, item_line);

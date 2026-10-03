@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 2.0 线回灌轮（PB-33 的 P11：cooking 编译期函数落地 A 后端，并修 IR 侧体源文本错位，2026-10-03）
+
+- **本轮补齐 P10 留下的最后一档占位**：`<ct-func-def>`（`const sq(x) = x * x`）与 `<ct-func-call>` 按 **PA-58** 移植进 A 后端——编译期函数表 `ct_funcs[]`（上限 `PC_MAX_CTFUNC`）、`ct_func_find()`、登记在 `pc_prim()` 的标识符分支（命中即按 `(` 前瞻转入实参循环），调用时由 `ct_func_call()` 把形参名逐个替换成实参字面量、组出一条临时源文本，交给一个临时 `LexerState`（`lexer_init(cs, "<cooking-fn>", buf)`）走同一套 `pc_or()` 求值，算完立即还原 `cs->parser.lex`。三条边界按 `PA` 口径硬限：形参 ≤ `PC_MAX_CTFPARAM`（4）、体源文本 ≤ 512 字节、替换展开撑破缓冲即报 `expands beyond 512 bytes` 而**不截断**。
+- **体源文本必须按字符截，不能按 token 定位**：词法器在括号与花括号内**不发换行 token**（`lexer.c` 里 `TOK_NEWLINE` 的三重深度判据），所以「扫到换行 token 即收尾」在 `cooking { … }` 内根本不成立；`ct_capture_body()` 改从 `lex->buf_ptr` 起按**字符**扫到 `\n` / `;` / `#` / `}`，再剥尾部空白。配套的一条时序：`mark` 要取在**消费 `=` 之前**，因为 `buf_ptr` 永远停在已扫 token 的**后面**，取晚了就把体源文本的第一个字符连同等号一起吞掉。
+- **这正是 IR 侧既有缺陷的根因**：`ir_cooking()` 原先按 token 流末位定位体源文本，「定义与嵌套调用分处相邻两块」时截取窗口错位，`tests/pos/ir_cook.nc` 在 ir-c / ir-native 上报 `ir: constant expression: unexpected token '*'`，报错位置指向 `<cooking-fn>:1:3`——真因在上一条定义，却在下一次调用里炸。本轮把同一套按字符算法带给 IR：新增 `ir_skip_cooking_item()` 与 `ir_capture_body()`，与 A 后端**同判据、同算法**，仅诊断文案加 `ir: ` 前缀；两份实现在两处文件里刻意保持逐字对应，避免两条前端各养一套截取口径。
+- **A 后端侧的跳过判据沿用 P10 那条**：形参循环按 `cs->parser.lex->last_line_num == item_line` 界定，登记完成后 `next_tok()` 再 `skip_cooking_item()`，一条坏 item 不会级联吞掉下一条。兜底文案随之更新为同时列出三种承认的形态（`const NAME = expr` / `const NAME(params) = expr` / `static_assert(...)`），`.expect` 的子串 `unsupported cooking item` 一字未动，既有 err 用例继续成立。
+- **用例与名单归位**：自 `PA` 逐字带来 `pos/cooking_ct_func`（带 `.expect`），并把 `ir_cook` 由 `IR_ONLY` 改列 `IR_SUBSET`、`cooking_ct_func` 直接入 `IR_SUBSET`——在册那句「修好后四后端一致」按字面成立。`xmake.lua` 净增 2 行，只动名单与其注释。
+- **门禁复跑（实测）**：`xmake test --all` → c / native 各 **60P / 0F / 5S**（PASS +1 来自新 pos、SKIP −1 来自 `ir_cook` 移出 `IR_ONLY`），ir-c / ir-native 各 **18P / 0F / 45S**，跨后端一致性 **36P / 0F** 且其中 `consistent, 4 backends` 由 29 增至 **30**，examples 由 6/7 升到 **7/7**（c / native / ir-native 三支全绿）。**计数口径的坑记一笔**：无 `.expect` 的 pos 用例在 c/native 循环里**不出 PASS 行**，只把输出投进一致性池，所以「入 `IR_SUBSET`」不等于「多一格 PASS」——`ir_cook` 在 c 档少的那一格正是这么来的，不是回归。产物 C 侧按 P5b 判据复核：`pos/cooking_ct_func` 与 `examples/06_cooking` 两份产物 C 与 `PA` **逐字节相同**。
+- **量到 IR 侧四处同源缺陷，本轮只登记不修**：给 IR 逐条探针后确认它缺的正是 A 后端那三道闸——① 定义数超过 `ct_funcs[32]` 时**静默越界写**、零条错误；② 展开无 512 字节上限，`snprintf` 与 `memcpy` 可直接顶穿缓冲；③ 形参超过 4 个被静默截断，随后级联出两条不相干报错；④ `sq(2, 3)` 实参个数不符照单全收、给出错值且零错误。四处在 A 后端各有专属诊断（本轮已用探针逐个证明「一条形态只报一条错」），IR 侧要修的是同一套边界，属能力缺口而非文案缺口，留待裁定。
+- **簿记**：`parser.c` 净增 181 行、`irparse.c` 净增 30 行、`xmake.lua` 净增 2 行。`docs/IMPLEMENTATION_STATUS.md` 的锚点重算沿用 P10 的逐行映射法（**目标行源码与源行逐字相同才改号**，映射不到即停手），本轮共改 **106 处 / 31 行**，两处落在被替换区间内的锚点人工对照代码重指（P10 的 `<ct-func-def>` 占位档与裸声明兜底档）。脚本修法本轮学到两条，已写进基线表：**纯插入的 hunk 也要把起始旧行本身映射上**（否则每个插入点之后系统性偏一行），以及比较前**必须剥掉行尾 CR**（`git show HEAD:<file>` 给的是 LF blob，工作区是 CRLF，不剥就全盘匹配不上）。`docs/TODO-PB.md` 的 P11 行转 ✅，下一轮 **P12**。
+
 ### 2.0 线回灌轮（PB-33 的 P10：`linkas` 与 `cooking` 块的形态专属诊断，2026-10-03）
 
 - **移植的是手法，不是文案**：`PA` 的 PA-52 / PA-59 把「未实现形态要么静默丢弃、要么报成通用错」这条毛病在 1.0 线修掉，本轮回灌其诊断结构。但 `PA` 那两句 `is not implemented in 1.x` 在 2.0 线是**错话**——`linkas` 的静态库导出命名要随模块系统一起落地，`<ct-func-def>` 正是下一轮 **P11** 的目标，两形态在本分支属「要实现但尚未落地」，故三处诊断全部按本分支口径重写为 `not implemented yet` + 「本分支只提供 …」。

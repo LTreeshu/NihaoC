@@ -149,8 +149,10 @@ end
 -- IR 子集白名单（与 tests 用例同步维护）
 -- IR_SUBSET: IR 双后端（ir-c/ir-native）可编译运行的通用用例（全量后端也可跑）
 -- IR_ONLY  : IR 专属用例——子集语法（如无类型指针声明），全量 parser 无法编译
-local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true}
-local IR_ONLY = {ir_builtin = true, ir_mr = true, ir_slice = true, ir_sparam = true, ir_cook = true, struct_param_prefix = true}
+-- P11（2026-10-03）把 ir_cook 从 IR_ONLY 移进 IR_SUBSET：A 后端现已支持 <ct-func-def>，
+-- 四后端都能编译运行；cooking_ct_func 随轮直接入 IR_SUBSET（irparse.c 的体源文本改按字符截取后才成立）
+local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true}
+local IR_ONLY = {ir_builtin = true, ir_mr = true, ir_slice = true, ir_sparam = true, struct_param_prefix = true}
 -- IR_ERR_COVERED: err 用例中 IR 前端已实现对应诊断的（未列出的非 m2 用例仍在 IR 侧跳过）
 -- cooking_bare_var 刻意不入：IR 前端对块内裸 <var-decl> 只给 `ir: undeclared variable 'K'`，
 -- 与共用 .expect 的 'unsupported cooking item' 子串不符，入名单等于把 IR 缺口标成已完成
