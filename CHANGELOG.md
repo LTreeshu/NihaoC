@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 2.0 线回灌轮（PB-33 的 P10：`linkas` 与 `cooking` 块的形态专属诊断，2026-10-03）
+
+- **移植的是手法，不是文案**：`PA` 的 PA-52 / PA-59 把「未实现形态要么静默丢弃、要么报成通用错」这条毛病在 1.0 线修掉，本轮回灌其诊断结构。但 `PA` 那两句 `is not implemented in 1.x` 在 2.0 线是**错话**——`linkas` 的静态库导出命名要随模块系统一起落地，`<ct-func-def>` 正是下一轮 **P11** 的目标，两形态在本分支属「要实现但尚未落地」，故三处诊断全部按本分支口径重写为 `not implemented yet` + 「本分支只提供 …」。
+- **改前两条静默路径**：顶层 `linkas "libc.so"` 落进 `parse_declaration` 的通用分支，连报两条 `unexpected token ... at declaration level`，第二条还把 `TOK_STRING_LITERAL` 这类 token 枚举名直接吐给用户；`cooking { K i32 = 3 }` 更糟——整条 item 被逐 token 丢弃，既不落地也不报错，直到 tcc 在产物 C 里报 `'K' undeclared`，报错位置与真因隔了一整层。
+- **`linkas` 整条消费**：新增 `parse_linkas_decl()`，报一条专属诊断后消费 `linkas` 与其后的字符串字面量；挂到两个分派点——`use` / `link` 的交错循环（判据一并加上 `TOK_LINKAS`，使 `use x` 与 `linkas "y"` 任意交错都能走到）与顶层声明循环。
+- **`cooking` 块改成按「形态」分派，不再靠 token 撞运气**：新增 `skip_cooking_item()`，块内每条 item 报错后按**起始行**跳过其余部分；`parse_cooking_block()` 的 item 分派补 `const NAME(...)` 档（`<ct-func-def>`，改前一路落到 `cooking const: expected '='`，把带参数的编译期函数报成「缺等号」）与兜底档（裸 `<var-decl>` 等非承认形态），并让 `const` 缺名 / 缺 `=` 两条既有诊断走同一跳过。
+- **跳过判据必须用 `lex->last_line_num`**：词法器在括号内不发换行 token，故跳过只能按行界定；而 `line_num` 是**缓冲区当前位置**，扫完一行就先到下一行去了，滞后一个 token——按它判会多吞掉下一条 item 的首 token，一条 item 报错连带让下一条形同消失。两份对照探针把这条钉住：块内连排两条坏 item 各报一条错、互不级联；坏 item 之后的合法 `const A i32 = 7` 仍登记成功，其后的 `static_assert(A == 9, "sentinel…")` 照常求值并报出哨兵文案。
+- **用例与 IR 白名单按实测取舍**：新带 2 份 err——`err/linkas_not_implemented`（`.expect` 子串 `linkas`）入 `IR_ERR_COVERED`，因 IR 前端本就报 `ir: unsupported top-level token 'linkas'`；`err/cooking_bare_var`（子串 `unsupported cooking item`）**刻意不入**，IR 侧对块内裸声明只给 `ir: undeclared variable 'K'`，入名单等于把 IR 的缺口标成已完成。顺带量到 IR 侧的同类缺陷仍在：它对 `linkas` 也连报两条、第二条照样透出 `TOK_STRING_LITERAL`；本轮只修 A 后端，缺口登记备查。`irparse.c` / `ncc.h` 一行未改（两个新函数都是 `static`）。
+- **门禁复跑（实测）**：`xmake test --all` → c / native 各 **59P / 0F / 6S**（各 +2 PASS，都是 err 档，故 SKIP 一字不变），ir-c / ir-native 各 **17P / 0F / 45S**（PASS +1 来自入名单那份，SKIP +1 来自刻意不入那份），跨后端一致性 **36P / 0F** 不变，examples c / native **6/7**、ir-native **7/7** 不变。**变化在失败理由**：`06_cooking.nc` 从误导性的 `cooking const: expected '='` 变成自我描述的 `cooking function 'sq' is not implemented yet`，P11 的缺口不必再从错话里反推。
+- **簿记**：`parser.c` 净增 56 行、`xmake.lua` 净增 2 行（名单与其注释）。本轮位移虽**分段单调**，`docs/IMPLEMENTATION_STATUS.md` 的锚点重算依旧不靠位移表：改用 HEAD 与现文件的逐行映射，**映射后的目标行源码与源行逐字相同才改号**，落在被整段替换的区间内即报错停手，共改 332 处 / 68 行。`PA` 侧文件锚点与历史快照行（文首更新日期各行、「逐轮复核」那一行、「旧记 2357」一类既往失准记录）一律不动——机器位移表会把其中一处 `PA` 的行号一并顶掉，跨分支引用只能单独复核。`docs/TODO-PB.md` 的 P10 行转 ✅，下一轮 **P11**（cooking 编译期函数 `<ct-func-def>` / `<ct-func-call>` 落到 A 后端）。
+
 ### 2.0 线回灌轮（PB-33 的 P9：产物 C 的可移植性抽查接进门禁，2026-10-02）
 
 - **本轮是纯构建配置回灌**：前端代码一行未动、用例零新增，只把 `PA` 侧早已存在的产物 C 语法抽查接到本分支的 `xmake.lua` 门禁里。三段接线**逐字取自 `PA`**——本分支与 `PA` 的 `xmake.lua` 差异只在后端名单与 IR 跳过名单，不在这三段，照抄可避免两条线各养一套抽查口径。
