@@ -56,10 +56,19 @@ typedef struct {
     const char *sym;    /* LD_ADDR / 字符串字面量符号 */
 } IrIns;
 
+/* <bracket-attr-list>（BNF §7）的属性位；与 A 后端 parse_declaration 的 attr 串同判据。
+ * export 只带一个可选段名字面量，对本骨架的出码没有影响，故解析后不落位。 */
+#define IR_ATTR_LOCAL  1   /* 内部链接 -> static */
+#define IR_ATTR_INLINE 2   /* 建议内联 -> inline */
+#define IR_ATTR_WEAK   4   /* 弱定义 -> __attribute__((weak)) */
+#define IR_ATTR_USED   8   /* 强制保留 -> __attribute__((used)) */
+#define IR_ATTR_UNUSED 16  /* 标记弃用 -> __attribute__((unused)) */
+
 typedef struct {
     char *name;
     int is_main;
     int is_mr;          /* struct 返回（sret）：返回聚合值（隐藏 out-param 缓冲） */
+    int attrs;          /* <bracket-attr-list>（BNF §7）的 IR_ATTR_* 位掩码 */
     int param_count;
     int vreg_count;     /* 函数内使用的最大 vreg + 1 */
     int label_count;

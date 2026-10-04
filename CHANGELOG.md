@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### 2.0 线回灌轮（PB-33 的 P12：`<bracket-attr-list>` 属性表——A 后端容分行 + IR 前端补解析，2026-10-04）
+
+- **P12 的「开工前置」由规范自己的例子裁掉**：在册那条待裁问题是「属性独占一行、声明写在下一行能不能成立」。不必新裁定——`docs/Chinese.md` 与 `docs/English.md` 的 §7.4 各有 **9 处**示例把 `[[local]]` / `[[inline]]` / `[[weak]]` / `[[used]]` / `[[unused]]` / `[[export ".init"]]` / `[[local, weak]]` 单独占一行、下一行才写签名（另 3 处是同行写法），`BNF.md` §7 的 `<func-decl> ::= [ <bracket-attr-list> ] <return-attr> …` 也没要求两者紧邻。于是分行是**合法形态**，A 后端此前对它的 `unexpected token 'TOK_NEWLINE' at declaration level` 属**实现缺陷**：属性表消费完补一次 `skip_newlines()` 即可。同轮探针复量规范原文那两种形态（`[[export ".init"]]` + 换行 + `static` 头、`[[local, weak]]` + 换行 + `static` 头），改后都能走到出码并运行，属性行后再插空行也照常成立。
+- **顺带堵住属性累加的两个静默洞**：`parse_declaration()` 里把 `strcat(attr, …)` 换成 `strncat()` 并给一次性诊断 `bracket attribute list exceeds 256 bytes`——20 个 `unused` 并列时改前是**无声顶穿 `attr[256]` 栈缓冲**、零报错，改后实测只报一条且不再继续累加；未知属性名（`[[nope]]`）从「静默吞掉、函数照常出码」改为专属诊断 `unknown bracket attribute '%s'`，§7 的六个名字之外没有扩展位。
+- **IR 前端从零补上属性表解析**：新增 `ir_bracket_attr_list()`，先把属性收成 `IrFn.attrs` 位掩码（`ir.h` 新增该字段与 `IR_ATTR_*` 五个位），再由 `ir_to_c.c` 的新 `ir_attr_prefix()` 在**前置原型与函数定义两处**加同一个前缀——只发定义不发原型会让 `static` 函数在 C 里前后矛盾。映射与 A 后端逐字对应：`local`→`static`、`inline`→`inline`、`weak` / `used` / `unused`→`__attribute__((…))`，`export` 的段名字面量照旧只消费不落码。IR 侧用位掩码累加，结构上没有可溢出的缓冲，故本轮只补未知属性一档诊断。
+- **不级联的恢复路径**：顶层单个 `[`（不是 `[[`）与「属性表后跟的不是 `func`」各由 `ir_skip_rest_of_line()` 整行消费，一条错不裂成两三条——沿用 P10 定下的「一条形态只报一条错」判据，而非落到通用 `ir: unsupported top-level token`。
+- **机器码两档无需改动**：`ir_backend.c` 只给 `main` 发 `.globl`，其余符号本就是内部链接，`local` 在 riscv64 / loongarch64 两侧是空操作；`weak` / `used` / `unused` 在那两侧也没有汇编层对应物。
+- **在册范围外的一条实测更正**：`pos/module_top_forms.nc` 仍进不了 IR，但缺口**不在属性**——IR 前端根本没有顶层变量声明（`const MARKER i32 = 7` 报 `ir: unsupported top-level token 'const'`，`IrProg` 也没有全局槽表），`[[export ".mydata"]]` 只是这条链上最先被撞到的 token；同理 `flow` / `static` / `const` 头的函数在 IR 顶层也不识别。该用例刻意继续不入 `IR_SUBSET`，两档缺口登记备查，不入名单即不被当成已完成。
+- **用例与名单**：新 pos `bracket_attrs`（同行 / 独占一行 / 逗号并列 / `export` 段名四形态，带 `.expect`）入 `IR_SUBSET`，新 err `bracket_attr_unknown`（共用子串 `unknown bracket attribute 'nope'`，两个前端同判据）入 `IR_ERR_COVERED`；`IR_ONLY` 不动。
+- **门禁复跑（实测）**：`xmake test --all` → c / native 各 **62P / 0F / 5S**（+2 PASS 来自两份新用例，SKIP 一字不变），ir-c / ir-native 各 **20P / 0F / 45S**（同 +2，SKIP 不变），跨后端一致性 **36P / 0F** 且 `consistent, 4 backends` 仍 **30** 份（两份新用例都带 `.expect`，按 P11 记下的口径不占比对档），`examples/` 四后端 **7/7** 复跑不变，四档 0 FAIL。
+- **`PA` 照旧带着同一缺陷，且没有回流口**：`git show PA:ncc/parser.c` 的属性块同样没有分行处理、同样把未知属性静默吞掉。PB-33 是 `PA` → `PB` 的单向回灌通道，本轮这两处修复不会回流（与复查登记 ③ 的 `ir_capture_body` 同类，累计第二条）。
+- **簿记**：`parser.c` 净增 19 行、`irparse.c` 净增 73 行、`ir.h` 净增 9 行、`ir_to_c.c` 净增 15 行、`xmake.lua` 净增 3 行（只动两份名单与其注释）。`docs/IMPLEMENTATION_STATUS.md` 的锚点重算沿用同一套逐行映射脚本，本轮首次把 **`xmake.lua` 也接进映射**（那 7 处锚点随注释插入整体 +3），共改 **167 处 / 63 行**；1 处落在被整段替换的属性循环里（旧记 `1013–1028`）按判据报错停手，人工对照代码更正为实测 `1014–1044`。用例结转口径同步更正：P12 从 `PA` 带来的用例是 **0 份**，`elseif_chain` 与 `print_forms` 全落到 **P13**。`docs/TODO-PB.md` 的 P12 行转 ✅、复查登记 ④ 结案，下一轮 **P13**（等 `PA-61` 裁定）。**本地提交，未推送**。
+
 ### 2.0 线回灌轮（PB-33 的 P11：cooking 编译期函数落地 A 后端，并修 IR 侧体源文本错位，2026-10-03）
 
 - **本轮补齐 P10 留下的最后一档占位**：`<ct-func-def>`（`const sq(x) = x * x`）与 `<ct-func-call>` 按 **PA-58** 移植进 A 后端——编译期函数表 `ct_funcs[]`（上限 `PC_MAX_CTFUNC`）、`ct_func_find()`、登记在 `pc_prim()` 的标识符分支（命中即按 `(` 前瞻转入实参循环），调用时由 `ct_func_call()` 把形参名逐个替换成实参字面量、组出一条临时源文本，交给一个临时 `LexerState`（`lexer_init(cs, "<cooking-fn>", buf)`）走同一套 `pc_or()` 求值，算完立即还原 `cs->parser.lex`。三条边界按 `PA` 口径硬限：形参 ≤ `PC_MAX_CTFPARAM`（4）、体源文本 ≤ 512 字节、替换展开撑破缓冲即报 `expands beyond 512 bytes` 而**不截断**。

@@ -151,12 +151,15 @@ end
 -- IR_ONLY  : IR 专属用例——子集语法（如无类型指针声明），全量 parser 无法编译
 -- P11（2026-10-03）把 ir_cook 从 IR_ONLY 移进 IR_SUBSET：A 后端现已支持 <ct-func-def>，
 -- 四后端都能编译运行；cooking_ct_func 随轮直接入 IR_SUBSET（irparse.c 的体源文本改按字符截取后才成立）
-local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true}
+-- P12（2026-10-04）新增 bracket_attrs 入 IR_SUBSET：irparse.c 补上 <bracket-attr-list> 之后，
+-- 属性表（含独占一行的写法）四后端一致。module_top_forms 仍不入——IR 前端没有顶层变量声明
+local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true}
 local IR_ONLY = {ir_builtin = true, ir_mr = true, ir_slice = true, ir_sparam = true, struct_param_prefix = true}
 -- IR_ERR_COVERED: err 用例中 IR 前端已实现对应诊断的（未列出的非 m2 用例仍在 IR 侧跳过）
 -- cooking_bare_var 刻意不入：IR 前端对块内裸 <var-decl> 只给 `ir: undeclared variable 'K'`，
 -- 与共用 .expect 的 'unsupported cooking item' 子串不符，入名单等于把 IR 缺口标成已完成
-local IR_ERR_COVERED = {safe_assign_removed = true, safe_dot_removed = true, linkas_not_implemented = true}
+-- bracket_attr_unknown 入名单：P12 起两个前端同判据，IR 侧只是文案多一个 `ir: ` 前缀，子串照样命中
+local IR_ERR_COVERED = {safe_assign_removed = true, safe_dot_removed = true, linkas_not_implemented = true, bracket_attr_unknown = true}
 
 task("test")
     on_run(function ()

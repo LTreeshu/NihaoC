@@ -3124,13 +3124,68 @@ static void ir_stmt(CompilerState *cs)
 }
 
 /* ---- 函数 ---- */
-static void ir_func(CompilerState *cs)
+
+/* <bracket-attr-list> ::= "[[" <bracket-attr> { "," <bracket-attr> } "]]"（BNF §7）。
+ * 词法器把 `[[` / `]]` 当作两个独立 token，故先前瞻一个 `[` 才确认这是属性表而不是下标。
+ * 判据与 A 后端 parse_declaration 的属性分支逐字对应：同一组名字、同一条兜底诊断、
+ * export 的段名字面量同样只消费不落码。 */
+static int ir_bracket_attr_list(CompilerState *cs)
+{
+    LexerState *lx = cs->parser.lex;
+    int mask = 0;
+
+    lx->peek_valid = 0;
+    lexer_peek(lx);
+    if (lx->peek_tok != TOK_LBRACKET) {
+        lx->peek_valid = 0;
+        nihao_error(cs, "ir: '[' at top level must be doubled: '[[ ... ]]'");
+        return -1;
+    }
+    lx->peek_valid = 0;
+    next_tok(cs);       /* [ */
+    next_tok(cs);       /* [ */
+    while (cur_tok(cs) != TOK_RBRACKET && cur_tok(cs) != TOK_EOF) {
+        if (cur_tok(cs) == TOK_IDENTIFIER) {
+            const char *a = lx->tok_str;
+            if (strcmp(a, "inline") == 0) mask |= IR_ATTR_INLINE;
+            else if (strcmp(a, "weak") == 0) mask |= IR_ATTR_WEAK;
+            else if (strcmp(a, "local") == 0) mask |= IR_ATTR_LOCAL;
+            else if (strcmp(a, "used") == 0) mask |= IR_ATTR_USED;
+            else if (strcmp(a, "unused") == 0) mask |= IR_ATTR_UNUSED;
+            else if (strcmp(a, "export") != 0)
+                nihao_error(cs, "ir: unknown bracket attribute '%s'; the grammar "
+                            "allows local / inline / weak / used / unused / "
+                            "export \"<section>\"", a);
+            next_tok(cs);
+            if (cur_tok(cs) == TOK_STRING_LITERAL) next_tok(cs);   /* export 的段名 */
+        } else {
+            next_tok(cs);
+        }
+        if (cur_tok(cs) == TOK_COMMA) next_tok(cs);
+    }
+    expect(cs, TOK_RBRACKET);
+    expect(cs, TOK_RBRACKET);
+    return mask;
+}
+
+/* 属性表后跟的不是 func：报一条专属诊断，再把这条声明的本行余下部分消费掉，
+ * 避免逐 token 落到通用分支级联出第二条、第三条错。 */
+static void ir_skip_rest_of_line(CompilerState *cs)
+{
+    while (cur_tok(cs) != TOK_NEWLINE && cur_tok(cs) != TOK_EOF) {
+        next_tok(cs);
+    }
+    if (cur_tok(cs) == TOK_NEWLINE) next_tok(cs);
+}
+
+static void ir_func(CompilerState *cs, int attrs)
 {
     /* func name ( params ) ret */
     const char *fname = cs->parser.lex->tok_str;
     int is_main = strcmp(fname, "main") == 0;
     next_tok(cs);
     F = ir_fn_new(P, fname, is_main);
+    F->attrs = attrs;
     var_reset();
     for (int _i = 0; _i < 32; _i++) F->param_vis[_i] = VIS_VAR;  /* 默认 var（无前缀） */
     g_label_count = 0;      /* goto/label 表 per 函数清零 */
@@ -3389,7 +3444,25 @@ int ir_parse_file(CompilerState *cs, const char *filename)
         skip_newlines(cs);
         if (cur_tok(cs) == TOK_FUNC) {
             next_tok(cs);
-            ir_func(cs);
+            ir_func(cs, 0);
+        } else if (cur_tok(cs) == TOK_LBRACKET) {
+            /* <bracket-attr-list>（BNF §7）：属性表可与其声明分行 */
+            int attrs = ir_bracket_attr_list(cs);
+            if (attrs < 0) {
+                /* 单个 `[` 不是属性表：整行消费，一条错不级联成两三条 */
+                ir_skip_rest_of_line(cs);
+                continue;
+            }
+            skip_newlines(cs);
+            if (cur_tok(cs) == TOK_FUNC) {
+                next_tok(cs);
+                ir_func(cs, attrs);
+            } else {
+                nihao_error(cs, "ir: bracket attributes are only implemented for "
+                            "`func` definitions in this subset (got '%s')",
+                            token_name(cur_tok(cs)));
+                ir_skip_rest_of_line(cs);
+            }
         } else if (cur_tok(cs) == TOK_IDENTIFIER) {
             /* 可能是类型定义：Name struct/union/enum */
             LexerState *lx = cs->parser.lex;

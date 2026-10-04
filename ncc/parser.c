@@ -999,6 +999,7 @@ void parse_declaration(CompilerState *cs)
     Visibility vis = VIS_VAR;
     char attr[256];
     attr[0] = '\0';
+    int attr_full = 0;      /* 属性串写满后只报一条，不再逐个级联 */
 
 
     /* [[ ... ]] function attributes */
@@ -1013,12 +1014,27 @@ void parse_declaration(CompilerState *cs)
             while (cur_tok(cs) != TOK_RBRACKET && cur_tok(cs) != TOK_EOF) {
                 if (cur_tok(cs) == TOK_IDENTIFIER) {
                     const char *a = cs->parser.lex->tok_str;
-                    if (strcmp(a, "inline") == 0) strcat(attr, "inline ");
-                    else if (strcmp(a, "weak") == 0) strcat(attr, "__attribute__((weak)) ");
-                    else if (strcmp(a, "local") == 0) strcat(attr, "static ");
-                    else if (strcmp(a, "used") == 0) strcat(attr, "__attribute__((used)) ");
-                    else if (strcmp(a, "unused") == 0) strcat(attr, "__attribute__((unused)) ");
+                    const char *frag = NULL;
+                    if (strcmp(a, "inline") == 0) frag = "inline ";
+                    else if (strcmp(a, "weak") == 0) frag = "__attribute__((weak)) ";
+                    else if (strcmp(a, "local") == 0) frag = "static ";
+                    else if (strcmp(a, "used") == 0) frag = "__attribute__((used)) ";
+                    else if (strcmp(a, "unused") == 0) frag = "__attribute__((unused)) ";
+                    else if (strcmp(a, "export") != 0)
+                        nihao_error(cs, "unknown bracket attribute '%s'; the grammar "
+                                        "allows local / inline / weak / used / unused / "
+                                        "export \"<section>\"", a);
                     /* export "sec" - ignored for C output */
+                    if (frag) {
+                        size_t fl = strlen(frag);
+                        if (strlen(attr) + fl + 1 > sizeof(attr)) {
+                            if (!attr_full) {
+                                attr_full = 1;
+                                nihao_error(cs, "bracket attribute list exceeds %u bytes",
+                                            (unsigned)sizeof(attr));
+                            }
+                        } else strncat(attr, frag, fl);
+                    }
                     next_tok(cs);
                     if (cur_tok(cs) == TOK_STRING_LITERAL) next_tok(cs);
                 } else {
@@ -1028,6 +1044,9 @@ void parse_declaration(CompilerState *cs)
             }
             expect(cs, TOK_RBRACKET);
             expect(cs, TOK_RBRACKET);
+            /* 属性表与其声明可分行（Chinese.md / English.md §7.4 各有 9 处示例即此形态）：
+             * 换行在顶层是语句终止符，须在转入可见性前缀之前吃掉。 */
+            skip_newlines(cs);
             tok = cur_tok(cs);
         } else {
             cs->parser.lex->peek_valid = 0;
