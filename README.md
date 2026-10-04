@@ -139,7 +139,7 @@ nihao <command> [options]
 
 
 > **1.0 范围**：`c` / `native` 两后端为对外可用产品线（路线图 A 方案），v1.0.2 门禁实测：全量语法回归每后端 **38 PASS / 0 FAIL / 5 SKIP**，examples **6/7** ——
-> `06_cooking.nc` 为 2.0 预览示例（`cooking` 编译期块与编译期函数尚未纳入 1.0 语法），1.0 线两后端不接受、`ir-c` / `ir-native` 可通过。
+> `06_cooking.nc` 当时失败于 `cooking` 块内的编译期函数形态，仅 `ir-c` / `ir-native` 可通过；该形态已于本分支 2026-10-03 的 PB-33 **P11** 回灌轮落入全量 parser（`PA` 侧为 2026-09-25），examples 现为 **7/7**（2026-10-04 复跑，四后端均可编译运行）。
 > 计数随版本变化，权威口径以 [`CHANGELOG.md`](./CHANGELOG.md) 当前版本段与 [`docs/IMPLEMENTATION_STATUS.md`](./docs/IMPLEMENTATION_STATUS.md) 为准。
 > **双平台验证（2026-08-31，v1.0.0 时点）**：Windows 与 Linux（WSL Ubuntu-24.04）均通过 c/native 全量回归 0 FAIL +
 > examples 6/6（c/native 双后端，当时的用例集）；`-run` 内存执行在 Linux 实测通过（WSL 期间修复 4 个平台 bug，
