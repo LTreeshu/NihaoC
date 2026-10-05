@@ -1708,6 +1708,26 @@ void parse_function(CompilerState *cs, Symbol *func_sym)
 
 static void parse_if_stmt(CompilerState *cs);
 
+/* 畸形 is 形态的恢复：丢模式余文，再整块吞掉同行或紧随其后的花括号体，最后补上
+ * 已展开一半的守卫尾巴。不吞块的话块里的 break 会泄进外层 while 体，级联出多条错。 */
+static void discard_is_clause(CompilerState *cs, int start_line)
+{
+    while (cur_tok(cs) != TOK_SEMICOLON && cur_tok(cs) != TOK_POUND &&
+           cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_LBRACE &&
+           cur_tok(cs) != TOK_EOF &&
+           cs->parser.lex->last_line_num == start_line)
+        next_tok(cs);
+    if (cur_tok(cs) == TOK_LBRACE) {
+        int depth = 0;
+        while (cur_tok(cs) != TOK_EOF) {
+            if (cur_tok(cs) == TOK_LBRACE) depth++;
+            else if (cur_tok(cs) == TOK_RBRACE && --depth == 0) { next_tok(cs); break; }
+            next_tok(cs);
+        }
+    }
+    cgen_raw(") && (__is_matched = 1))");
+}
+
 static void parse_is_stmt(CompilerState *cs)
 {
     /* Pattern match inside a while loop:
@@ -1717,6 +1737,7 @@ static void parse_is_stmt(CompilerState *cs)
      * 每子句在守卫中检查并置位 __is_matched，置位放在条件里是因为块体由
      * parse_statement 整体输出，无法在其 { 之后插入语句。 */
     next_tok(cs);
+    int pat_line = cs->parser.lex->last_line_num;
     TokenType t = cur_tok(cs);
     if (t == TOK_IDENTIFIER && strcmp(cs->parser.lex->tok_str, "_") == 0) {
         /* 通配符：匹配任意 __is_val（恒真）——文档 pattern 列表含 _ */
@@ -1733,15 +1754,22 @@ static void parse_is_stmt(CompilerState *cs)
     /* 整数模式：`is N` / `is -N` / 闭区间 `is lo..hi`（BNF §6 <pattern>）。
      * 两端都可带符号，区间在编译期校验 lo <= hi，空区间不再静默生成永不匹配的分支。 */
     int signed_pat = 0;
+    int has_sign = 0;
     if (t == TOK_MINUS || t == TOK_PLUS) {
+        has_sign = 1;
         signed_pat = (t == TOK_MINUS);
         next_tok(cs);
         t = cur_tok(cs);
     }
-    if (t == TOK_MINUS) {
-        nihao_error(cs, "invalid 'is' pattern: '-' must be followed by an integer");
-        next_tok(cs);
-    } else if (t == TOK_INT_CONST) {
+    /* 带符号的模式后端必须是整数字面量（BNF §6 <pattern>）。改前 `is -x` 会静默丢掉
+     * '-' 而按 `is x` 出码，`is -` 则在诊断之后继续展开子句而级联多条错。 */
+    if (has_sign && t != TOK_INT_CONST) {
+        nihao_error(cs, "invalid 'is' pattern: '%c' must be followed by an integer",
+                    signed_pat ? '-' : '+');
+        discard_is_clause(cs, pat_line);
+        return;
+    }
+    if (t == TOK_INT_CONST) {
         long long lo = signed_pat ? -(long long)cs->parser.lex->tok_val.i
                                   : (long long)cs->parser.lex->tok_val.i;
         next_tok(cs);
@@ -1754,6 +1782,8 @@ static void parse_is_stmt(CompilerState *cs)
             }
             if (cur_tok(cs) != TOK_INT_CONST) {
                 nihao_error(cs, "invalid 'is' range: expected an integer upper bound");
+                discard_is_clause(cs, pat_line);
+                return;
             } else {
                 long long hi = neg_hi ? -(long long)cs->parser.lex->tok_val.i
                                       : (long long)cs->parser.lex->tok_val.i;
@@ -1786,7 +1816,8 @@ static void parse_is_stmt(CompilerState *cs)
         next_tok(cs);
     } else {
         nihao_error(cs, "invalid 'is' pattern");
-        next_tok(cs);
+        discard_is_clause(cs, pat_line);
+        return;
     }
     cgen_raw(") && (__is_matched = 1))");
 

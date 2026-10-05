@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 2.0 线覆盖轮（PB-28：`is` 模式档位四后端覆盖 + 畸形形态的专属诊断与子句级恢复，2026-10-05）
+
+- **先复测再动手，七档模式四后端逐行一致**：按 `docs/BNF.md` §6 的 `<pattern>` 逐档写探针实测，可见性五档（`_const` / `_static` / `_var` / `_flow` / `_undef`）、枚举常量、标识符按值、带符号整数字面量、闭区间、通配符兜底在 c / native / ir-c / ir-native **输出逐行相同**；再拿 `PA` 源码树新编的二进制跑同一份用例，结果一字不变。顺带量清一条此前没人验证的可达性：**`is _undef` 运行时不可达**——`visof()` 对未声明名折成编译期 0，而 `while 0` 的体一次都不进，两侧同行为，所以这一档由 `is _` 兜底固定，不必单独出码。
+- **A 后端两条坏行为本轮修掉**：`is -x` 改前**无任何诊断**地把 `-` 丢掉、按 `is x` 出码（静默改语义，最坏的一类）；`is -` 改前报完诊断仍继续展开子句，块里的 `break` 泄进外层 while 体，一条形态裂成四五条互不相干的错。同一份五行畸形探针实测：改前 **10 条** → 改后 **5 条**，与 IR 前端对同一份源文件给出的 5 条一一对应。
+- **恢复手法：子句级丢弃**，新增 `discard_is_clause()`——丢模式余文 → 整块吞掉同行或紧随其后的 `{…}` → 补回已展开一半的守卫尾巴，接到 `parse_is_stmt()` 的三处出口（带符号档 / 区间上界档 / 兜底档）。关键在于**吞块**：不吞则块内语句会被外层继续解析，级联出「`'is' pattern match only valid inside while loop body`」这类指向别处的错。带符号档另补一条前置判据：`-` / `+` 之后不是整数字面量即报 `invalid 'is' pattern: '%c' must be followed by an integer`。
+- **`PA` 侧带同一缺陷，且没有回流口**：`parse_is_stmt()` 在 `PA` 与 PB 改前**除一行注释外逐字相同**，用 `PA` 新编二进制跑同一畸形探针正是那 10 条；PB-33 是 `PA` → `PB` 的单向回灌通道，故本轮修复**单侧落地并登记**（同类累计第三条：P11 的 `ir_capture_body`、P12 的两处属性洞）。另更正一处簿记失准：`IMPLEMENTATION_STATUS.md` 里 `PA` 侧 `parse_is_stmt` 的起点旧记偏晚，已按 `git show PA:ncc/parser.c` 改正。
+- **IR 侧同时量清三档缺口，登记不修**：① `;` **不作语句分隔符**，`is 3 { puts("x"); break }` 这类同行多语句报 `ir: unexpected token ';' in expression`，IR 只按换行分句（`PA` 的 IR 侧同判据，属两侧同缺）；② 带符号模式**只认 `is -5`**，`is +5` 落兜底 `ir: bad 'is' pattern`、`is -9..-5` 报 `…(expected integer after '..')`；③ 无 `__is_matched` 首匹配即止（P4 既有登记）。
+- **用例与 IR 白名单按实测取舍**：新 pos `is_vis_patterns`（一句一行、只取四后端一致的档位，带 `.expect`）入 `IR_SUBSET`；新 err `is_bad_pattern`（`.expect` 子串 `'is' pattern`，两个前端同判据）入 `IR_ERR_COVERED`；新 err `is_dangling_range` **刻意不入**——A 侧文案 `invalid 'is' range` 与 IR 侧 `expected integer after '..'` 没有共用子串，入名单等于把 IR 的缺口标成已完成。`pos/is_pattern_forms`（带符号档）与 `pos/is_no_fallthrough`（首匹配即止）继续不入 IR 名单，理由与上述三档缺口一一对应。
+- **门禁复跑（实测）**：`xmake test --all` → c / native 各 **65P / 0F / 5S**（+3 PASS = 1 份 pos + 2 份 err，SKIP 一字不变），ir-c / ir-native 各 **22P / 0F / 46S**（+2 来自两份入名单用例，SKIP 45→46 来自刻意不入的那份），跨后端一致性 **36P / 0F** 不变且 `consistent, 4 backends` 仍 **30** 份（三份新用例都带 `.expect`，按 P11 记下的口径不占比对档），`examples/` 四后端 **7/7**，四档 0 FAIL；产物 C 抽查覆盖不变、仍全绿。
+- **簿记**：`parser.c` 净增 31 行（插入全在 `parse_is_stmt()` 及其紧邻前置）、`xmake.lua` 净增 7 行（两份 IR 名单各并一段注释）；`ncc.h` / `cgen.c` / `irparse.c` / `vis.c` / `type.c` / `lexer.c` / `module.c` 一字未动。`docs/IMPLEMENTATION_STATUS.md` 的锚点重算沿用同一套逐行映射，本轮**首次把「裸接续锚点」纳入映射**——一个文件名带一串续写号的写法（`parser.c:11–14、16–25、1800` 一类），前几轮只移带冒号的那个数，同一行内前后号会自相矛盾；共改 **175 处 / 57 行**（其中续写号 100 处），2 处落在被替换区间报错停手后人工更正，并把脚本参数化后用 `git show HEAD:` 的原样副本复跑对账（机械重基与人工更正的边界只剩 4 行）。`docs/TODO-PB.md` 的 PB-28 转 ✅、「IR 前端覆盖全量语法」追记本轮三档缺口。下一轮做 PB-32 余下项（F3 ~ F7 逐形态复测 + IR `[...]` 默认容量那一问），P13 仍等 `PA-61` 裁定。**本地提交，未推送**。
+
 ### 2.0 线回灌轮（PB-33 的 P12：`<bracket-attr-list>` 属性表——A 后端容分行 + IR 前端补解析，2026-10-04）
 
 - **P12 的「开工前置」由规范自己的例子裁掉**：在册那条待裁问题是「属性独占一行、声明写在下一行能不能成立」。不必新裁定——`docs/Chinese.md` 与 `docs/English.md` 的 §7.4 各有 **9 处**示例把 `[[local]]` / `[[inline]]` / `[[weak]]` / `[[used]]` / `[[unused]]` / `[[export ".init"]]` / `[[local, weak]]` 单独占一行、下一行才写签名（另 3 处是同行写法），`BNF.md` §7 的 `<func-decl> ::= [ <bracket-attr-list> ] <return-attr> …` 也没要求两者紧邻。于是分行是**合法形态**，A 后端此前对它的 `unexpected token 'TOK_NEWLINE' at declaration level` 属**实现缺陷**：属性表消费完补一次 `skip_newlines()` 即可。同轮探针复量规范原文那两种形态（`[[export ".init"]]` + 换行 + `static` 头、`[[local, weak]]` + 换行 + `static` 头），改后都能走到出码并运行，属性行后再插空行也照常成立。
