@@ -157,7 +157,12 @@ end
 -- 负数 / 闭区间 / 通配符兜底六档 is 模式实测四后端输出逐字相同。is_pattern_forms 与
 -- is_no_fallthrough 仍不入——前者写了 IR 不接受的带符号区间 `is -9..-5`，后者依赖首匹配即止
 -- （IR 无 __is_matched，重叠子句会全部执行）
-local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true}
+-- 白名单普查（2026-10-05）新增 pattern 入 IR_SUBSET：`do` + `while v += 1` + `is 3 { break }`
+-- 一份，ir-c / ir-native 输出与该用例 .expect 逐行相同，此前落 SKIP 只是从未被逐份复测过
+-- 同轮新增 array_capacity_1d（本分支自写）：容量档矩阵里 IR 能解析的七档单维。
+-- array_capacity_tiers（PA 结转）仍不入——它只多一行多维 `m i32[2][3]`，删掉该行后七档输出
+-- 与 A 后端逐行相同；多维声明与无初值数组声明是 IR 的既有缺口，见下方差异表
+local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true}
 local IR_ONLY = {ir_builtin = true, ir_mr = true, ir_slice = true, ir_sparam = true, struct_param_prefix = true}
 -- IR_ERR_COVERED: err 用例中 IR 前端已实现对应诊断的（未列出的非 m2 用例仍在 IR 侧跳过）
 -- cooking_bare_var 刻意不入：IR 前端对块内裸 <var-decl> 只给 `ir: undeclared variable 'K'`，
@@ -166,7 +171,11 @@ local IR_ONLY = {ir_builtin = true, ir_mr = true, ir_slice = true, ir_sparam = t
 -- is_bad_pattern 入名单：畸形 is 模式两个前端逐条同位置拒绝，共用子串 `'is' pattern` 双方命中
 -- is_dangling_range 刻意不入：IR 侧同样逐条拒绝，但文案 `bad 'is' pattern (expected integer
 -- after '..')` 与 A 侧 `invalid 'is' range` 没有共用子串，入名单只是把判据放宽
-local IR_ERR_COVERED = {safe_assign_removed = true, safe_dot_removed = true, linkas_not_implemented = true, bracket_attr_unknown = true, is_bad_pattern = true}
+-- is_outside_while / is_in_do_body 入名单（白名单普查 2026-10-05）：P4 曾登记「IR 文案带 `ir: `
+-- 前缀故与 A 侧不同源、不能进 IR_ERR_COVERED」，本轮复测证伪——前缀在子串**之前**，共用子串
+-- `'is' pattern match only valid inside while loop body` 照样整体命中；`PA` 侧同判据（其
+-- IR_ERR_SKIP 黑名单从未含这两份，即 PA 的 IR 门禁一直真跑它们）
+local IR_ERR_COVERED = {safe_assign_removed = true, safe_dot_removed = true, linkas_not_implemented = true, bracket_attr_unknown = true, is_bad_pattern = true, is_outside_while = true, is_in_do_body = true}
 
 task("test")
     on_run(function ()
