@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### 2.0 线 err 档判别力普查轮（PB-50：10/33 份用例的期望子串会命中别人的 stderr、9 份共用同一句短语，另证出「无 `.expect` 的 err 用例直接放行」这条真空分支；两份 expect 临时改完即还原，2026-10-27）
+
+- **判据本体先看清**：门禁的 err 循环是「跑 `ncc build` → **产物存在即 `[FAIL] expected compile error, but succeeded`**；否则把整份 `.expect`（去尾部空白）当**连续子串**在 stderr 里 `find(..., 1, true)`」，另有第三支——**没有 `.expect` 文件时直接 `[PASS]`**。`try_execv` 的返回码被丢弃：**门禁不读退出码**，只看产物在不在。
+- **① 全量复现**：33 份 err 用例 × 四档，按 `IR_ERR_COVERED` / `m2` 前缀跳过后实跑 **102 次**：**每一次都 rc=1、都不落产物、都判 PASS** ⇒ 「必须失败」这一半今天站得住。但**rc 判据与产物判据的等价是巧合而非设计**：哪天「编译器报错却 rc=0」或「编译成功却留下半截产物」发生，两条判据就会分叉，而没有任何一档保护这件事。
+- **② pin 的宽度（本轮核心数字）**：**10/33 份用例的 pin 同时命中别的用例的 stderr**。两组直接塌掉：`is_in_do_body` 与 `is_outside_while` 的**首行诊断与 pin 逐字相同**（同一句 `'is' pattern match only valid inside while loop body` 既管「写在 while 体外」又管「写在 do 体里」，两条规则哪天塌成一条，门禁全绿）；另有 **9 份 `m2*` 用例只靠 `'target lifetime'` 这 15 个字钉住**。最短的 pin **4 字符**（`'?='`、`'?.'`），6 字的 `linkas` / `frozen`、9 字的 `no member` 也在列 ⇒ 一条含该短语的任意新诊断就能让用例「过」，而它可能根本不是那条规则。
+- **③ 免费收窄可用（可执行选项）**：**29/33 份用例的 stderr 首行在整个语料内唯一**（消息带着被点名的变量/函数名，如 `to 's' (static)`、`parameter 'p' (flow)`、`no member 'missing' in type 'Person'`）⇒ 把 pin 换成各自首行**不需要动编译器，只需换 `.expect`**。没做的原因是归属：这些多数是 `PA` 结转用例，单方面换正是 PB-33 要消除的用例集分叉（同第 12/25 条）⇒ 登记待裁第 26 条。
+- **④ 顺带量出一条文案不一致**：`m2e_param` 发 `target lifetime shorter than source`，而 `m2a_flow_static` / `m2b_const_flow` / `m2f_retflow*` 一族发 `target lifetime **would be** shorter than source`——同族规则两种措辞。**正是共用短语 pin 把两种措辞都盖住，这条不一致才从未被发现**，这也是「pin 太宽」的直接代价。
+- **⑤ `PASS-noexpect` 真空分支被构造性证明**：摘掉 `err/structof_bad_member.expect` ⇒ 该用例在 c / native **仍 `[PASS]`**，因为无 `.expect` 时 err 档**只判「没产生产物」、完全不看消息**。今天 33 份全有 `.expect` 所以未触发，但它是留给下一个添加 err 用例的人的坑；且与 pos 档的处置不同（pos 无 `.expect` 会进比对档，err 无 `.expect` 是**直接放行**）。
+- **⑥ 阴性对照（err 档确实在判内容）**：把 `m2c_frozen.expect` 换成永不出现的串 ⇒ **四档各报 `[FAIL] err/m2c_frozen.nc: message missing …`**（FAIL 文案还会把 `want` 与整段 `got` 打出来）。与 PB-49 的 pos 对照合起来：**两档的「消息匹配」都在真判，弱点分别在对侧——pos 是「一致 ≠ 正确」，err 是「pin 太宽」。**
+- **⑦ 诊断形状两条事实**：26 份是「消息 / 位于… / `Compilation failed with N error(s)`」三行，**7 份多行**（`is_bad_pattern` 7、`structof_bad_member` 9、5 行 5 份），而 pin 只要求**第一次**命中 ⇒ 多余或重复的诊断不会被发现（多行源自一份用例写好几个坏形态，与 PB-28「一态一诊断」口径一致，不新立案）。另：诊断正文是中文带 ANSI 色码（首行实为 `\x1b[1;31m错误\x1b[0m: …`），pin 都在色码之后所以匹配不受影响；位置行里路径分隔符混用（`tests/err\m2f_retflow.nc`），属文案层，登记不动。
+- **零留痕收尾**：两份 `.expect` 由 `build/p50/*.orig` 还原后复跑基线**一字不变**——c / native **66P/0F/4S** ×2、ir-c / ir-native **26P/0F/43S** ×2、跨后端比对 **36 格**、**0 FAIL**、rc=0，`git status` 只剩仓库根既有未跟踪 `build/`。**待裁清单 25→26 条**（第 26 条＝pin 宽度 / `PASS-noexpect` / rc 判据三件，归组三末尾，不重排既有编号）。明细在 `ncc/build/p50/`（gitignore：`err_rows.tsv`、`stderr_dump/`、`mutated.txt`、`clean.txt`）。**本地提交，未推送**。
+
 ### 2.0 线用例判别力轮（PB-49：46 份用例的失败分支从未执行过，比对档的「2 backends」标签被证伪；门禁 pos 档首次端到端阴性对照，三处临时改动跑完即撤，2026-10-27）
 
 - **这轮把一句反复出现的话从推断换成测量**。本仓库已经四次撞到「门禁全绿 ≠ 用例正确」（P7 的 `ir_struct`、P12 的属性用例、PB-42 的 `ir_str`、PB-46 的 `IR_ONLY` 掩盖非法成员），但每次都是**从某一次输出反推**的。本轮改成正面测量：**跑遍门禁自己留存的运行捕获**，并把 pos 档与比对档各做一次阴性对照。
