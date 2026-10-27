@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 2.0 线产物 C 严格标准可移植性普查轮（PB-52：换第三套编译器 + 升方言，查出 IR→C 的 `int64_t main()` 是硬违规——gcc 报错而 clang 连 `-pedantic-errors` 都放行，2026-10-27）
+
+- **补第三层 oracle**：产物 C 的验证一直只有「`clang -fsyntax-only` 默认方言」（P9 接线）、警告层（PB-47）与执行层（PB-48）。本轮**换编译器 + 升方言**：123 份产物（`build/tests/c` 66 + `build/tests/ir-c` 43 + 本轮现编 examples 14）× **Ubuntu clang 18.1.3 与 gcc 13.3.0** × `-std=c99` / `-std=c11` 的 `-pedantic-errors`。
+- **clang 侧（121/123 份失败）**：只有 `mathmod` / `module_top_forms` 这两份**没有 `main`** 的 module 用例躲过。**238 行（119 份 × 2 方言）是同一条**「a function declaration without a prototype is deprecated in all versions of C」⇒ **A 后端把入口发成 K&R 式 `int main()` 而不是 `int main(void)`**。另有 4 行是两份 examples 的 ir-c 真换行字面量在严格方言下报成 `missing terminating '"' character [-Winvalid-pp-token]`——**在册第 2 条在第三套判据下的独立复现**（默认档报的是 `expected expression`），判据不变。
+- **gcc 侧才是本轮真产出**：gcc **不报** K&R 那条（C99/C11 确实还允许空括号声明），却对 **50 份 IR→C 产物（43 份 ir-c + 7 份 examples ir-c）报硬错误 `return type of 'main' is not 'int' [-Wmain]`**——**IR 路线把 `main` 的返回类型发成槽宽 `int64_t`**（原型 `int64_t main();` + 定义 `int64_t main() {`），**直接违反 C99/C11 关于 `main` 必须返回 `int`（或兼容类型）的规定**。而 **clang 18 连 `-pedantic-errors` 都放行它** ⇒ **两个编译器各抓到对方漏掉的一条**，这是「单一 oracle 不够」的实测证据（与 PB-38「第二 oracle 要先在自己的默认值上复现」同款教训）。
+- **同后端还自相不一致**：同一份 `return_flow.exe.c` 里零参 helper 发的是 `void* make_flow(void)`（第 11、15 行），入口却发 `int main()`（第 20 行）——发射点在 `parser.c` 的 `cgen_raw("%sint main(", attr)`（PB 现 1414）：**`(void)` 形态早就有，唯独 main 没用**。
+- **归属＝两线共同（两条都是）**：同一份 `tests/pos/hello.nc` 交给 `PA` 工作树 HEAD 的 `ncc` 编译 ⇒ c 档产物与本分支 **`cmp` 逐字节相同**（`int main()` 同在第 14 行）；ir-c 档产物同样发 `int64_t main();` + `int64_t main() {`（第 11、28 行，只差变量命名），且 **gcc 对 `PA` 的产物报同一条 `-Wmain`** ⇒ 按既有硬规则只登记、不在本分支单侧修。
+- **判据含义与顺序**：门禁的抽查用默认方言，两者在默认档都不是错，所以「四档全绿」与这两条发现毫无矛盾；但**把抽查升到 `-std=c99 -pedantic-errors` 会当场让 121/123 份红**（clang 侧）或 50 份红（gcc 侧）。⇒ 要裁的是「**产物 C 承诺兼容到哪个 C 标准**」这一句话，而不是接线：**(a)** 承诺严格 C99/C11 ⇒ 两处都是机械修（main 改 `int main(void)`；IR 的 `main` 返回类型改 `int`，函数体内仍走槽模型），修完可顺带把第 13 条的抽查升档并把 ir-c 也纳入；**(b)** 不承诺 ⇒ 把「编译到可移植 C」的措辞改写窄，明确只保证 tcc + clang 默认方言；**(c)** 折中：只修 ①（硬违规），把 ② 作为已知弃兼容性写进文档。**这条必须先于第 13 条裁**——先升档等于接上一条永久红的判据。待裁清单 **27→28 条**（第 28 条归组一末尾，不重排既有编号）。
+- **簿记**：**未改任何代码或用例**，无锚点位移、门禁数字不变；`IMPLEMENTATION_STATUS.md` 记本轮 8 行判据表；对照用的 `PA/ncc/build/p52/` 已删除（`PA` 树 `git status` 干净），本分支明细在 `ncc/build/p52/`（gitignore：`pedantic.tsv`、`gcc.tsv`、`stderr` 侧脚本 step1~5）。**本地提交，未推送**。
+
 ### 2.0 线 examples 档判据普查轮（PB-51：「examples 四后端 7/7」既不在门禁里也不校验输出——`03_struct` 在 IR 档打的是 `struct copy bad`；一份 example 临时加行做对照后按备份还原，2026-10-27）
 
 - **门禁三档的第三条腿量完了**：PB-49 量 pos 档、PB-50 量 err 档，本轮量那条被到处引用却从没被查过的——**「examples 四后端 7/7」**。
