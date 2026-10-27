@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 2.0 线「两后端一致格」归位轮（PB-54：`ir_mr` 实测四端输出逐字节相同却挂在 IR_ONLY 里少比两个档，提升之后 `ir_builtin` 的在册理由被证伪——A 后端其实能编，2026-10-27）
+
+- **接 PB-49 的账**：那轮量到跨后端比对档里有 **5 格只写 `(consistent, 2 backends)`**，即比的是**同一前端的两个落地器**（c vs native，或 ir-c vs ir-native），一条前端 lowering 缺陷在这些格上结构上不可见。本轮逐份实跑缺的那一侧，能提升的提升、不能的提升不了的点名原因。
+- **提升一份（本轮唯一改动）**：`pos/ir_mr.nc` 挂在 `IR_ONLY`，账面理由是「全量 parser 无法编译」；实跑四端 **输出逐字节相同**（c / native / ir-c / ir-native 各 58 字节，`cmp` 全同）。留着只会让它少比两个档 ⇒ 从 `IR_ONLY` 移进 `IR_SUBSET`（`IR_ONLY` **4→3**、`IR_SUBSET` **38→39**），该格随之升为 **`(consistent, 4 backends)`**。
+- **门禁记账**：c / native **4S→3S**、PASS 66 不变（该用例**无 `.expect`** ⇒ 只升格比对档、不新增 PASS，与 PB-46 的 `struct_param_prefix` 同形）；ir-c / ir-native **26P/0F/43S 一字不变**；比对档**总数 36 格不变**而成色变好（4 后端 **31→32**、2 后端 **5→4**）；**0 FAIL**、rc=0；**c 档产物 66→67 份**，产物 C 的 `-fsyntax-only` 抽查面随之扩大。
+- **余下 4 格逐份归位**：`malloc_demo` 与 `flow_move` 是 A 专属，IR 侧实测都报 **`expected ')', got 'i32'`**（源形 `p.(i32)` 带类型解引用，位置分别 6:11 / 8:13）⇒ 卡的就是 P4 / PB-36 在册的那条 **IR 前端解析不了 `p.(T)`**（`malloc_demo` 还多出「作赋值左值」这一档）；`flow_move` 另欠一份 `flow_move.expect`（第 12 条家族）。`ir_sparam` 才是真的 A 端拒（`unknown type 'score'`，`PA` 结转的非法成员写法，第 20 条）。
+- **本轮最有用的更正——`ir_builtin` 的在册归类被证伪**：它在 `IR_ONLY`、SKIP 文案写「IR 专属用例，全量 parser 不支持子集语法」，**但实测 A 后端能编**（rc=0、输出 117 字节）。真正的阻塞是**输出分歧**：`sizeof struct` 与 `array sizeof` 两行 **A 打 `bad`、IR 打 `ok`**（IR 无聚合体布局、`sizeof` / `alignof` 固定按槽宽 8）⇒ 分类应从「A 编不了」改成「**A / IR 语义分歧**」（属第 10 条八桶）；**若照原理由移进 `IR_SUBSET` 会当场 FAIL**，所以名单不动、只把记账改对。顺带记一条通用风险：**名单理由过期后，后续每一轮都会照着假理由跳过复测**——本轮就是靠实跑才发现这条 SKIP 文案与事实相反。
+- **口径确认**：`pos/ir_slice.nc` 同属 `IR_ONLY` 却不在这 5 格里，因为它**带 `.expect`**——走各档 PASS 位、根本不进比对档。这印证 PB-49 的记账口径（比对档只收无 `.expect` 的 pos 用例；那份 37/70 的分母即此来源），也说明「IR_ONLY ⇒ 一定在比对档」是错觉。
+- **簿记**：改动 = `ncc/xmake.lua` 的 `IR_SUBSET` / `IR_ONLY` 两份名单各一处 + 一条 PB-54 注文；`set_default(false)` 那份不动；**未动任何代码或用例**，无源码锚点位移。**待裁清单不新增条目**，改为给第 25 条带日期追加这组逐份归位结果。明细在 `ncc/build/p54/`（gitignore：`step1_probe.sh`、四端输出 `*.out`、`gate.txt`）。**本地提交，未推送**。
+
 ### 2.0 线交叉档越界静态证明轮（PB-53：交叉路线用不了 ASan（zig 无该档运行时），改用帧解码与布局探针——实测 musl 把相邻 malloc(4) 只差 4 字节，IR 的 8 字节写是**确定性覆盖下一个分配**；聚合体第二个成员写到本函数帧之外，2026-10-27）
 
 - **先登记一条做不到的事**：PB-48 建的全语料 sanitizer 档**推不到交叉路线**。`zig cc -target riscv64-linux-musl -static -fsanitize=address` 与 `loongarch64-linux-musl` 同试，都在链接期报 `undefined symbol: __asan_init` / `__asan_report_store1` / `__asan_shadow_memory_dynamic_address`（zig 0.15.2 不带这两档的 ASan 运行时，两档同缺，属工具链而非本项目）。⇒ 交叉档的内存安全只能靠**静态读帧 + 定向布局探针**，本轮两件即此；这也给待裁第 22 条划了边界：**ASan 档只能挂宿主档**。
