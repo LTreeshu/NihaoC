@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 2.0 线 Linux 复跑轮（PB-44：确认四连修不动 Linux 基线 + 两档出码在 Linux 侧的第三方汇编器复验，零代码改动，2026-10-27）
+
+- **为什么还要跑这一轮**：PB-39 ~ PB-42 的四连修只在 Windows 复跑过门禁，Linux 基线一直停在 PB-37 那次（`6123ec1` 时代）。四连修只动两个交叉发射器与文档，**预期结果是「Linux 数值一字不变」**——而「预期不变」恰恰是必须去证的：交叉发射器不进四档矩阵，但它们改的是同一份 `ncc`，Linux 侧的工具链、`libtcc` 接线与 `p0_link` 特判都可能被连带影响。
+- **跑法**：**新开一份 ext4 克隆** `/home/ltree/pb44`（`git clone -b PB`，HEAD = `74bb159`，pos 70 / err 33 / examples 7），**不去动 PB-37 那份留在 `/home/ltree/pb37` 的测量副本**（它还停在 `6123ec1` 且带本地改动，重置它会毁掉别人的对照物）。`xmake f -c -y && xmake -y` 由 tcc 0.9.27（x86_64 Linux）构建，0.793s，`libtcc.so` 在原位。
+- **实测：与 PB-37 的 Linux 基线逐项相同**。c / native 各 **66P / 0F / 6S**、ir-c / ir-native 各 **26P / 0F / 44S**、跨后端一致性 **35 格**（其中 `consistent, 4 backends` **29** 份）、**0 条 FAIL**、`examples/` 四后端 **28/28 次运行全绿**；四处 Linux-only 差异依旧全部来自 `pos/p0_link.nc` 的四条 `[SKIP] … (link kernel32 仅 Windows)`。**结论：四连修对 Linux 零影响，两平台基线继续逐项可比。**
+- **顺手复验两条工具链事实（都是「今天的改动可能让它变质」的项）**：① **Linux 自己的 `ld` 仍链接不了这两档**——`ld -m elf_riscv64` 与 `ld -m elf_loongarch64` 都报 `unrecognised emulation mode`（`ld -V` 里 3 个 emulation 全是 x86 系），所以 PB-38 立的「交叉链接必须走 Windows 的 zig」在改后依旧成立；② **Ubuntu 的 `llvm-mc` 18 对改后的两档出码各 53/53 接受**（这次跑的是 Linux 自己编译出的 `ncc` 的产物，不是 Windows 产物的搬运，riscv64 侧带 `-mattr=+m,+a,+f,+d,+c`，两档各 53 份出码、0 拒绝、24 份不出码与 Windows 计数相同）——`pcalau12i %pc_hi20` 取址对、`fcvt.l.d … , rtz`、`t0` 暂存寄存器与 `fcvt.s.d`/`fcvt.d.s` 全都过了一个与 zig 内嵌 LLVM 19 不同大版本的汇编器。
+- **复现的在册噪音**：构建仍每次报 `xmake.lua:73: includedir '/usr/local/bin/libtcc' not found`，与待裁清单第 14 条一致，未改。
+- **一处自伤记档**：第一版补充脚本在 `/home/ltree/pb44` 下用相对路径 `tests/pos/…` 调 `ncc`——语料其实在 `ncc/` 子目录下，于是两档「无 `.s` 产出」被误读成「Linux 侧出码失败」；修正为「一切都在 `ncc/` 里跑 + 输出前缀给 `/tmp`」后才拿到真数据。**这个仓库里凡是命令行门禁与探针，cwd 一律取 `ncc/`**（`xmake` 也要求如此），别在仓库根拼相对路径。
+- **簿记**：`IMPLEMENTATION_STATUS.md` 新增「Linux 复跑（PB-44）」小表并注明它是四连修之后的复跑（PB-37 那张两平台对照表**作为 2026-10-11 的快照不回改**，两处的数正好相同这件事本身就是结论）；`docs/TODO-PB.md` 记 PB-44 账条目 + 日期头注。零代码、零用例、零 `xmake.lua` 改动 ⇒ 无锚点位移。**下一轮**：PB-45 查 `bracket_attrs` 的 `undefined symbol: twice` 属自写用例缺陷还是 A 后端缺陷（它是交叉矩阵里唯一的 NOREF）；`PA-61` 未裁则 **P13** 仍卡住。**本地提交，未推送**。
+
 ### 2.0 线待裁事项汇总轮（PB-43：18 条等裁事项收进一处 + `ir_str` 的 `.expect` 试算，零代码 / 零用例改动，2026-10-27）
 
 - **动机**：PB-38 打通执行验证、PB-39 修掉 loongarch64 取址、PB-40 修掉 riscv64 舍入与两档间接调用、PB-41 补 `IR_FTRUNC`、PB-42 更正普查并定性 `ir_str` 之后，**两档发射器的专属缺陷已清零，剩余分歧全部归因到 IR 前端语义或上游共享缺陷**——本分支能自主推进的部分见底。于是把散在 PB-28 ~ PB-42 各轮的等裁事项收进 `docs/TODO-PB.md` 的新节「待 ltree 裁定清单（2026-10-27 汇总，PB-43）」：**四组 18 条，每条给「选项 + 实测代价 + 证据出处」**，排序按**卡住的广度**（先卡住 PB-33 收尾的，再卡住单档的），使一次裁定能解锁最大面积；引用只用符号名与配置标识符，源码行号仍只留在 `IMPLEMENTATION_STATUS.md`。
