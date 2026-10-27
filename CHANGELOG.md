@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 2.0 线 examples 档判据普查轮（PB-51：「examples 四后端 7/7」既不在门禁里也不校验输出——`03_struct` 在 IR 档打的是 `struct copy bad`；一份 example 临时加行做对照后按备份还原，2026-10-27）
+
+- **门禁三档的第三条腿量完了**：PB-49 量 pos 档、PB-50 量 err 档，本轮量那条被到处引用却从没被查过的——**「examples 四后端 7/7」**。
+- **结构事实：它不在门禁里**。`xmake.lua` 中「examples」出现 **0 次**，`xmake test --all` 的输出里 `example` 计数也是 **0**；历年这个数字出自一份 **gitignore 草稿脚本** `ncc/build/p32/exrun.sh`（Linux 侧是 PB-37 的 `probe_linux.sh`）。**判据＝「`ncc build` 成功 + 产物存在 + 跑一次 rc=0」，stdout / stderr 一律丢进 `/dev/null`。** 它能抓「编不过 / 跑崩」（`06_cooking` 当年 6/7 就是被它抓出来的），**对输出内容零断言**。
+- **28 份运行实测**（7 份 × 四档）：全部 rc=0、stderr 全空，逐份 stdout 落盘比对 ⇒ **6/7 份四档输出逐字节相同**；唯一分歧是 **`03_struct` 的 `struct copy` 行——c / native 打 `ok`，ir-c / ir-native 打 `bad`**。这条分歧本身在册（PB-28 记为「A 路线与 IR 路线输出不同属既有状态」，根因是 IR 无聚合体布局），**但它与「examples 7/7」这句话同时成立**，因为该档根本不看输出——这就是本轮最有价值的一句话。
+- **阴性对照一次做完四件事**：往 `examples/01_hello.nc` 加一行 `puts("p51 arbitrary line nobody checks")` 后：（a）按草稿判据重跑仍是 **passed=7 failed=0 ×4 档**；（b）那行**确实被执行并打印**；（c）**门禁全量复跑的四档 tallies 与 PB-50 基线一字不变**（c / native 66P/0F/4S、ir-c / ir-native 26P/0F/43S、0 FAIL）；（d）门禁输出 0 次提及 example。⇒ 「7/7」对语义零断言力，且**它连门禁都不是**。
+- **处置（登记，未擅动）**：接进门禁（跨档比对 + 逐份 `.expect`）与把簿记措辞改窄，都写进待裁**第 27 条**三选一。两个耦合点先摆明：**① 一旦开始跨档比对，`03_struct` 当场红**，而「A 与 IR 谁对」属第 10 条的 IR 八桶，必须先裁；**② `examples/` 是两分支共享目录**，单方面钉 `.expect` 正是 PB-33 要消除的用例集分叉，所以 (a) 方案需要 PA 侧同步。另记一条工程质量问题：这份判据脚本**藏在随 `build/` 一起失效的草稿目录里**，没有版本化入口，本身比「不校验输出」更该先修。
+- **零留痕**：`examples/01_hello.nc` 由 `build/p51/01_hello.nc.orig` 原样还原（CRLF 保留），`git status` 只剩仓库根既有未跟踪 `build/`；沿用 PB-49/50 的「**临时态 + 备份还原 + 复跑基线**」三件套。明细在 `ncc/build/p51/`（gitignore：`out/` 28 份 stdout、`step1_examples.sh`、`step2_control.sh`、`mutated.txt`）。**本地提交，未推送**。
+
 ### 2.0 线 err 档判别力普查轮（PB-50：10/33 份用例的期望子串会命中别人的 stderr、9 份共用同一句短语，另证出「无 `.expect` 的 err 用例直接放行」这条真空分支；两份 expect 临时改完即还原，2026-10-27）
 
 - **判据本体先看清**：门禁的 err 循环是「跑 `ncc build` → **产物存在即 `[FAIL] expected compile error, but succeeded`**；否则把整份 `.expect`（去尾部空白）当**连续子串**在 stderr 里 `find(..., 1, true)`」，另有第三支——**没有 `.expect` 文件时直接 `[PASS]`**。`try_execv` 的返回码被丢弃：**门禁不读退出码**，只看产物在不在。
