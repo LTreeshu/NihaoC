@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 2.0 线 `[[inline]]` 降低定性轮（PB-45：`undefined symbol: twice` 是 C99 inline 规则，两线产物逐字节相同，2026-10-27）
+
+- **收掉 PB-38 留在交叉矩阵里唯一的那格 NOREF**（`bracket_attrs` 的两条 C 参照都 `ld.lld: error: undefined symbol: twice` 而两档汇编路线能链接），并证明它**与交叉发射器无关、也不是用例写错**：`pos/bracket_attrs.nc` 是 P12 轮本分支自写用例，`twice` 在其中**有完整定义**。真因在产物 C 的形状：`[[inline, used]]` 被降低成 **`inline __attribute__((used)) int32_t twice(int32_t v) { … }`**——按 C99/C11，一个既无 `static` 也没有 `extern` 定义的 `inline` 函数**不产生外部符号**，所以任何未被内联的调用在链接期就缺符号。
+- **机制用三份对照锁死**：① 拿真实产物 C 去链，`x86_64-linux-musl` 与 `riscv64-linux-musl` 都报 `undefined symbol: twice`；② **手写最小对照**——`inline int twice(){…}` + 调用 ⇒ 同样缺符号，改成 `static inline` ⇒ 链接通过，证明这就是 C99 inline 规则而不是 ncc 特有的拼写问题；③ **`-O2` 会把它藏起来**（同一份 C 在 `-O2` 下 rc=0，因为调用被内联掉了）⇒ 任何「我这边能链」的验证都必须固定在 `-O0`。
+- **判定为上游共同缺陷**：同一构造交给 `PA` 工作树的编译器（用**同行属性**写法绕开 P12 才落在本分支的「属性独占一行」容分行），两边产物 C **`cmp` 逐字节相同**（都是 `inline __attribute__((used)) int32_t twice(...)`），且 PA 的产物同样链接失败。按既有硬规则**只登记不在本分支单侧修**。修法有三种口径要选：**(a)** 降成 `static inline`（`[[export]]` 或外部可见时不成立）；**(b)** `inline` 定义之外再补一条 `extern inline` 外部定义（C99 标准形）；**(c)** 把 `[[inline]]` 当纯提示属性、干脆不发 `inline` 关键字。真正要裁的是语言层问题——`[[inline]]` 到底是不是 C 的 inline 语义。另外 `__attribute__((used))` **并不能**补救：它只阻止被丢弃，不生成外部定义（实测如此）。
+- **顺手补一条门禁盲区**（比原清单第 13 条更具体）：P9 那档产物 C 抽查做的是 `-fsyntax-only`，**只验语法、从不链接**，所以「语法合法但链接缺符号」这一整类（本条 C99 inline、以及 `string` 写只读页的运行期缺陷）结构上不可能被它抓到；tcc 又对这些形态宽容，两侧一起把它盖住。要真堵上，抽查得加一步 `-c` 之后的链接（或 `-Wl,--no-undefined`），那属两分支共享的 `xmake.lua` 面。
+- **对交叉矩阵的影响**：这条在 `PA` 侧修好之后，`bracket_attrs` 的 C 参照就能链接，矩阵里那格 NOREF 自动消失；本轮**不动任何代码**（`ir_loongarch64.c` / `ir_riscv64.c` / 用例 / `xmake.lua` 一字未改），门禁与两档矩阵也不需要重跑——因为没有可变的量。**待裁清单从 18 条增至 19 条**（新增第 3.5 条：`[[inline]]` 的 C 语义三选一 + 抽查加链接步骤），已就地写进 `docs/TODO-PB.md` 的汇总节。
+- **簿记**：`docs/TODO-PB.md` 记 PB-45 账条目并**就地更新汇总节的条目计数与新增项**（同一轮内修正自己的清单，注明「本轮新增」而非改写历史条目）；`IMPLEMENTATION_STATUS.md` 新增一行定性记录 + 日期头注。探针在 `ncc/build/p45/`（gitignore）：`probe.sh`（真实产物链接 + 两份手写对照 + PA/PB 产物 `cmp`）。**自伤一条**：脚本里全用了 WSL 的 `/mnt/d/...` 路径却在 Git Bash 里跑，`mkdir /mnt` 直接 Permission denied、整轮输出全是「No such file or directory」——**跑之前先确认解释器与路径体系配对**（Git Bash 用 `/d/...`，WSL 用 `/mnt/d/...`），这类失败的特征是「所有步骤都报错但错误信息一模一样」。
+- **下一轮**：继续攻簿记里剩下的「做不到」类欠账；`PA-61` 未裁则 **P13** 仍卡住。**本地提交，未推送**。
+
 ### 2.0 线 Linux 复跑轮（PB-44：确认四连修不动 Linux 基线 + 两档出码在 Linux 侧的第三方汇编器复验，零代码改动，2026-10-27）
 
 - **为什么还要跑这一轮**：PB-39 ~ PB-42 的四连修只在 Windows 复跑过门禁，Linux 基线一直停在 PB-37 那次（`6123ec1` 时代）。四连修只动两个交叉发射器与文档，**预期结果是「Linux 数值一字不变」**——而「预期不变」恰恰是必须去证的：交叉发射器不进四档矩阵，但它们改的是同一份 `ncc`，Linux 侧的工具链、`libtcc` 接线与 `p0_link` 特判都可能被连带影响。
