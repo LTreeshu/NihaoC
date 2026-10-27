@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### 2.0 线用例判别力轮（PB-49：46 份用例的失败分支从未执行过，比对档的「2 backends」标签被证伪；门禁 pos 档首次端到端阴性对照，三处临时改动跑完即撤，2026-10-27）
+
+- **这轮把一句反复出现的话从推断换成测量**。本仓库已经四次撞到「门禁全绿 ≠ 用例正确」（P7 的 `ir_struct`、P12 的属性用例、PB-42 的 `ir_str`、PB-46 的 `IR_ONLY` 掩盖非法成员），但每次都是**从某一次输出反推**的。本轮改成正面测量：**跑遍门禁自己留存的运行捕获**，并把 pos 档与比对档各做一次阴性对照。
+- **失败分支普查**：`tests/pos/` 共 **70 份用例，其中 46 份含 `bad` / `fail` / `wrong` 失败分支**（写法清一色是 `if 断言 { puts("… ok") } else { puts("… bad") }`），而门禁留下的 **212 份 `build/tests/<档>/<用例>.exe.out`（c 64 + native 64 + ir-c 42 + ir-native 42）里 0 条含失败行**，`.expect` 也没有钉住过一条 ⇒ **语料只证明过「走 ok」，从未证明「坏了会打 bad」**，那条 else 分支及其文案在本仓库任何一次运行里都不曾执行。与 PB-47 的折叠谓词普查（`alignof_builtin` 的 9 条断言全是 `(N == N)`）是同一件事的两面：折叠让部分 `bad` 分支**静态不可达**，其余的则**从未被执行**。
+- **阴性对照 A：`.expect` 档确有判别力**。给 `pos/hello.expect` 追加一行 ⇒ c / native / ir-c / ir-native **各报一条 `[FAIL] output mismatch`**。判据在 `xmake.lua` 的 pos 循环里是 `norm()` 后 `#w == #g` 且逐行全等（**不是子串匹配**，与 err 档不同），所以多一行即不等。
+- **阴性对照 B：比对档的标签比读起来弱**。摘掉 `pos/is_no_fallthrough.expect` ⇒ 它进比对档却只报 **`(consistent, 2 backends)` 而不是 FAIL**——它不在 `IR_SUBSET`，比对档里剩下的两个档是 **c 与 native，即同一 A 侧前端的两个落地器**（同前端、同 lowering，只差最后落地方式）。**36 格里有 5 格是这种两后端格**，而这个标签此前一直被当成「跨后端一致」读；一条 A 后端 lowering 缺陷在这 5 格里结构上不可见。
+- **阴性对照 B′：比对档本身是有效的，弱在参与档数**。把 `is_no_fallthrough` 临时加进 `IR_SUBSET` 且保持无 `.expect` ⇒ **`[FAIL] pos/is_no_fallthrough.nc: inconsistent across backends`**。副产品是**第二次实证 P4 那条「IR 无 `__is_matched` 首匹配即止 ⇒ 输出翻倍」**，且这次拿门禁自己当 oracle、不读代码。
+- **阴性对照 C：一致 ≠ 正确的构造性证明**。给**本分支自有**、无 `.expect` 的 `pos/struct_param_prefix.nc` 加一行任意 `puts` ⇒ 四档都打印它，比对档仍 **`[PASS] (consistent, 4 backends)`、门禁 rc=0、0 FAIL** ⇒ **一致性档结构上无法拒绝「一致但不是预期的输出」**。唯一解法是补 `.expect`，而那受用例集归属限制（PA 结转的文件不能单侧加，同第 12 条的顾虑）。
+- **分母一并量清**：**70 份 pos 里 37 份（53%）没有 `.expect`**，全部只进比对档——这是「补 `.expect` 的收益上限」，往后要补就先补这 37 份里的关键形态。
+- **零留痕收尾（方法本身值得记）**：三处临时改动全部撤销（`git checkout` 两份 + `.bak` 还原一份），复跑基线**一字不变**：c / native **66P/0F/4S** ×2、ir-c / ir-native **26P/0F/43S** ×2、比对 **36 格**（4 后端 31 + 2 后端 5）、**0 FAIL**、rc=0，`git status` 只剩仓库根那个既有未跟踪 `build/`。**要动的是门禁共享件时，实验只能做成临时态 + 复原复跑**——这比 PB-43 那次「试算完删掉 `.expect`」更进一步，这次连 `IR_SUBSET` 名单都临时改过又还原。
+- **簿记**：**未改任何代码或用例**，无锚点位移、基线不变；`IMPLEMENTATION_STATUS.md` 新增 7 行判据表；**待裁清单 24→25 条**（第 25 条＝比对档「2 backends」标签口径 + 失败分支要不要各配一道反向对照，归组三末尾，不重排既有编号）。三份门禁输出与脚本在 `ncc/build/p49/`（gitignore）。**本地提交，未推送**。
+
 ### 2.0 线全语料 sanitizer 档首轮（PB-48：ASan + UBSan 跑遍 122 份产物，UBSan 零报告，但 IR 路线查出两处越界写；另更正本轮上一节的泄漏定量口径，2026-10-27）
 
 - **门禁从未在任何 sanitizer 下执行过产物**：`c` 档走宽容的 tcc，P9 接线的产物 C 抽查又只 `-fsyntax-only`。本轮把这一档补上——**122 份产物**（`build/tests/c` 66 + `build/tests/ir-c` 42 + 本轮用现编 `ncc` 生成的 `examples/` 14，**不用 `build/` 下 10-01 的旧副本**）在 Ubuntu clang 18 下 `-fsanitize=address,undefined -fno-omit-frame-pointer -g -O0` 链接并运行，逐份分桶得 **103 CLEAN / 4 REPORT / 9 NONZERO（泄漏）/ 6 BUILD-FAIL**，明细落 `ncc/build/p48/san.tsv`。
