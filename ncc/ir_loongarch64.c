@@ -276,9 +276,10 @@ static void la_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             if (in->op == IR_CALL) {
                 nb_put(b, "  bl %s\n", in->sym);
             } else {
-                nb_put(b, "  ld.d $a0, ");
+                /* 同 riscv64：目标地址落进 $a0 会覆盖第一整数实参，改用暂存 $t0 */
+                nb_put(b, "  ld.d $t0, ");
                 la_slot(b, in->a, tb);
-                nb_put(b, "\n  jirl $ra, $a0, 0\n");
+                nb_put(b, "\n  jirl $ra, $t0, 0\n");
             }
             /* 返回值存储：目标函数浮点返回 → $fa0（fst.d），否则 $a0（st.d） */
             if (in->op == IR_CALL) {

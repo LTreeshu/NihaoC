@@ -80,10 +80,11 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             nb_put(b, "\n");
             break;
         case IR_DTOI:
-            /* double → int64 截断（D 扩展 fcvt.l.d，向零舍入） */
+            /* double → int64：必须显式 rtz。不带舍入模式时走**动态舍入**（musl 起始为
+             * 就近取偶），于是 3.7→4、-3.7→-4，与 C 的向零截断相反（实测见 TODO-PB 的 PB-39）。 */
             nb_put(b, "  fld fa0, ");
             rv_slot(b, in->a, tb);
-            nb_put(b, "\n  fcvt.l.d a0, fa0\n  sd a0, ");
+            nb_put(b, "\n  fcvt.l.d a0, fa0, rtz\n  sd a0, ");
             rv_slot(b, in->dst, tb);
             nb_put(b, "\n");
             break;
@@ -243,9 +244,11 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             if (in->op == IR_CALL) {
                 nb_put(b, "  call %s\n", in->sym);
             } else {
-                nb_put(b, "  ld a0, ");
+                /* 目标地址不能落进 a0——a0 同时是第一整数实参，装载它会把刚摆好的
+                 * 参数覆盖掉（实测见 TODO-PB 的 PB-39，改暂存寄存器 t0）。 */
+                nb_put(b, "  ld t0, ");
                 rv_slot(b, in->a, tb);
-                nb_put(b, "\n  jalr ra, a0\n");
+                nb_put(b, "\n  jalr ra, t0\n");
             }
             /* 返回值存储：目标函数浮点返回 → fa0（fsd），否则 a0（sd） */
             if (in->op == IR_CALL) {
