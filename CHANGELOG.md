@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 2.0 线 Linux 复跑轮（PB-55：验证 PB-54 的名单改动，基线按预期动一格、其余一字不变；顺带把「非登录 shell 没有 xmake」这条坑第五次钉死，2026-10-27）
+
+- **为什么还要再跑一次**：PB-54 动了 `ncc/xmake.lua` 的两份 IR 名单。本仓库的既定口径是**名单 / 构建配置类改动要在 Linux 侧复跑才算结案**（先例：PB-44 复跑发射器四连修、PB-46 复跑 `IR_ONLY`→`IR_SUBSET` 移位）。Linux 与 Windows 的 SKIP 集合不同（`p0_link` 只在 Windows 过），名单改动在两平台的记账形状可能不一样，不能拿一平台的数字推另一平台。
+- **跑法**：把改动后的 `xmake.lua` 与 `struct_param_prefix.nc` 复制进 WSL 的 ext4 克隆 `/home/ltree/pb44`（HEAD `74bb159`），**不动 PB-37 那份带本地改动的测量副本**；在 `ncc/` 下 `xmake build ncc` + `xmake test --all`。
+- **实测：变化正好是预期的那一格，其余一字不动**：c / native **66P/0F/4S**（PB-46 结案时是 5S，少的一格正是 `ir_mr` 不再被 c / native SKIP）；ir-c / ir-native **26P/0F/44S 不变**；跨后端比对**总数 35 格不变**而 **4 后端 30→31、2 后端 5→4**；`ir_mr` 在 Linux 同样打 `[PASS] pos/ir_mr.nc (consistent, 4 backends)` ⇒ **提升不是 Windows 特例**；**0 FAIL、rc=0**；两平台差异仍只有 `pos/p0_link.nc` 一条；构建 0.567s、tcc 0.9.27，在册噪音 `includedir '/usr/local/bin/libtcc' not found` 照旧复现（第 14 条不变）。
+- **工具坑第五次复发，口径从「记住」升级为「写进脚本骨架」**：首跑脚本里裸调 `xmake` ⇒ `command not found`、rc=127，于是把整轮读成一串 0（若非先看 rc 就会误判成「Linux 侧全跳过」）。根因还是 PB-37 记过的那条：**非登录 shell 的 PATH 里没有 `~/.local/bin`**。本轮不再依赖 `bash -lc`，改为**在脚本里显式探测 xmake 的绝对路径**（本机 `/home/ltree/.local/bin/xmake`）并先打印它。**固化：探针脚本里的每一个外部命令都要给绝对路径或在脚本开头显式探测——依赖调用方的 shell 类型就是埋雷。**
+- **簿记**：**未改任何仓库文件**（克隆里的副本不算），无锚点位移、无源码改动；`IMPLEMENTATION_STATUS.md` 记本轮 6 行两平台对照表；脚本与 429 行完整输出在 `ncc/build/p55_linux.sh` / `ncc/build/p55_linux_gate.txt`（gitignore）。**本地提交，未推送**。
+
 ### 2.0 线「两后端一致格」归位轮（PB-54：`ir_mr` 实测四端输出逐字节相同却挂在 IR_ONLY 里少比两个档，提升之后 `ir_builtin` 的在册理由被证伪——A 后端其实能编，2026-10-27）
 
 - **接 PB-49 的账**：那轮量到跨后端比对档里有 **5 格只写 `(consistent, 2 backends)`**，即比的是**同一前端的两个落地器**（c vs native，或 ir-c vs ir-native），一条前端 lowering 缺陷在这些格上结构上不可见。本轮逐份实跑缺的那一侧，能提升的提升、不能的提升不了的点名原因。
