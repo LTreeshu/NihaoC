@@ -5,8 +5,8 @@ module main
  *   验证：含可见性前缀的 struct 参数声明/调用在 4 后端一致无回归。 */
 
 Person struct {
-    age
-    score
+    age i32
+    score i32
 }
 
 /* struct + flow 前缀：所有权转移（实参 struct 变量失效，但因非指针类无运行时副作用） */

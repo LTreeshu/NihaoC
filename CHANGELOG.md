@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 2.0 线用例质量轮（PB-46：所谓「A 后端反向缺口」其实是 IR_ONLY 掩盖的非法成员写法；修一份、登记一份，2026-10-27）
+
+- **起点是 PB-38 记下的一条「反向缺口」**：`pos/ir_sparam.nc` 与 `pos/struct_param_prefix.nc` 在 `-backend=c` 下**根本不出产物 C**，却在 `ir-riscv64` / `ir-loongarch64` 两档正常出码并跑对——当时的读法是「A 后端落后于 IR 前端」。本轮查清**这个读法是错的**，两层原因：① 两份用例本来就在 `IR_ONLY` 名单里（IR 专属名单），c / native 的 SKIP 是**有意的**，不是退化；② 真正挡住 A 后端的是**用例自己写错了**——`Person struct { age \n score }` 的成员只写名字不写类型，A 后端正确地报 `unknown type 'score'`（ncc 的成员写法是 `名字 类型`，同仓库其它用例都写 `age u8` / `score i32`）。
+- **比写错更值得注意的是它为什么能长期存在**：IR 路线是 8 字节槽模型、**没有聚合体布局**，于是整段结构体声明被**静默吞掉**，而用例里 `p.score` / `p.age += 1` 这类成员访问照样在槽上算出「ok」——**`IR_ONLY` 的实际语义是「没人拿全量 parser 检查过这份文件」**，所以一份语法本就不合法的用例能在门禁里长期全绿。这是本仓库**第一例「白名单掩盖坏用例」**（与此前四例「无 `.expect` 掩盖错输出」机制不同：那类是断言缺失，这类是**名单本身免掉了语法检查**）。
+- **处置按归属分两半**：`struct_param_prefix.nc` 是**本分支自有文件**（`PA` 没有它，引入于 59bec76 / dea3bab 两笔本分支提交）⇒ 直接补上 `age i32` / `score i32`，并从 `IR_ONLY` 移进 `IR_SUBSET`（`IR_ONLY` 5→4、`IR_SUBSET` 37→38）。`ir_sparam.nc` 是 `PA` 结转用例，且 **`PA` 那一份同样漏写类型**（`git show PA:ncc/tests/pos/ir_sparam.nc` 第 3~6 行一模一样）⇒ 按「两线同现 ⇒ 上游共同缺陷、不在本分支单侧改」处理，**不动文件**，登记为待裁清单**第 20 条**（修法与本轮那份完全相同；`PA` 改后随通道流下，本分支再把它移出 `IR_ONLY`）。
+- **实测（判据是「这份用例第一次真跑四条路」）**：改后 `c` / `native` / `ir-c` / `ir-native` 四档编译运行都输出 `struct param prefix ok`；交叉侧 subject（两档汇编）× A 参照 × ir-c 参照**六次运行同输出同退出码**（rv / la 各三次，全部 rc=0）。顺带补上 PB-38 那格「A 参照缺失」——交叉矩阵的参照覆盖由 51 份升到 **52 份**。
+- **门禁两平台各复跑一次，记账形状正是预测**：Windows **c / native 5S→4S**、PASS 66 不变、ir 档 SKIP 43 不变（它本来就在 IR 跑）、跨后端一致性 **36 格不变** 而成色变好（`consistent, 2 backends` 6→**5**、`consistent, 4 backends` 30→**31**）、**0 FAIL**；Linux（把两个改动文件复制进 PB-44 那份 ext4 克隆复跑）**c / native 6S→5S**、`consistent, 4 backends` 29→**30**、**0 FAIL**，`p0_link` 仍是唯一平台差异。
+- **同时更正 PB-38 的一条在册记法**：那条「A 后端落后 IR 的反向缺口」更正为「`IR_ONLY` 的既设 SKIP + 用例成员写法非法」——**不删原文、就地注明原值并带日期**（PB-38 的观察没错，错在把 SKIP 读成了后端退化）。
+- **WSL 工具坑第四次复发，结论升级为硬前置**：又在 `wsl.exe -- bash -c '…$a…'` 内联串里被 MSYS 吃掉变量（这次是 run 阶段，报 `syntax error near unexpected token 'rv'`），拆成独立 `.sh` 才拿到数据。该坑 PB-37 / PB-38 / PB-39 已记三次，**从现在起从 Git Bash 进 WSL 只允许 `bash /mnt/.../x.sh` 一种形态，内联 `bash -c` 视为禁用**。
+- **簿记**：`ncc/tests/pos/struct_param_prefix.nc`（成员补类型）+ `ncc/xmake.lua`（两份名单各改一行）；`IMPLEMENTATION_STATUS.md` 与 `docs/TODO-PB.md` 记本轮，并把待裁清单由 19 条增至 **20 条**（新增归组一末尾，不重排既有编号）。探针在 `ncc/build/p46/`（gitignore）：`check_matrix.sh`、`run_phase.sh`、`linux_verify.sh`。**下一轮**：继续攻簿记里剩下的欠账；`PA-61` 未裁则 **P13** 仍卡住。**本地提交，未推送**。
+
 ### 2.0 线 `[[inline]]` 降低定性轮（PB-45：`undefined symbol: twice` 是 C99 inline 规则，两线产物逐字节相同，2026-10-27）
 
 - **收掉 PB-38 留在交叉矩阵里唯一的那格 NOREF**（`bracket_attrs` 的两条 C 参照都 `ld.lld: error: undefined symbol: twice` 而两档汇编路线能链接），并证明它**与交叉发射器无关、也不是用例写错**：`pos/bracket_attrs.nc` 是 P12 轮本分支自写用例，`twice` 在其中**有完整定义**。真因在产物 C 的形状：`[[inline, used]]` 被降低成 **`inline __attribute__((used)) int32_t twice(int32_t v) { … }`**——按 C99/C11，一个既无 `static` 也没有 `extern` 定义的 `inline` 函数**不产生外部符号**，所以任何未被内联的调用在链接期就缺符号。
