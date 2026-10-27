@@ -14,6 +14,9 @@
  *  - 帧指针 $s0（fp）；$ra 保存在 8(sp)、$s0 在 0(sp)
  *  - 调用约定：$a0-$a7 整数参数/返回（$a0 返回），$fa0-$fa7 浮点参数
  *  - 立即数：li.d 伪指令（汇编器展开，支持任意 64 位）
+ *  - 取静态符号地址：发 `pcalau12i $rD, %pc_hi20(sym)` + `addi.d $rD, $rD, %pc_lo12(sym)`
+ *    这一对（clang 就是这么发的），**不要发 `la sym`**——MC 层把 `la` 展开成经 GOT 的
+ *    pcalau12i + ld.d，而 -static 下 ld.lld 只给第一个站点建槽，第二个站点起就读到 0
  *  - 浮点：int→double 是 movgr2fr.d 再 ffint.d.l（两个操作数都是浮点寄存器）；
  *    double→int 是 ftintrz.l.d（向零舍入，同样 f→f）再 movfr2gr.d；
  *    比较是 fcmp.<cnd>.d $fcc0, $fa0, $fa1 写条件码，再 movcf2gr + andi 取 0/1；
@@ -194,7 +197,10 @@ static void la_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             nb_put(b, ".L%d:\n", (int)in->label);
             break;
         case IR_LD_ADDR:
-            nb_put(b, "  la $a0, %s\n", in->sym);
+            /* `la sym` 会被 MC 层展开成经 GOT 的 ld.d，-static 下第二个站点起读到 0，
+             * puts 拿到空指针即在 musl strlen 里崩（实测 38/51，见 TODO-PB 的 PB-39）。 */
+            nb_put(b, "  pcalau12i $a0, %%pc_hi20(%s)\n  addi.d $a0, $a0, %%pc_lo12(%s)\n",
+                   in->sym, in->sym);
             la_store_a0(b, in->dst, tb);
             break;
         case IR_ADDR:
