@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 2.0 线 IR 名单复测轮（PB-56：把 PB-36 的归类整体重跑一遍——可提升 0 份，但查出 3 例挂着过期理由，并量清单一条 `p.(T)` 解析缺口就挡着 8 份用例，2026-10-27）
+
+- **为什么跑**：PB-54 刚证伪一条在册理由（`ir_builtin` 挂 `IR_ONLY` 说「全量 parser 不支持」，实测 A 后端能编），教训是**名单理由一旦过期，后面每轮都照假理由跳过复测**。这轮就把这条教训执行成系统动作：把 PB-36（2026-10-05）那份归类整体复跑。
+- **判据照门禁抄，不自己发明**：pos 要 `-backend=ir-c` 产出可执行文件**且 stdout 与 c 档逐字节相同**；err 要 IR **不产文件**且 stderr 含整份 `.expect` 的连续子串。对象 = **当前不入任何 IR 名单的 43 份**（pos 28 + err 15）。
+- **结论：可提升 0 份 ⇒ PB-36 的归类在「能不能进名单」这一判据上今天全部成立**，名单一字不动。但把「不入名单」这一件事拆成了四档：**IR 前端直接拒 32 份**；**IR 没拒、要到生成的 C 才炸 8 份**（`pos/multi_arr_decl`、`pos/str_array_init`、`pos/use_mod` + err 5 份，形态 `error: lvalue expected` / `implicit declaration`）；**两侧都能编而语义分歧 2 份**（`alignof_builtin` 输出 144B vs 150B、`is_no_fallthrough` 65B vs 102B）；**静默接受 1 份**（`err/str_array_overflow`，0 诊断）。
+- **过期理由抓到 3 例**：`alignof_builtin` 与 `is_no_fallthrough` 现在的账面话是「IR 子集未覆盖」，实测 **IR 能编**、真因是语义分歧，加上 PB-54 的 `ir_builtin` 共 **3 例** ⇒ 归位动作很轻（把理由从「编不了」改成「能编而结果不同」），但必须逐份实跑才发现得了。
+- **本轮最有决策价值的数字**：**单一条 IR 解析缺口——带类型解引用 `p.(T)`（`expected ')', got 'i32'/'i64'/'char'`）挡着 8 份用例**：pos `borrow` / `flow` / `flow_move` / `flow_no_free` / `malloc_demo` + err `deref_bounds` / `flow_move_frozen` / `slice_str_overflow`；第二档「数组/切片声明带 `[`」的 `expected '=', got '['` 挡 3 份；其余诊断全是单例。**这给待裁第 10 条的八桶排序一个硬依据：先修 `p.(T)`，一份修复换 8 份用例**，比逐个零散缺口划算。
+- **err 侧顺带量清**：15 份不入名单的 err 用例里，**9 份 IR 其实有诊断、只是文案与 A 不同源**（`is_dangling_range`：A `invalid 'is' range` vs IR `ir: bad 'is' pattern (expected integer after '..')`，无共用子串）、5 份要到 C 阶段才暴露、1 份静默接受 ⇒ SKIP 文案「IR 前端暂未覆盖该静态检查」混着**三种不同病因**，裁定时应分开列。
+- **簿记**：**未改任何代码、用例或名单**（本轮无一可提升），故无锚点位移、门禁无需复跑；`IMPLEMENTATION_STATUS.md` 记 7 行分桶表；脚本与 43 行逐份判定在 `ncc/build/p56/`（gitignore：`sweep.py`、`bucket.py`、`report.tsv`）。**本地提交，未推送**。
+
 ### 2.0 线 Linux 复跑轮（PB-55：验证 PB-54 的名单改动，基线按预期动一格、其余一字不变；顺带把「非登录 shell 没有 xmake」这条坑第五次钉死，2026-10-27）
 
 - **为什么还要再跑一次**：PB-54 动了 `ncc/xmake.lua` 的两份 IR 名单。本仓库的既定口径是**名单 / 构建配置类改动要在 Linux 侧复跑才算结案**（先例：PB-44 复跑发射器四连修、PB-46 复跑 `IR_ONLY`→`IR_SUBSET` 移位）。Linux 与 Windows 的 SKIP 集合不同（`p0_link` 只在 Windows 过），名单改动在两平台的记账形状可能不一样，不能拿一平台的数字推另一平台。
