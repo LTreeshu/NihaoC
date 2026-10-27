@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 2.0 线发射器 opcode 覆盖缺口轮（PB-41：riscv64 补 `IR_FTRUNC`，两档残余首次相同，2026-10-27）
+
+- **`ir_fcall` 的 f32 断言不是指令写错，而是 riscv64 少了一条 case**：`IR_FTRUNC`（f32 严格宽度：`double → float → double`）在 `ir_riscv64.c` 里根本不存在，指令落到 `default: break;` **静默发空**——既不做截断，也不写目的槽，于是紧随其后的那条指令从目的槽读出的是**未初始化值**。loongarch64 一侧早有对应实现，所以同一份用例只在 riscv64 出坏值，这也是 PB-39 当时「两档结构同形却一侧失败」的真面目。
+- **两条发现手法值得固化**：① **把两个发射器的 `case IR_*` 集合做差集**（`grep -o` + `sort -u` + `comm`）——riscv64 47 条、loongarch64 48 条，差集只有 `IR_FTRUNC` 一条，**兄弟档的覆盖表本身就是现成的 oracle**，一轮顶替十几次逐用例试错；② 用 `ncc debug <f> --ir` 对全语料做 **opcode 可达性普查**，把「`ir.h` 声明过但两档都没实现」的名单收窄到真会进发射器的那几条：`ALLOCA` / `PARAM` / `LABEL` / `END` 由中央骨架 `irgen_backend_emit` 提前 `continue` 掉，`IR_ATTR_*` 之类根本不是 opcode（是宏名被 grep 误匹配），**剩下的真缺口只有 `LOAD8` / `STORE8`**。
+- **修复最小形状**：riscv64 补 `fcvt.s.d` / `fcvt.d.s` / `fsd`，与 loongarch64 同形（`ir_riscv64.c` 361→**371**，净增 10）；loongarch64 一侧一字未改。
+- **效果**：riscv64 **agree 44→45 / diff 6→5**，loongarch64 保持 45/5，**两档的残余集合第一次完全相同**——4 条 `IR-consistent`（`alignof_builtin` / `ex_03_struct` / `ir_builtin` / `is_no_fallthrough`，即在册的 `alignof` 固定 8 与无 `__is_matched` 首匹配即止）+ 1 条单参照（`multi_arr_decl`）。**至此两档的发射器专属缺陷清零**，剩下的分歧全部归因到 IR 前端语义，取舍回到 ltree 手上。累计自 PB-38 首次真跑：riscv64 42→**45**、loongarch64 12→**45**。
+- **外溢检查三项 + 一道回归确认**：riscv64 出码只有 `ir_fcall` 与 `ir_float` 两份变化（正是 `IR_FTRUNC` 的两个使用者）；loongarch64 出码 53 份**逐字节不变**；msys2 GAS 仍 50 干净 + 3 条 warning，说明新指令被接受；**门禁四档一字不变**（c / native 66P/0F/5S ×2、ir-c / ir-native 26P/0F/43S ×2）。`ir_float` 改前改后都 AGREE，**不能据此反推它原本正确**——同一条静默发空在这份用例上恰好没改变结局，只能说明本次修复无回归。
+- **新登记两条不修**：**① `LOAD8` / `STORE8` 两档都缺，而全语料只有 `pos/ir_str` 用到** ⇒ `ir_str` 在交叉档必然错值，这与它此前那条「subject 与 A 参照同时 rc=139」的共享崩溃是**两件独立的事**（此前一直被当成一件），一并交 PB-42 查；**② `default: break;` 把「未实现」伪装成「已实现」**，是这一整类缺陷的放大器——可达性既已测清（只有 `LOAD8`/`STORE8` 会撞上），把它改成**可读的即时拒绝**是安全的，做法沿用 PB-35 给 `max_frame` 定的「先拒后发、宁可在现场拒绝也不产坏码」原则；但它会改变 CLI 交叉档的用户可见行为，故与 ① 一起在 PB-42 定夺，不在本轮顺手改。
+- **簿记**：`IMPLEMENTATION_STATUS.md` 新增「发射器 opcode 覆盖缺口（PB-41）」基线表 + 日期头注；riscv64 的 `max_frame` 锚点因插码 350→**360** 就地更正，完整来路写成 348→350→360（loongarch64 那侧是 376→381→382），其余锚点均在此前、逐个 grep 确认不动。复跑脚本沿用 PB-39/40 那两步，放 `ncc/build/p41/`（gitignore）。
+- **下一轮**：PB-42 复跑残余定性（`ir_str` 的共享崩溃 + `LOAD8`/`STORE8` 该补还是该拒绝、`default` 要不要改成即时拒绝），PB-43 归拢待裁清单。`PA-61` 的三选一仍卡着 PB-33 的 **P13**。**本地提交，未推送**。
+
 ### 2.0 线交叉发射器修复轮（PB-40：riscv64 的 `fcvt.l.d` 补 `rtz` + 两档间接调用改用暂存寄存器，2026-10-27）
 
 - **把 PB-39 钉死但留给裁定的两条一起修掉**，理由与 PB-39 同：都已定位到「一条指令的发法」，且交叉发射器是 PB 专属码、不在四档门禁矩阵、无跨分支共享面。**改动两处、共四行代码**：① `ir_riscv64.c` 的 `IR_DTOI` 发 `fcvt.l.d a0, fa0` 时补上 **`rtz`**；② 两档的 `IR_CALLI`（间接调用）把目标地址从 `a0` / `$a0` 改到暂存寄存器 `t0` / `$t0` 再 `jalr` / `jirl`。

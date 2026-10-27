@@ -88,6 +88,16 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             rv_slot(b, in->dst, tb);
             nb_put(b, "\n");
             break;
+        case IR_FTRUNC:
+            /* f32 严格宽度：double → float 截断再回 double。本档此前没有这条 case，指令
+             * 落到 default 静默发空——既不截断也不写目的槽，后续从目的槽读出的是未初始化
+             * 值（loongarch64 一侧早有对应实现，故同一用例只在 riscv64 出坏值；见 TODO-PB 的 PB-41）。 */
+            nb_put(b, "  fld fa0, ");
+            rv_slot(b, in->a, tb);
+            nb_put(b, "\n  fcvt.s.d fa0, fa0\n  fcvt.d.s fa0, fa0\n  fsd fa0, ");
+            rv_slot(b, in->dst, tb);
+            nb_put(b, "\n");
+            break;
         case IR_TRUNC:
             /* 窄整数截断 + 符号/零扩展：slli 对齐高位 + srai/srli（imm 编码） */
             {
