@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 2.0 线 err 档 pin 收窄可行性轮（PB-57：33 份用例逐份实测「把 pin 收窄到自身首行」可行不可行 —— 17 可、14 被 A/IR 文案挡住、2 两句诊断本来就撞在一起；落地 1 份，双平台 0 FAIL，2026-10-27）
+
+- **动机**：PB-50 量到 **10/33 份 err 用例的 pin 会命中别人的 stderr**、9 份共用同一句、最短只有 4 字符；PB-56 又给出「先修 `p.(T)` 一份换 8 份」那样的集中度依据。这轮不再停在「pin 太宽」的抱怨上，而是**逐份实测能不能收窄、收窄后门禁会不会红**。
+- **三条判据（照门禁抄）**：候选 pin 必须是 **raw stderr 的连续子串**（err 档不做 ANSI 剥离 ⇒ 只能取 `错误: ` 之后的纯文本）、必须在**跑这份用例的每一档**都命中、且**不得命中其他 32 份**。产出 `ncc/build/p57/pins_final.tsv`。
+- **结果**：**READY 17 份 / PARTIAL 14 份 / COLLIDES 2 份**。PARTIAL 的病因是 **A 与 IR 文案不同源**（如 `m2f_retflow*` 与 `m2e_param` 那句 `would be shorter` 之差，第 26 条正好是同一件事），换 pin 会当场让 IR 档 FAIL；COLLIDES 是 `is_in_do_body` 与 `is_outside_while` **共用同一句诊断**——不拆诊断，任何收窄候选都会命中对方。
+- **归属分母（本轮新增的硬事实）**：**23/33 份 err 用例 `PA` 也有同名文件** ⇒ 单方面收窄正是 PB-33 要消除的用例集分叉；本分支自有 10 份，其中 **READY 只有 2 份**（`is_dangling_range`、`bracket_attr_unknown`），自有其余 8 份全是 PARTIAL ⇒ 能单侧动的就这两份。
+- **落地 1 份**：`tests/err/is_dangling_range.expect` 从 `invalid 'is' range`（18 字）收窄到 `invalid 'is' range: expected an integer upper bound`（51 字）。**双平台各复跑一次**：Windows c/native **66P/0F/3S**、ir **26P/0F/43S**；Linux（复制进 ext4 克隆复跑）**66P/0F/4S**、ir **26P/0F/44S**；两平台比对档 **36 格（4 后端 32 + 2 后端 4）不变**、**0 FAIL**、rc=0 ⇒ 收窄既没弄红任何档，也没有掩盖任何新东西。
+- **第二份当场回退，并留下一条手法**：`bracket_attr_unknown` 按方案表第 7 列回填长消息后**四档立刻 `message missing`**——**那一列在写表时被显示宽度截到 70 字符**，而 err 判据要求整份 `.expect` 连续命中，截断串必然不匹配。已 `git checkout` 回退；该用例现 pin 已点名属性名 `'nope'`、语料内唯一，收益边际，**保持原样**。**固化：照表回填的文案必须从 raw stderr 取原文，别信被截断的展示列。**
+- **给第 26 条的落点**：不再是一句「要不要收窄」，而是三批可分别批准的工作——**(a) 15 份 `PA` 结转的 READY**：由 `PA` 收、随通道流下；**(b) 14 份 PARTIAL**：先统一 A/IR 文案（与 `would be shorter` 措辞不一致同案）；**(c) 2 份 COLLIDES**：先把「while 体外」与「do 体里」拆成两条诊断。每批都动两分支共享文件，所以仍等 ltree 一句话。
+- **簿记**：改动只有 `ncc/tests/err/is_dangling_range.expect` 一行；`IMPLEMENTATION_STATUS.md` 记本轮 head 与 7 行可行性表；脚本与两次门禁输出在 `ncc/build/p57/`（gitignore：`pins.py`、`pins_final.py`、`pins_final.tsv`、`gate_win.txt`、`gate_final.txt`、`gate_linux.txt`）。**本地提交，未推送**。
+
 ### 2.0 线 IR 名单复测轮（PB-56：把 PB-36 的归类整体重跑一遍——可提升 0 份，但查出 3 例挂着过期理由，并量清单一条 `p.(T)` 解析缺口就挡着 8 份用例，2026-10-27）
 
 - **为什么跑**：PB-54 刚证伪一条在册理由（`ir_builtin` 挂 `IR_ONLY` 说「全量 parser 不支持」，实测 A 后端能编），教训是**名单理由一旦过期，后面每轮都照假理由跳过复测**。这轮就把这条教训执行成系统动作：把 PB-36（2026-10-05）那份归类整体复跑。
