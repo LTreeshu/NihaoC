@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 2.0 线 README 刷新轮（PB-58：改掉「本机无 qemu-user、执行未验证」这句已作废的能力声明，并写清 examples 档的真实判据与 Linux native 的三条前置；只改对外文档，2026-10-27）
+
+- **原则同工程轮：先证伪再写**。README 是门面，写错的比没写的更贵，所以本轮每条改动都先跑一遍再说。
+- **改掉作废声明**：`README.md` 的 2.0 段原文写「两档各 46/46 过汇编、各 45/46 过链接，**但本机无 `qemu-user`，执行正确性仍未验证**」——该结论自同日 PB-38 起不成立。现改写为：交叉链接在 Windows 走 `zig cc -target {riscv64,loongarch64}-linux-musl -static`（两档宿主 `ld` 都只认 x86），执行在 WSL 走 `qemu-*-static`（qemu-user-static 8.2.2），参照系按「同 arch / 同 libc / 同模拟器，只换 lowering 路径」三路投票；**两档发射器专属缺陷已清零**（PB-39 loongarch64 取址改 `pcalau12i %pc_hi20` + `addi.d %pc_lo12`、PB-40 riscv64 `fcvt.l.d` 补 `rtz` 与间接调用改用暂存寄存器、PB-41 补 `IR_FTRUNC`），agree 由 la 12→45、rv 42→45、崩溃归零；另补 PB-44 的 Linux 第二汇编 oracle（发行版 `llvm-mc` 18 两档各 53/53）。PB-35 当时的 46/46·45/46 保留为 2026-09-27 历史口径。同时写清两件边界：**两档机器码不在门禁矩阵里**、**交叉档没有 sanitizer 可用**（PB-53 实测 zig 缺这两档 ASan 运行时）。
+- **写清 examples 档的真实判据**：`examples/` **不在 `xmake test --all` 里**（`ncc/xmake.lua` 中 `examples` 出现 0 次），判据历来由手工脚本给出＝「编译成功 + 产物存在 + 运行 `rc=0`」，**stdout / stderr 丢弃**（PB-51）。故 `README.md` 与 `examples/README.md` 两处都加注「读作 N 份都能编译并运行，不读作 N 份输出正确」，并拿本轮实测的 **`03_struct` 在 `ir-c` / `ir-native` 打印 `struct copy bad`（c / native 打印 `ok`）** 作实证（根因是 IR 线无聚合体真实布局，属在册缺口）。
+- **修一处过期特性表、补全 CLI 选项面**：`examples/README.md` 的 `04_pointer.nc` 行原列「`*()` 一元解引用」，而该语法早在 1.0.x 收敛移除（PB-25）、示例文件自己的头注释就写着「一元 `*` 已移除」⇒ 改为 `&` 取地址 / `p.()` 读写 / `p.() op= e` 复合 / 指针隐式推断并注明等价写法。`README.md` 的 `-backend` 由 `c|native` 补成实际六个候选；本轮顺带实跑确认：点名已删除的 `ir-x86_64` / `ir-arm64` 会得到「backend ... was removed」专属诊断并提示改用 `ir-native`，写错名则回候选表——这两条行为都写进文档。
+- **补 Linux 侧 `native` 的三条真前置**（PB-37 在 WSL Ubuntu-24.04 实测）：`/usr/local/lib/libtcc.so` 必须在位；apt 的 tcc 若只给静态 `libtcc.a`，直链时会与 `ncc` 自身的 `expect` / `sym_find` / `sym_push` 撞成 multiple definition；`native.c` 把安装前缀**硬编码**为 `/usr/local/lib/tcc`，故 `tcc -vv` 的 `install:` 行必须一致。原文只写「apt install tcc 即可」，对 `native` 后端是不够的。
+- **门面代码示例当场复测**：把 README 那段样例抽出来跑四档——`c` / `native` 均编译运行，输出 `Program starting` / `array ok` / `MaxLen is _const`，故「上例为 A 方案可编译」这句为真；但同一份源在 `ir-c` / `ir-native` 报 `ir: unsupported top-level token 'const'`（IR 前端没有顶层变量声明）⇒ 注文补上这条边界，免得读者以为示例四档都行。
+- **守住的约束**：两份 README 都是 CRLF 文件，改后**裸 LF 计数 0**；待裁清单第 6 条（`README.md`「1.0 范围」段的分叉措辞归一方式）所涉既有条目**一字未改**，本轮只在该段追加带日期、分支限定的事实句，使 `PA` / `PB` 各自都成立。**本地提交，未推送**。
+
 ### 2.0 线 err 档 pin 收窄可行性轮（PB-57：33 份用例逐份实测「把 pin 收窄到自身首行」可行不可行 —— 17 可、14 被 A/IR 文案挡住、2 两句诊断本来就撞在一起；落地 1 份，双平台 0 FAIL，2026-10-27）
 
 - **动机**：PB-50 量到 **10/33 份 err 用例的 pin 会命中别人的 stderr**、9 份共用同一句、最短只有 4 字符；PB-56 又给出「先修 `p.(T)` 一份换 8 份」那样的集中度依据。这轮不再停在「pin 太宽」的抱怨上，而是**逐份实测能不能收窄、收窄后门禁会不会红**。
