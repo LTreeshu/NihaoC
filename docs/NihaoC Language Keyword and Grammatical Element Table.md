@@ -25,6 +25,7 @@
 - `continue` – continue next loop iteration
 - `default` – default branch option
 - `goto` – jump keyword
+- `name:` – label definition (statement level, pairs with `goto`; label names are unique within a function and may be defined before or after the jump)
 - `true` / `false` – boolean literals
 - `bitoffsetof` – bit offset of a bit-field member (`bitoffsetof(type, member)`, declaration-order bit layout, compile-time constant)
 - `holdof` – variable owner query (`holdof(type, member, ptr)`, works for both struct and union)
@@ -143,4 +144,5 @@
 - `...` – dynamic array marker (`[N...]` / `[...]`, BNF `<array-size>`; automatic growth reserved for 2.0)
 - `;` – statement terminator
 - `#` – compatible statement terminator (canonical spelling is `;` or a newline)
+- `:` – label definition marker (`<identifier> :`); also introduces `case` / `default` bodies
 - `::` – lexically reserved (scope resolution placeholder), not used by the current grammar
