@@ -157,3 +157,58 @@ hotfix：   PA 分支修 bug → 合 main（tag v1.0.x）→ 同步共享文件�
 2. **1.0 发布范围**：✅ 已定（2026-08-31）——**包含 Linux 实测**：WSL Ubuntu-24.04 双平台验证通过（c/native 各 12P/0F/5S + examples 6/6 + `-run` 修复），见 PA-9；1.0 范围生效 Windows + Linux
 3. **examples 优先级**：✅ 已定——hello/fib/struct/pointer/string/cooking/multiret 7 例已建（6 例 1.0 可编译运行，06_cooking 标注 2.0 预览）
 4. **分支计划采纳**：✅ 已落账——`docs/GIT_CONVENTIONS.md` 分支语义与 §3 对齐（main/PA/PB 职责、版本化 v1.0.0/v1.0.x/v2.0.0、共享文件同步规则）；`[AI]` 提交标签与推送授权制已写入
+---
+
+## 5. 后端名单与 A 线退役裁定（2026-11-09 ltree 裁定；本节只记裁定与判据，代码未动）
+
+**名单**：2.0 线只保留 IR 管线，后端收敛为六档——`ir-c`、`ir-native`、`ir-rv64`、`ir-rv32`、`ir-arm`、`ir-loongarch`。
+`c` / `native` 两档（A 线 `parser.c` → `cgen.c` / `native.c`）退出产品线。
+
+### 5.1 四条配套裁定（同日）
+
+1. **A 线节奏 = 先冻结、再删**。A 线立即停止发展（不再修缺陷、不再加特性），转为 **oracle-only**——它今天的价值是
+   「IR 与 A 逐字节比对」这条唯一能证 IR 语义正确的判据（32 格 4 后端一致全靠它）。IR 追平（P2 判据达成）后在 P5
+   物理删除并归档，先例是 2026-09-01 删 `codegen.c` 并写 `docs/LEGACY_CODEGEN.md`。
+2. **`ir-rv32` 数据模型 = 保持 8 字节槽、成对读写**（两条 `lw` / `sw` 完成一次 8 字节槽访问），不在这一档引入
+   per-target 槽宽（那是 P3 另立的事）。
+3. **`ir-arm` 选型（实现方定）= ARMv7E 基线的 Thumb-2 / AAPCS ILP32，浮点后置**。可核理由：Thumb-2 是 Cortex-A 与
+   Cortex-M **唯一共存**的指令集（M 系列没有 A32）；`LDRD` / `STRD` 在 ARMv7E-M 可用，正好承接第 2 条的「8 字节槽 +
+   成对读写」。**下限声明为 ARMv7E-M 及以上**（M3 / M4 / M7、A5 / A7 / A8 / A15），**不含 ARMv6-M（M0 / M0+）**——
+   那一档既没有 Thumb-2 的 32 位编码也没有 `LDRD` / `STRD`，8 字节槽模型在那里不成立。浮点先不做：M4F / M7 只有
+   单精度 D 寄存器子集，与 IR 现在的 double 通路不匹配。PA 现存的 `ir_arm64.c` 是 AArch64，与本选型不同码本，
+   只能当写法参考，不能直接复用。
+4. **版本叙事 = 1.x 冻结在 A 线**。已发布的 v1.0.x 语义（`c` / `native`）不改写，六档名单属 **2.0**；A 线物理删除
+   落在 2.0 里程碑上。
+
+### 5.2 这份名单的代价（今天实测，全部可复算）
+
+| 面 | A 线 | IR 线 | 缺口 |
+|---|---|---|---|
+| pos 用例（72 份，循环内 71 份） | 68 份能编 | 44 份能编（`IR_SUBSET` 41 + `IR_ONLY` 3） | **28 份只有 A 能编** |
+| err 诊断（33 份） | 33 份 | 7 份（`IR_ERR_COVERED`） | **26 份 IR 侧不诊断** |
+| 机器码发射器 | — | riscv64、loongarch64 两档 | **rv32 全新**、**arm 全新**（x86-64 已随 PB-34 删除，不在新名单内） |
+| 门禁矩阵 | `xmake test --all` 四档 | 同四档 | 六档落地后矩阵需重排；交叉档是否进门禁待定（待裁第 32 条附带） |
+
+**工具链同日实测**：zig 0.15.2 能出 `riscv32-linux-musl` 静态 ELF、能编 `arm-freestanding-none` 与
+`arm-linux-musleabihf`；WSL 有 `qemu-riscv32-static`、`qemu-armhf-static`（Linux-user 执行可用），
+**但没有 `qemu-system-arm`，也没有 `arm-linux-gnueabihf-as`** ⇒ Cortex-M 那种 bare-metal 产物今天只能验到
+「汇编 + 链接」两级，执行要么装 `qemu-system-arm`、要么上真板——这是 P4 里 arm 档的前置条件。
+
+### 5.3 里程碑与判据（顺序不可随意换）
+
+| 阶段 | 内容 | 退出判据 |
+|---|---|---|
+| P0 | 定名与契约：六档 ABI、槽宽、`ir-native` 在各宿主的语义、A 线冻结声明 | 本节 + `docs/BACKEND_MATRIX.md` 落地，README 2.0 段与之逐字一致 |
+| P1 | 缺口台账：28 份 pos + 26 份 err 逐份定性（语法缺失 / 语义缺失 / 布局缺失 / 用例本身非法） | 每份归入某桶；`IR_SUBSET` 由「名单制」改「默认全进、例外登记」 |
+| P2 | IR 补齐（最大一块）：真实聚合布局、`print` / `alias` / 布尔字面量 / 顶层变量声明等 IR 缺口、`flow` 与 auto-free 在 IR 落地、多维数组与切片（`sizeof(变量)` 先按第 31 条定口径再动） | pos IR 可编 **44 → 68**、err 诊断 **7 → 33**（达成才允许启动 P5） |
+| P3 | 数据模型复核：8 字节槽在 rv32 / arm32 的成对读写落地、帧寻址 2047 护栏随 ABI 重算 | 同一份 pos 在 rv64 / rv32 / arm / la 四档出码并过汇编 + 链接 |
+| P4 | 发射器：`ir-riscv64` → `ir-rv64`、`ir-loongarch64` → `ir-loongarch` 改名并进门禁 → `ir-arm`（Thumb-2，先 Linux-user 后 freestanding）→ `ir-rv32`（新写） | 每档 S1–S5 五级都由版本化 `xmake probe` 出数，四档互比逐字节一致 |
+| P5 | A 线退役：删 `parser.c` / `cgen.c` / `native.c` 并归档；门禁改 IR 单线；`IR_SUBSET` / `IR_ONLY` / `IR_ERR_COVERED` 三个名单作废 | 全部门禁在 IR 线跑绿，没有任何文档还把 `c` / `native` 当产品能力写 |
+| P6 | 管理面：`xmake probe` 六档 + examples + 方言 / sanitizer 版本化，`BACKEND_MATRIX.md` 由脚本生成 | 每个进文档的数字都有点名入口，`build/` 里不留判据 |
+
+**顺序不可换的三条理由**：尺子（A 线）必须在被量对象（IR 线）追平之后才能砸；rv32 / arm32 的成对读写依赖槽模型
+定案；槽模型又依赖「真实聚合布局」这条欠账（待裁第 23 条）先解。
+
+**受影响而暂不改写的既有条目**：A 线专属缺陷类待裁项（第 21 / 24 / 28 条等）从「要不要修 A」变为「IR 线要不要做
+这件事」——措辞与账都不动，等 P1 台账时逐条重挂到新线上。
+
