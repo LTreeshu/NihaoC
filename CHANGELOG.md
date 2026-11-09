@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 2.0 线 goto/label 覆盖轮（PB-59：门禁补一份标签形态用例；修交叉发射器跨函数基数 `lbl_base` 只按 `label_count` 前进导致的 `.L` 撞名；Windows 门禁 67P/0F/3S + 27P/0F/43S、交叉矩阵 47/47，2026-11-09）
+
+- **先把问题问清楚再动手**。ltree 问「goto 在实现与文档里什么情况」，逐层核完的答案是：设计层产生式与注文齐备（`<goto-stmt>` / `<label-def>` 都在 `<statement>` 内，注明「延迟解析 + 函数内唯一」，且它是 1.x 唯一认可的 `switch` 穿透替代），实现层两条前端**都只搬运不校验**，而门禁只有一份向后跳转的用例。
+- **新增 `ncc/tests/pos/goto_forms.nc`（带 `.expect`，入 `IR_SUBSET`）**：一份覆盖五种合法形态——前跳跳过一条语句、后跳构成循环、同名标签分处两个函数、标签定义在内层块而 `goto` 在块外、从 `case` 体 `goto` 跳出整个 `switch`。四后端输出逐字相同；Windows 门禁由 c / native **66→67**、ir-c / ir-native **26→27**，0 FAIL，比对档 36 格不变（该用例有 `.expect`，走各档 PASS 不进比对池）。
+- **修一处发射器专属缺陷（`ir_backend.c`）**：新用例出 `.s` 后两个 oracle 都报 `symbol '.L1000' is already defined`。根因是跨函数基数 `lbl_base` **只按 `f->label_count` 前进**，而 `label_count` 只记 `ir_new_label`（if/while 分支）那一档，`goto/label` 的 id 走 `IR_GOTO_LABEL_BASE` 独立编号——**体内没有分支标签的函数贡献 0**，于是与下一个函数撞名。改为在指令循环里记下本函数实际用到的最大 label id，基数越过它。双向对照：两函数都只有 goto/label 的探针修复前三档 lane 全 FAIL、修复后全 OK；第一个函数带 `if` 的探针修复前后都 OK。全量矩阵（`tests/pos` 逐份 × 两档 × GNU as + zig llvm-mc）**46 OK / 1 FAIL → 47 OK / 0 FAIL**，EMIT=FAIL 48 不变；修复后的 riscv64 产物过静态链接并在 WSL qemu-riscv64 实跑，输出与 `.expect` 逐字相同。**该路只出 `.s` 不出 C**，与 PB-39~41 同档，故落 PB 不动 PA。
+- **登记待裁第 29 条（未动代码）**：未定义目标、函数内重名、`goto` 跨函数三条约束全部由下游检出——IR 档的 tcc 报错把内部编号 `L1000` 打给用户；**未定义目标在 GNU as 下不报错，被解析成 `j 0 <main>`（跳回本函数第一条指令）**，只有 lld 链接期拦下；而跨函数 `goto` 在 ncc / 汇编器 / 链接器**三层全静默**，产物是能跑的错程序。`tests/err` 里 label 用例 0 份、err 档又不读退出码，故这条链门禁看不见。三档走向（前端补校验 / 只修文案 / 写清后端分工并补 err 用例）都要先在设计层定一句「谁负责检出」，等 ltree 裁。
+- **设计层同日补条目**：两份语法元素表此前只列 `goto` 一行，标签定义与 `:` 标记缺位 ⇒ 各补两行（`name:` 标签定义、`:` 标签定义标记兼 `case`/`default` 引导），措辞只取 `BNF.md` 既有口径，PA / PB 同文同改、逐字节一致。零实现状态、零行号、零编号。
+
 ### 2.0 线 README 刷新轮（PB-58：改掉「本机无 qemu-user、执行未验证」这句已作废的能力声明，并写清 examples 档的真实判据与 Linux native 的三条前置；只改对外文档，2026-10-27）
 
 - **原则同工程轮：先证伪再写**。README 是门面，写错的比没写的更贵，所以本轮每条改动都先跑一遍再说。

@@ -123,16 +123,20 @@ int irgen_backend_emit(IrProg *p, const char *outfile, const char *backend)
 
         /* 指令循环。label 编号 per-function 从 0 起，多函数同一汇编文件会重名
          * （.L0 跨函数重复）→ 发射前把本函数 label 加上全局基数（lbl_base） */
+        int lbl_max = -1;
         for (int i = 0; i < f->ins_count; i++) {
             IrIns *in = &f->ins[i];
             if (in->op == IR_ALLOCA || in->op == IR_PARAM) continue;
             if (in->op == IR_LABEL || in->op == IR_JMP ||
                 in->op == IR_JZ || in->op == IR_JNZ) {
+                if (in->label > lbl_max) lbl_max = in->label;
                 in->label += lbl_base;
             }
             if (tb->emit_ins) tb->emit_ins(&b, in, tb, p, f, i);
         }
-        lbl_base += f->label_count;
+        /* 基数要越过本函数实际用到的最大 label id：label_count 只记 ir_new_label 那一档，
+         * goto/label 走 IR_GOTO_LABEL_BASE 独立编号，只按 label_count 前进会撞名（PB-59） */
+        if (lbl_max >= 0) lbl_base += lbl_max + 1;
 
         /* 函数尾：无显式 return 时补隐式返回 */
         int need_ret = 1;

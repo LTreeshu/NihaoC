@@ -165,7 +165,10 @@ end
 -- PB-54（2026-10-27）把 ir_mr 从 IR_ONLY 移进 IR_SUBSET：它在 IR_ONLY 里却让 A 后端也能编，
 -- 于是跨后端比对只拿到「ir-c vs ir-native」两个同前端落地器互比；实跑四端输出逐字节相同，
 -- 移入后这一格升为真正的四后端一致（该用例无 .expect，故 PASS 计数不变）
-local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true}
+-- PB-59（2026-11-05）新增 goto_forms（本分支自写）：BNF 声明的合法标签形态里，此前门禁只有
+-- pos/ir_goto.nc 一份向后跳转。新用例把前跳、同名标签分处两函数、标签在内层块、从 case 体
+-- goto 跳出 switch 四档一并覆盖，四后端输出逐字相同且有 .expect，故入 IR_SUBSET 并计入 PASS 档
+local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true}
 local IR_ONLY = {ir_builtin = true, ir_slice = true, ir_sparam = true}
 -- IR_ERR_COVERED: err 用例中 IR 前端已实现对应诊断的（未列出的非 m2 用例仍在 IR 侧跳过）
 -- cooking_bare_var 刻意不入：IR 前端对块内裸 <var-decl> 只给 `ir: undeclared variable 'K'`，
