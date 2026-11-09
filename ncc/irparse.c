@@ -2875,10 +2875,12 @@ static void ir_stmt(CompilerState *cs)
             /* 声明: name i32 [N] = expr | = {e0, e1, ...} | name 函数指针类型 = fn */
             int decl_float = (nt == TOK_F64 || nt == TOK_F32);
             /* PB-1 窄整数类型编码（0=i64 1=float 2=i8 3=i16 4=i32 5=u8 6=u16 7=u32）；
-             * f32 严格宽度（2026-08-19）：F32 → 码 8（标记 f32，赋值时 FTRUNC） */
+             * f32 严格宽度（2026-08-19）：F32 → 码 8（标记 f32，赋值时 FTRUNC）；
+             * fx32 / fx64 按同宽整型（BNF v2.11 定案）：FX32 → 码 4 截断、FX64 → 码 0 */
             int vt_code = decl_float ? (nt == TOK_F32 ? 8 : 1) :
                           (nt == TOK_CHAR || nt == TOK_I8) ? 2 :
                           (nt == TOK_I16) ? 3 : (nt == TOK_I32) ? 4 :
+                          (nt == TOK_FX32) ? 4 :
                           (nt == TOK_U8)  ? 5 : (nt == TOK_U16) ? 6 :
                           (nt == TOK_U32) ? 7 : 0;
             next_tok(cs);           /* name */
@@ -3218,6 +3220,7 @@ static void ir_func(CompilerState *cs, int attrs)
                 (pt == TOK_F32 || pt == TOK_F64) ? 1 :
                 (pt == TOK_CHAR || pt == TOK_I8) ? 2 :
                 (pt == TOK_I16) ? 3 : (pt == TOK_I32) ? 4 :
+                (pt == TOK_FX32) ? 4 :
                 (pt == TOK_U8)  ? 5 : (pt == TOK_U16) ? 6 :
                 (pt == TOK_U32) ? 7 : 0;
             if (pt == TOK_VOID) {
