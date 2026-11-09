@@ -2,6 +2,7 @@
 
 本文档记录 NihaoC 语言规范（Chinese.md / English.md）中各项指针安全规则与编译器（ncc）实际实现的对应状态。
 
+> 更新日期：2026-11-09（**PB-60 IR 前端 fx32/fx64 按同宽整型落地 + align/sizeof 缺口登记**）：`irparse.c` 体内声明与形参两处类型码链都没有 FX 分支，`TOK_FX32` 落到默认 0＝i64 ⇒ `fx32` 在 c / native 截断而在 ir-c / ir-native 不截；各补 `FX32 → 码 4` 后四后端一致。新增 `pos/fx_types.nc`（12 项断言，带 `.expect`，入 `IR_SUBSET`）：Windows 68P/0F/3S 与 28P/0F/43S、Linux 68P/0F/4S 与 28P/0F/44S、0 FAIL、比对档 Windows 36 格 / Linux 35 格不变，交叉矩阵 48/48。另登记待裁第 30 条（`align n { }` A 后端六种摆法全语法错、IR 整块静默丢弃）与第 31 条（`sizeof(变量)` 是 A 超出产生式）。详见下方 PB-60 实测表。
 > 更新日期：2026-11-09（**PB-59 goto/label 覆盖轮 + 交叉档 `lbl_base` 撞名修复**）：门禁新增 `pos/goto_forms.nc`（五种合法标签形态，带 `.expect`，入 `IR_SUBSET`），四后端逐字相同，Windows PASS 计数 c / native 67、ir-c / ir-native 27，0 FAIL，比对档 36 格不变；`ir_backend.c` 的跨函数标签基数由「按 `f->label_count` 前进」改为「越过本函数实际用到的最大 label id」，交叉矩阵两档 × 三 lane 由 46 OK/1 FAIL 到 47 OK/0 FAIL，修复后的 riscv64 产物经 qemu 实跑与 `.expect` 逐字相同。前端对标签名零校验（未定义 / 重名 / 跨函数）三条实测缺口只登记，见 `TODO-PB.md` 待裁第 29 条。Linux 同日复跑 c / native 67P/0F/4S、ir-c / ir-native 27P/0F/44S、0 FAIL、比对档 35 格不变，新用例四档各 PASS。详见下方 PB-59 实测表。
 > 更新日期：2026-10-27（**err 档 pin 逐例收窄方案表轮（PB-57，落地 1 份 pin 收窄 + 出可执行方案表；Windows 与 Linux 双平台复跑 0 FAIL）**：把 PB-56 的「理由要复测」继续执行到第 26 条身上：**对 33 份 err 用例逐份实测「把 pin 收窄到该用例自身 stderr 首行消息」到底可不可行**，判据是三条硬条件——候选串**必须是 raw stderr 里的连续子串**（门禁不做 ANSI 剥离，所以候选只能取 `错误: ` 之后那一段）、**必须在跑这份用例的每一档都命中**、**必须不命中其他 32 份的 stderr**。结果分三档：**READY 17 份 / PARTIAL 14 份（自身首行唯一，但 IR 档文案不同源，换 pin 会当场让 IR 档红）/ COLLIDES 2 份（`is_in_do_body` 与 `is_outside_while` 共用同一句话，收窄无从谈起，得先把两条规则拆成两条诊断）**。归属维度另量一条：**23/33 份 `PA` 也有同名文件 ⇒ 单方面收窄就是 PB-33 要消除的用例集分叉；本分支自有 10 份**，其中 READY 的只有 2 份（`bracket_attr_unknown`、`is_dangling_range`），其余 8 份自有的全是 PARTIAL（病在 A/IR 文案不同源，不在名单）。**落地一份**：`tests/err/is_dangling_range.expect` 从 `invalid 'is' range`（18 字）收窄到 `invalid 'is' range: expected an integer upper bound`（51 字）⇒ Windows c/native **66P/0F/3S**、ir **26P/0F/43S**，Linux **66P/0F/4S / 26P/0F/44S**，两平台比对档 **36 格含 32 个四后端格**、**0 FAIL** 一字不变。**第二份当场回退，并记一条手法**：`bracket_attr_unknown` 我照方案表第 7 列回填长消息，四档立刻 `message missing`——**那列是被显示宽度截到 70 字符的**，而 err 判据要求整份 `.expect` 连续命中 ⇒ 截断串必然不匹配。已 `git checkout` 回退，且这份用例现 pin 本身就点名了属性名（`'nope'`），已具特异性，收益边际，**保持原样**。**可复用结论：任何「照表回填」的文案都必须从 raw stderr 取原文，不能信被截断的展示列。**其余 15 份 READY 属 `PA` 结转 ⇒ 建议由 `PA` 收窄后随通道流下（与第 12 条同处理）；第 26 条由此从「要不要收窄」变成「17 份可直接收窄、14 份要先统一文案、2 份要先拆诊断」的可分批执行清单。明细 `ncc/build/p57/`（gitignore：`pins.py`、`pins_final.py`、`pins_final.tsv` 逐份判定、`gate_final.txt` / `gate_linux.txt` 两次门禁输出）。**下一轮**：等 ltree 批阅待裁清单；`PA-61` 未裁则 **P13** 仍卡住。**本地提交，未推送**。）
 > 更新日期：2026-10-27（**IR 名单可提升项复测轮（PB-56，零改动；把 PB-36 的归类整体重跑一遍）**：PB-54 刚证伪过一条过期理由（`ir_builtin` 挂在 `IR_ONLY` 说「A 编不了」而实测能编），所以这条教训要按系统方式执行：把**当前不进任何 IR 名单的 43 份用例**（pos 28 + err 15）逐份实跑 IR 侧，判据照门禁本身抄（pos：IR 要产出可执行文件**且 stdout 与 c 档逐字节相同**；err：IR 要不产文件**且 stderr 含整份 `.expect` 的连续子串）。**结论：可提升 0 份 ⇒ PB-36 的归类在「能不能进名单」这个判据上今天全部成立**；但**三档分布值得记账**：**32 份是 IR 前端直接拒**（解析/分析层），**8 份是 IR 前端没拒、要到生成的 C 才炸**（`error: lvalue expected`、`implicit declaration`、warning 等，pos 3 + err 5），**2 份两侧都能编而语义分歧**（`alignof_builtin` 输出 144B vs 150B、`is_no_fallthrough` 65B vs 102B），**1 份被静默接受**（`err/str_array_overflow`，IR 编译通过 0 诊断，与 PB-36 记的一致）。**顺带把「理由过期」这件事量化成一句可裁的话**：`alignof_builtin` 与 `is_no_fallthrough` 现在的账面状态是「IR 子集未覆盖」，实测 IR **能编**，真实原因是语义分歧 ⇒ 与 PB-54 的 `ir_builtin` 同族，**今天共 3 例挂着假理由**（这类理由一旦写错，后续每轮都会照假理由跳过复测，正是 PB-54 立的教训）。**最有决策价值的一条是集中度**：**单条 IR 解析缺口——带类型解引用 `p.(T)`（报 `expected ')', got 'i32'/'i64'/'char'`）一处就挡着 8 份用例**（pos `borrow` / `flow` / `flow_move` / `flow_no_free` / `malloc_demo` + err `deref_bounds` / `flow_move_frozen` / `slice_str_overflow`）；第二档是「数组/切片声明带 `[`」的 `expected '=', got '['` 挡 3 份。⇒ 待裁第 10 条的八桶排序有了硬依据：**先修 `p.(T)` 一条，收益 8 份，超过名单里任何一条零散缺口**。err 侧同时量清三档文案关系：9 份 IR **有诊断但文案不同源**（如 `is_dangling_range`：A 说 `invalid 'is' range`、IR 说 `ir: bad 'is' pattern (expected integer after '..')`，无共用子串）、5 份要到 C 阶段才暴露、1 份静默接受。本轮**未改任何代码、用例或名单**（无项可提升），故无锚点位移、门禁无需复跑；明细 `ncc/build/p56/`（gitignore：`sweep.py`、`bucket.py`、`report.tsv` 43 行逐份判定）。**下一轮**：err pin 逐例收窄方案表；`PA-61` 未裁则 **P13** 仍卡住。**本地提交，未推送**。）
@@ -753,6 +754,32 @@
 | 判据细节（本轮踩到） | — | err 档把**整份 `.expect` 去尾空白后当连续子串**在 stderr 上匹配，**不做 ANSI 剥离**、**不做逐行匹配** | ⇒ 候选只能取 `错误: ` 之后的纯文本；**跨行 pin 可行但依赖行尾**（Linux 与 Windows 行尾不同）不建议；**照截断的展示列回填必然 FAIL**（本轮实测一次并回退） |
 | 归属分母 | — | **23/33 份 `PA` 也有；10 份本分支自有** | 自有 10 份里 READY 2、PARTIAL 8 ⇒ 「本分支能单方面把 err 档 pin 全部收窄」是错觉，真正可单侧动的是 2 份 |
 | 门禁 | 改前（PB-54/55 后基线） | 改后 | Windows c/native **66P/0F/3S**、ir **26P/0F/43S**；Linux **66P/0F/4S**、ir **26P/0F/44S**；比对 **36 格（4 后端 32 + 2 后端 4）**；**0 FAIL**、rc=0 ⇒ **一字不变**，收窄没有让任何一档变红也没有掩盖任何东西 |
+
+**fx32/fx64 与 align/sizeof 形态实测（PB-60，2026-11-09，探针在 `ncc/build/p60/`，不入版本库）**
+
+| 形态 | c / native | ir-c / ir-native（修前） | ir-c / ir-native（修后） | 交叉两档 |
+|---|---|---|---|---|
+| `t fx32 = 5000000000` 声明截断 | `705032704`（宽 4） | **原值不截**（当 i64） | `705032704` | 出码过汇编 |
+| `s fx32 = 0; s = 5000000000` 二次赋值截断 | 截断 | **不截** | 截断 | 同上 |
+| `func add32(a fx32, b fx32) fx32` 形参 | 按 4 字节 | 形参类型码落 i64 | 与 i32 同码 4 | 同上 |
+| `u fx64 = 5000000000` 宽整型不截 | 不截 | 不截 | 不截（码 0 不变） | 同上 |
+| `sizeof(fx32)` / `sizeof(fx64)` | 4 / 8 | 4 / 8（`type_size_token` 本来就有 FX） | 同 | 同上 |
+| `sizeof(x)`（x 是变量） | **接受**，返回声明宽度 | `ir: unknown type 'x'` | 同（本轮未动） | — |
+| 四则 / 与 i32 混算 / fx 返回值 | 全对 | 全对（FX32 码 4 后与 i32 一致） | 全对 | — |
+
+`align n { ... }` 摆法矩阵（A 后端与 IR 前端各测，均无一份能用）：
+
+| 摆法探针 | c / native | ir-c / ir-native |
+|---|---|---|
+| 块内含类型定义、块在 `func main` 前 | `unexpected token 'TOK_NEWLINE' at declaration level`（位置在块后那行） | 编过，但块内类型不存在，引用时 `unknown type` |
+| 块内含类型定义、块在文件末尾 | 同上报错（位置在 EOF 行） | 同上（静默丢声明） |
+| 整块写在一行 `align 8 { Y struct { c i32 } }` | 报错 | 静默丢弃后引用才报 |
+| 块内含变量声明 `align 4 { g i32 = 2 }` | 报错 | 静默丢弃（IR 本就没有顶层变量声明，双重缺） |
+| 块尾补 `;` | 仍报错（换行先于 `;` 被当成声明） | — |
+
+覆盖普查（门禁 `tests/pos` 里含该形态的用例份数）：`fx32` / `fx64` **0**、`align` 块 **0**、`linkas` **0**（只有 err 档诊断用例）、`sizeof(变量)` **0**；已覆盖的有 designator 初值、函数指针、union、动态数组、切片、cooking、goto、`[...]`、`is` 模式、多返回值。**门禁与交叉计数**：修复后 Windows `xmake test --all` c / native **68P/0F/3S**、ir-c / ir-native **28P/0F/43S**，Linux **68P/0F/4S** 与 **28P/0F/44S**，两平台 0 FAIL；交叉矩阵两档 ×（GNU as + zig llvm-mc）**48 OK / 0 FAIL**（EMIT=FAIL 48 为 IR 前端出不了码的份数，与本轮无关）。
+
+锚点（分支专属）：FX 类型码在 `irparse.c` 的 `vt_code` 链（体内声明）与 `ptypes` 链（形参）；宽度表在 `type_size_token`（本来含 FX，所以 `sizeof` 一直是对的）；`sizeof` 的按类型名查表在 `type_size_of`；A 后端两处 align 分支分别在顶层循环（缺块尾 `skip_newlines`）与 `parse_declaration`（发 `#pragma pack`，从顶层不可达）；IR 的丢弃行为在 `ir_align_block`。名单在 `xmake.lua` 的 `IR_SUBSET`。
 
 **goto/label 形态矩阵与交叉档 `lbl_base` 修复（PB-59，2026-11-09 实测；新增 1 份用例 + 修 1 处发射器码）**
 
