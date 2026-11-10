@@ -2,6 +2,7 @@
 
 本文档记录 NihaoC 语言规范（Chinese.md / English.md）中各项指针安全规则与编译器（ncc）实际实现的对应状态。
 
+> 更新日期：2026-11-10（**PB-61 P1 缺口台账 + err 名单去豁免**）：零编译器改动。`IR_ERR_COVERED` 显式补入 11 份 m2 族并删除门禁里 `stem:startswith("m2")` 那条命名豁免，判据此后只认名单；门禁复跑 c / native 68P/0F/3S、ir-c / ir-native 28P/0F/43S、0 FAIL、err 档 SKIP 每档 15 份不变。逐份实测把 28 份 「只有 A 能编」的 pos 与 15 份 err 真缺口归入 G1 / G2 / G3 / G4 四桶，明细在 `docs/IR_GAP_LEDGER.md`。两份「看似可提升」的候选实测否掉，并钉住两个根因：IR 的 `alignof` 恒返回 8、IR 前端无「首匹配即止」机制（`__is_matched` 在 irparse 里 0 命中）。详见下方 PB-61 实测表。
 > 更新日期：2026-11-09（**PB-60 IR 前端 fx32/fx64 按同宽整型落地 + align/sizeof 缺口登记**）：`irparse.c` 体内声明与形参两处类型码链都没有 FX 分支，`TOK_FX32` 落到默认 0＝i64 ⇒ `fx32` 在 c / native 截断而在 ir-c / ir-native 不截；各补 `FX32 → 码 4` 后四后端一致。新增 `pos/fx_types.nc`（12 项断言，带 `.expect`，入 `IR_SUBSET`）：Windows 68P/0F/3S 与 28P/0F/43S、Linux 68P/0F/4S 与 28P/0F/44S、0 FAIL、比对档 Windows 36 格 / Linux 35 格不变，交叉矩阵 48/48。另登记待裁第 30 条（`align n { }` A 后端六种摆法全语法错、IR 整块静默丢弃）与第 31 条（`sizeof(变量)` 是 A 超出产生式）。详见下方 PB-60 实测表。
 > 更新日期：2026-11-09（**PB-59 goto/label 覆盖轮 + 交叉档 `lbl_base` 撞名修复**）：门禁新增 `pos/goto_forms.nc`（五种合法标签形态，带 `.expect`，入 `IR_SUBSET`），四后端逐字相同，Windows PASS 计数 c / native 67、ir-c / ir-native 27，0 FAIL，比对档 36 格不变；`ir_backend.c` 的跨函数标签基数由「按 `f->label_count` 前进」改为「越过本函数实际用到的最大 label id」，交叉矩阵两档 × 三 lane 由 46 OK/1 FAIL 到 47 OK/0 FAIL，修复后的 riscv64 产物经 qemu 实跑与 `.expect` 逐字相同。前端对标签名零校验（未定义 / 重名 / 跨函数）三条实测缺口只登记，见 `TODO-PB.md` 待裁第 29 条。Linux 同日复跑 c / native 67P/0F/4S、ir-c / ir-native 27P/0F/44S、0 FAIL、比对档 35 格不变，新用例四档各 PASS。详见下方 PB-59 实测表。
 > 更新日期：2026-10-27（**err 档 pin 逐例收窄方案表轮（PB-57，落地 1 份 pin 收窄 + 出可执行方案表；Windows 与 Linux 双平台复跑 0 FAIL）**：把 PB-56 的「理由要复测」继续执行到第 26 条身上：**对 33 份 err 用例逐份实测「把 pin 收窄到该用例自身 stderr 首行消息」到底可不可行**，判据是三条硬条件——候选串**必须是 raw stderr 里的连续子串**（门禁不做 ANSI 剥离，所以候选只能取 `错误: ` 之后那一段）、**必须在跑这份用例的每一档都命中**、**必须不命中其他 32 份的 stderr**。结果分三档：**READY 17 份 / PARTIAL 14 份（自身首行唯一，但 IR 档文案不同源，换 pin 会当场让 IR 档红）/ COLLIDES 2 份（`is_in_do_body` 与 `is_outside_while` 共用同一句话，收窄无从谈起，得先把两条规则拆成两条诊断）**。归属维度另量一条：**23/33 份 `PA` 也有同名文件 ⇒ 单方面收窄就是 PB-33 要消除的用例集分叉；本分支自有 10 份**，其中 READY 的只有 2 份（`bracket_attr_unknown`、`is_dangling_range`），其余 8 份自有的全是 PARTIAL（病在 A/IR 文案不同源，不在名单）。**落地一份**：`tests/err/is_dangling_range.expect` 从 `invalid 'is' range`（18 字）收窄到 `invalid 'is' range: expected an integer upper bound`（51 字）⇒ Windows c/native **66P/0F/3S**、ir **26P/0F/43S**，Linux **66P/0F/4S / 26P/0F/44S**，两平台比对档 **36 格含 32 个四后端格**、**0 FAIL** 一字不变。**第二份当场回退，并记一条手法**：`bracket_attr_unknown` 我照方案表第 7 列回填长消息，四档立刻 `message missing`——**那列是被显示宽度截到 70 字符的**，而 err 判据要求整份 `.expect` 连续命中 ⇒ 截断串必然不匹配。已 `git checkout` 回退，且这份用例现 pin 本身就点名了属性名（`'nope'`），已具特异性，收益边际，**保持原样**。**可复用结论：任何「照表回填」的文案都必须从 raw stderr 取原文，不能信被截断的展示列。**其余 15 份 READY 属 `PA` 结转 ⇒ 建议由 `PA` 收窄后随通道流下（与第 12 条同处理）；第 26 条由此从「要不要收窄」变成「17 份可直接收窄、14 份要先统一文案、2 份要先拆诊断」的可分批执行清单。明细 `ncc/build/p57/`（gitignore：`pins.py`、`pins_final.py`、`pins_final.tsv` 逐份判定、`gate_final.txt` / `gate_linux.txt` 两次门禁输出）。**下一轮**：等 ltree 批阅待裁清单；`PA-61` 未裁则 **P13** 仍卡住。**本地提交，未推送**。）
@@ -754,6 +755,18 @@
 | 判据细节（本轮踩到） | — | err 档把**整份 `.expect` 去尾空白后当连续子串**在 stderr 上匹配，**不做 ANSI 剥离**、**不做逐行匹配** | ⇒ 候选只能取 `错误: ` 之后的纯文本；**跨行 pin 可行但依赖行尾**（Linux 与 Windows 行尾不同）不建议；**照截断的展示列回填必然 FAIL**（本轮实测一次并回退） |
 | 归属分母 | — | **23/33 份 `PA` 也有；10 份本分支自有** | 自有 10 份里 READY 2、PARTIAL 8 ⇒ 「本分支能单方面把 err 档 pin 全部收窄」是错觉，真正可单侧动的是 2 份 |
 | 门禁 | 改前（PB-54/55 后基线） | 改后 | Windows c/native **66P/0F/3S**、ir **26P/0F/43S**；Linux **66P/0F/4S**、ir **26P/0F/44S**；比对 **36 格（4 后端 32 + 2 后端 4）**；**0 FAIL**、rc=0 ⇒ **一字不变**，收窄没有让任何一档变红也没有掩盖任何东西 |
+
+**PB-61 实测：err 名单豁免与四档提升判定（2026-11-10，脚本在 `ncc/build/p61/`，gitignore）**
+
+| 判据 | 结果 |
+|---|---|
+| err 侧 IR 真实参与数 | **18/33**（名单只记 7）——差额 11 份 m2 族全靠门禁 `startswith("m2")` 豁免；本轮显式入名单并删豁免 |
+| 删豁免后门禁 | c / native **68P/0F/3S**、ir-c / ir-native **28P/0F/43S**、0 FAIL、err SKIP 每档 15 份——与删前逐字相同 |
+| 11 份 m2 族的 IR 侧子串判定 | **全部 COVERED**（同判据、文案同源），且 IR 侧均无产物 |
+| `alignof_builtin` 提升判定 | 四档都能出码，但 IR 把 `align u8` / `align i32` / `align struct` / `align nested` 四行全打 `bad`；根因：irparse 里 `alignof` 恒返回 8 |
+| `is_no_fallthrough` 提升判定 | 四档都能出码，但 IR 多打 `wild` / `range`（首匹配即止未生效）；根因：`__is_matched` 在 irparse 里 0 命中，P4 那句「回灌 __is_matched」只覆盖 A 线 |
+| pos 缺口 28 份分桶 | G1 语法缺失 **21**（聚成 4 簇）、G2 语义缺失 **5**、G3 布局缺失 **2**、G4 可提升 **0** |
+| err 真缺口 15 份分桶 | E-a 文案不同源 **3**、E-b 断在解析层够不到诊断 **6**、**E-c 非法程序被静默接受 6**（`str_array_overflow` 实测产出可执行文件） |
 
 **fx32/fx64 与 align/sizeof 形态实测（PB-60，2026-11-09，探针在 `ncc/build/p60/`，不入版本库）**
 

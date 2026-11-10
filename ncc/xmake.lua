@@ -179,13 +179,16 @@ local IR_ONLY = {ir_builtin = true, ir_slice = true, ir_sparam = true}
 -- 与共用 .expect 的 'unsupported cooking item' 子串不符，入名单等于把 IR 缺口标成已完成
 -- bracket_attr_unknown 入名单：P12 起两个前端同判据，IR 侧只是文案多一个 `ir: ` 前缀，子串照样命中
 -- is_bad_pattern 入名单：畸形 is 模式两个前端逐条同位置拒绝，共用子串 `'is' pattern` 双方命中
+-- PB-61（2026-11-10）把 11 份 m2 族从「靠 stem:startswith("m2") 这条命名豁免才进档」改成显式列入
+-- IR_ERR_COVERED，并删掉那条前缀豁免：此后「IR 侧跑哪些 err」只由名单决定。豁免的实际效果此前无人
+-- 复核：实跑证明这 11 份的 IR 侧 stderr 都含完整 .expect 子串（同判据、文案同源），删除豁免不改变行为。
 -- is_dangling_range 刻意不入：IR 侧同样逐条拒绝，但文案 `bad 'is' pattern (expected integer
 -- after '..')` 与 A 侧 `invalid 'is' range` 没有共用子串，入名单只是把判据放宽
 -- is_outside_while / is_in_do_body 入名单（白名单普查 2026-10-05）：P4 曾登记「IR 文案带 `ir: `
 -- 前缀故与 A 侧不同源、不能进 IR_ERR_COVERED」，本轮复测证伪——前缀在子串**之前**，共用子串
 -- `'is' pattern match only valid inside while loop body` 照样整体命中；`PA` 侧同判据（其
 -- IR_ERR_SKIP 黑名单从未含这两份，即 PA 的 IR 门禁一直真跑它们）
-local IR_ERR_COVERED = {safe_assign_removed = true, safe_dot_removed = true, linkas_not_implemented = true, bracket_attr_unknown = true, is_bad_pattern = true, is_outside_while = true, is_in_do_body = true}
+local IR_ERR_COVERED = {safe_assign_removed = true, safe_dot_removed = true, linkas_not_implemented = true, bracket_attr_unknown = true, is_bad_pattern = true, is_outside_while = true, is_in_do_body = true, m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, m2e_param = true, m2f_retflow = true, m2f_retflow_const_flow = true, m2f_retflow_const_static = true, m2f_retflow_const_var = true, m2f_retflow_static_flow = true, m2f_retflow_static_var = true}
 
 task("test")
     on_run(function ()
@@ -376,7 +379,7 @@ task("test")
                 if filt ~= "" and not (stem .. ".nc"):find(filt, 1, true) then
                     goto continue_err
                 end
-                if is_ir and not stem:startswith("m2") and not IR_ERR_COVERED[stem] then
+                if is_ir and not IR_ERR_COVERED[stem] then
                     -- 非 M2 错误用例：IR 前端尚未实现对应静态检查，跳过
                     skipped = skipped + 1
                     cprint("  [SKIP] err/%s.nc (IR 前端暂未覆盖该静态检查)", stem)
