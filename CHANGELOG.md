@@ -8,7 +8,7 @@
 
 - **先修「不报错」，再修「不支持」**。P1 台账里最扎人的不是语法缺口，而是 E-c 那一桶：**非法程序在 IR 线静默通过**。`ch char[4] = "xiaoming"` 走的是 `if (cap > elems) cap = elems;`——**截断到容量继续出码**；`var {x = 1, y = 2} i32[4]` 直接把 `[4]` 丢掉发 `IR_MOV`，生成 `int x = 1` 这类错误 C，报错的还是下游编译器而不是 ncc。这类缺陷不会让门禁变红，只会让编译器往外漏错程序，所以排在语法补齐前面。
 - **补的三条判据与 A 后端同口径同措辞**（只在前面加 `ir: `，门禁的子串判据照样命中）：**①** 元素类型不是 `char` 的定长数组不能用字符串字面量初始化；**②** 含结尾 NUL 的字节数必须放得下声明容量；**③** 定长数组的多变量声明只接受字符串字面量初值，其余形态要求改写为单变量声明。`ir_multi_decl` 里另引入 `arr_cap` 把「带 `[N]` 的数组」与「聚合类型多变量声明」区分开，避免把 struct 那类误判成数组。
-- **实测**：`str_array_bad_elem` / `str_array_overflow` / `multi_arr_nostr` / `multi_arr_overflow` 四份在 ir-c 与 ir-native 双档都是**诊断命中 + 无产物**（`str_array_overflow` 此前**直接产出可执行文件**），已收进 `IR_ERR_COVERED`。门禁 c / native **68P/0F/3S** 不变、ir-c / ir-native **28→32 PASS**、SKIP **43→39**、0 FAIL、比对档 36 格不变——**pos 侧一份都没被新判据误伤**。
+- **实测**：`str_array_bad_elem` / `str_array_overflow` / `multi_arr_nostr` / `multi_arr_overflow` 四份在 ir-c 与 ir-native 双档都是**诊断命中 + 无产物**（`str_array_overflow` 此前**直接产出可执行文件**），已收进 `IR_ERR_COVERED`。门禁 c / native **68P/0F/3S** 不变、ir-c / ir-native **28→32 PASS**、SKIP **43→39**、0 FAIL、比对档 36 格不变——**pos 侧一份都没被新判据误伤**；**Linux 同日复跑** c / native 68P/0F/4S、ir-c / ir-native **32P/0F/40S**、0 FAIL、比对档 35 格不变；**交叉矩阵 48 OK / 0 FAIL** 不变。
 - **台账更新并写明余量卡点**：E-c 6 → **2**。`len_unknown` 需要给 IR 加一张 `len_known` 表（现在只能靠 `ve > 0` 判，会把「空动态字符串」误判成静态不可知，属于用假阳性换覆盖）；`void_subscript` 需要指针指向类型跟踪。两条都记在台账里，不用命名豁免糊过去。
 - **归属与边界**：改动全在 IR 前端（PB 是 IR 演进线），**A 线一行未动**——按 2026-11-09 的裁定它已是 oracle-only，本轮只是把它的判据搬到 IR 侧。
 

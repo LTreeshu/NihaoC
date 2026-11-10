@@ -443,7 +443,7 @@
   - **实测**：四份 err 在两档 IR 后端都是 `COVERED` 且**无产物**；门禁 c / native **68P/0F/3S** 不变、ir-c / ir-native **28→32 PASS**、SKIP **43→39**、0 FAIL、比对档 36 格不变（pos 一份没被新判据误伤）。
   - **台账同步**：E-c 6 → **2**，两份余量各自写明卡点（`len_unknown` 需 `len_known` 表，否则会把空动态字符串误判；`void_subscript` 需指针指向类型跟踪）。pos 桶计数不变（G1 21 / G2 5 / G3 2）。
   - **A 线一行未动**：按 2026-11-09 裁定，A 已是 oracle-only；本轮只是把 A 的判据搬到 IR 线上。
-  - **簿记**：改动 = `ncc/irparse.c` 两站 + `ncc/xmake.lua` 的 `IR_ERR_COVERED` 四项与一条注文 + 台账文档更新；Linux 复跑与交叉矩阵复跑结果随后回填。**本地提交，未推送**。
+  - **簿记**：改动 = `ncc/irparse.c` 两站 + `ncc/xmake.lua` 的 `IR_ERR_COVERED` 四项与一条注文 + 台账文档更新；交叉矩阵复跑 48 OK / 0 FAIL（两档 × 三 lane，EMIT=FAIL 48 不变）；Linux 同日复跑 68P/0F/4S 与 **32P/0F/40S**、0 FAIL、比对档 35 格不变。**下一簇的卡点已探明**：`malloc(i32)` 在 IR 上今天能编能跑，那 6 份用例只卡在 `p.(T)` 类型解引用一处。**本地提交，未推送**。
 
 ## 待 ltree 裁定清单（2026-10-27 汇总，PB-43）
 

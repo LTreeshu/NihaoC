@@ -768,7 +768,7 @@
 | `len_unknown` | `len(n)`，n 是标量 | 静默折成常量 0 | **本轮不动**：现有信息只有 `ve > 0`，直接判会把空动态字符串误伤，需先加 `len_known` 表 | A 侧用 `s->len_known` |
 | `void_subscript` | `void` 指针下标赋值 | 静默出码 | **本轮不动**：需指针指向类型跟踪（与台账 G1 的 `p.(T)` 同簇） | A 侧在同条路径已诊断 |
 
-门禁对照：改前 c / native 68P/0F/3S、ir-c / ir-native 28P/0F/43S；改后 c / native **不变**、ir-c / ir-native **32P/0F/39S**（新增的 4 份 PASS 就是上表前四行），0 FAIL，比对档 36 格不变。**台账同步**：E-c 6 → 2，pos 桶计数不变（G1 21 / G2 5 / G3 2）。
+门禁对照：改前 c / native 68P/0F/3S、ir-c / ir-native 28P/0F/43S；改后 c / native **不变**、ir-c / ir-native **32P/0F/39S**（新增的 4 份 PASS 就是上表前四行），0 FAIL，比对档 36 格不变；Linux 同日复跑 c / native 68P/0F/4S、ir-c / ir-native **32P/0F/40S**、0 FAIL、比对档 35 格不变；交叉矩阵 48 OK / 0 FAIL（两档 × GNU as + zig llvm-mc）不变。**台账同步**：E-c 6 → 2，pos 桶计数不变（G1 21 / G2 5 / G3 2）。
 
 **PB-61 实测：err 名单豁免与四档提升判定（2026-11-10，脚本在 `ncc/build/p61/`，gitignore）**
 
