@@ -691,6 +691,24 @@ static long long type_size_token(TokenType t)
     }
 }
 
+/* `.(T)` 的显式类型 → 标量类型码（0=i64 1=f64 2=i8 3=i16 4=i32 5=u8 6=u16 7=u32 8=f32）。
+ * 与变量声明处那条 vt_code 链同源；返回 -1 表示不是标量类型（`.()` 无类型形态或聚合类型）。 */
+static int ir_scalar_code_of_token(TokenType tt)
+{
+    if (!is_type_token(tt)) return -1;
+    switch (tt) {
+        case TOK_F32:                                     return 8;
+        case TOK_F64:                                     return 1;
+        case TOK_CHAR: case TOK_I8: case TOK_BOOL:        return 2;
+        case TOK_I16:                                     return 3;
+        case TOK_I32: case TOK_FX32:                      return 4;
+        case TOK_U8:                                      return 5;
+        case TOK_U16:                                     return 6;
+        case TOK_U32:                                     return 7;
+        default:                                          return 0;   /* i64/u64/string/void/聚合 */
+    }
+}
+
 /* 解析类型并返回字节大小（含聚合/数组）。
  * type_idx_out 非空时输出聚合类型索引（-1=基本类型）。失败返回 -1。 */
 static long long type_size_of(CompilerState *cs, int *type_idx_out)
@@ -1206,13 +1224,29 @@ static int ir_primary(CompilerState *cs)
              * 指向浮点（f64/f32）时标记结果 vreg 为 double，避免后续赋值/运算
              * 误把位模式当整数转换（ITOD）——pt[] 记录指针指向的标量类型。 */
             next_tok(cs);
+            /* PB-63：`.(T)` 显式类型——此前只支持空括号 `.()`，读到类型名就
+             * 在 expect(')') 处断掉（`expected ')', got 'i32'`），台账里 6 份用例卡在这 */
+            int tcode = -1;
+            if (cur_tok(cs) != TOK_RPAREN) {
+                tcode = ir_scalar_code_of_token(cur_tok(cs));
+                if (tcode < 0) {
+                    nihao_error(cs, "ir: '.()' dereference takes a scalar type or nothing, "
+                                    "not '%s'", cs->parser.lex->tok_str);
+                    tcode = 0;
+                }
+                next_tok(cs);
+            }
             expect(cs, TOK_RPAREN);
             ir_vis_check_usable(cs, vi);   /* M2：读前检查所有权是否已转移（use-after-move） */
             int addr = ir_new_vreg(F);
             ir_emit(F, IR_MOV, addr, vt[vi], -1, 0);    /* p 槽值 = 目标地址（MOV 勿 LOAD） */
             int vr = ir_new_vreg(F);
             ir_emit(F, IR_LOAD, vr, addr, -1, 0);       /* 读目标内容 */
-            if (PT_IS_SCALAR(pt[vi])) {
+            if (tcode >= 0) {
+                /* 宽度按 T：浮点标记照 T，窄整型走 TRUNC（与声明处一致） */
+                if (tcode == 1 || tcode == 8) ir_set_double(vr);
+                else if (tcode != 0) vr = ir_coerce(vr, tcode);
+            } else if (PT_IS_SCALAR(pt[vi])) {
                 int sc = PT_SCALAR_CODE(pt[vi]);
                 if (sc == 1 || sc == 8) ir_set_double(vr);
             }
@@ -2659,6 +2693,16 @@ static void ir_stmt(CompilerState *cs)
             }
             ir_vis_check_writable(cs, vi);  /* M2：写前检查是否被活动借用冻结 */
             next_tok(cs);           /* .( */
+            int wcode = -1;         /* PB-63：`.(T)` 的显式类型码，优先于 pt[] 推出来的指向类型 */
+            if (cur_tok(cs) != TOK_RPAREN) {
+                wcode = ir_scalar_code_of_token(cur_tok(cs));
+                if (wcode < 0) {
+                    nihao_error(cs, "ir: '.()' dereference takes a scalar type or nothing, "
+                                    "not '%s'", cs->parser.lex->tok_str);
+                    wcode = 0;
+                }
+                next_tok(cs);
+            }
             expect(cs, TOK_RPAREN);
             TokenType at = cur_tok(cs);
             if (at == TOK_ASSIGN || at == TOK_PLUS_ASSIGN || at == TOK_MINUS_ASSIGN ||
@@ -2672,7 +2716,8 @@ static void ir_stmt(CompilerState *cs)
                     int cur = ir_new_vreg(F);
                     ir_emit(F, IR_LOAD, cur, addr, -1, 0);
                     v = ir_expr(cs);
-                    int sc = (PT_IS_SCALAR(pt[vi])) ? PT_SCALAR_CODE(pt[vi]) : vtype[vi];
+                    int sc = (wcode >= 0) ? wcode :
+                             ((PT_IS_SCALAR(pt[vi])) ? PT_SCALAR_CODE(pt[vi]) : vtype[vi]);
                     IrOp op;
                     switch (at) {
                         case TOK_PLUS_ASSIGN:    op = IR_ADD; break;
@@ -2701,7 +2746,8 @@ static void ir_stmt(CompilerState *cs)
                     v = ir_coerce(v, sc);   /* 按指向类型截断（窄型 TRUNC / double→int 兜底） */
                 } else {
                     v = ir_expr(cs);
-                    v = ir_coerce(v, (PT_IS_SCALAR(pt[vi])) ? PT_SCALAR_CODE(pt[vi]) : vtype[vi]);
+                    v = ir_coerce(v, (wcode >= 0) ? wcode :
+                             ((PT_IS_SCALAR(pt[vi])) ? PT_SCALAR_CODE(pt[vi]) : vtype[vi]));
                 }
                 ir_emit(F, IR_STORE, -1, addr, v, 0);
                 skip_newlines(cs);
