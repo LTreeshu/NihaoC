@@ -2,6 +2,7 @@
 
 本文档记录 NihaoC 语言规范（Chinese.md / English.md）中各项指针安全规则与编译器（ncc）实际实现的对应状态。
 
+> 更新日期：2026-11-10（**PB-62 收台账 E-c 桶**）：IR 前端在单变量字符串初始化与 `ir_multi_decl` 两站补上与 A 后端同口径的三条诊断（元素非 `char` 不得用字符串初始化、含结尾 NUL 必须放得下声明容量、定长数组的多变量声明只收字符串字面量），替换掉原来的静默截断与丢 `[N]` 出码路径。四份 err（`str_array_bad_elem` / `str_array_overflow` / `multi_arr_nostr` / `multi_arr_overflow`）转为 IR 侧有诊断且无产物，收进 `IR_ERR_COVERED`；门禁 ir-c / ir-native **28→32 PASS**、SKIP **43→39**、0 FAIL，c / native 与比对档不变。E-c 桶 6→2，余下两份的卡点写进台账。详见下方 PB-62 实测表。
 > 更新日期：2026-11-10（**PB-61 P1 缺口台账 + err 名单去豁免**）：零编译器改动。`IR_ERR_COVERED` 显式补入 11 份 m2 族并删除门禁里 `stem:startswith("m2")` 那条命名豁免，判据此后只认名单；门禁复跑 c / native 68P/0F/3S、ir-c / ir-native 28P/0F/43S、0 FAIL、err 档 SKIP 每档 15 份不变。逐份实测把 28 份 「只有 A 能编」的 pos 与 15 份 err 真缺口归入 G1 / G2 / G3 / G4 四桶，明细在 `docs/IR_GAP_LEDGER.md`。两份「看似可提升」的候选实测否掉，并钉住两个根因：IR 的 `alignof` 恒返回 8、IR 前端无「首匹配即止」机制（`__is_matched` 在 irparse 里 0 命中）。详见下方 PB-61 实测表。
 > 更新日期：2026-11-09（**PB-60 IR 前端 fx32/fx64 按同宽整型落地 + align/sizeof 缺口登记**）：`irparse.c` 体内声明与形参两处类型码链都没有 FX 分支，`TOK_FX32` 落到默认 0＝i64 ⇒ `fx32` 在 c / native 截断而在 ir-c / ir-native 不截；各补 `FX32 → 码 4` 后四后端一致。新增 `pos/fx_types.nc`（12 项断言，带 `.expect`，入 `IR_SUBSET`）：Windows 68P/0F/3S 与 28P/0F/43S、Linux 68P/0F/4S 与 28P/0F/44S、0 FAIL、比对档 Windows 36 格 / Linux 35 格不变，交叉矩阵 48/48。另登记待裁第 30 条（`align n { }` A 后端六种摆法全语法错、IR 整块静默丢弃）与第 31 条（`sizeof(变量)` 是 A 超出产生式）。详见下方 PB-60 实测表。
 > 更新日期：2026-11-09（**PB-59 goto/label 覆盖轮 + 交叉档 `lbl_base` 撞名修复**）：门禁新增 `pos/goto_forms.nc`（五种合法标签形态，带 `.expect`，入 `IR_SUBSET`），四后端逐字相同，Windows PASS 计数 c / native 67、ir-c / ir-native 27，0 FAIL，比对档 36 格不变；`ir_backend.c` 的跨函数标签基数由「按 `f->label_count` 前进」改为「越过本函数实际用到的最大 label id」，交叉矩阵两档 × 三 lane 由 46 OK/1 FAIL 到 47 OK/0 FAIL，修复后的 riscv64 产物经 qemu 实跑与 `.expect` 逐字相同。前端对标签名零校验（未定义 / 重名 / 跨函数）三条实测缺口只登记，见 `TODO-PB.md` 待裁第 29 条。Linux 同日复跑 c / native 67P/0F/4S、ir-c / ir-native 27P/0F/44S、0 FAIL、比对档 35 格不变，新用例四档各 PASS。详见下方 PB-59 实测表。
@@ -755,6 +756,19 @@
 | 判据细节（本轮踩到） | — | err 档把**整份 `.expect` 去尾空白后当连续子串**在 stderr 上匹配，**不做 ANSI 剥离**、**不做逐行匹配** | ⇒ 候选只能取 `错误: ` 之后的纯文本；**跨行 pin 可行但依赖行尾**（Linux 与 Windows 行尾不同）不建议；**照截断的展示列回填必然 FAIL**（本轮实测一次并回退） |
 | 归属分母 | — | **23/33 份 `PA` 也有；10 份本分支自有** | 自有 10 份里 READY 2、PARTIAL 8 ⇒ 「本分支能单方面把 err 档 pin 全部收窄」是错觉，真正可单侧动的是 2 份 |
 | 门禁 | 改前（PB-54/55 后基线） | 改后 | Windows c/native **66P/0F/3S**、ir **26P/0F/43S**；Linux **66P/0F/4S**、ir **26P/0F/44S**；比对 **36 格（4 后端 32 + 2 后端 4）**；**0 FAIL**、rc=0 ⇒ **一字不变**，收窄没有让任何一档变红也没有掩盖任何东西 |
+
+**PB-62 实测：E-c 桶逐份判据对照（2026-11-10，ir-c 与 ir-native 双档结果一致）**
+
+| err 用例 | 源码里的非法形态 | 改前 IR | 改后 IR | 判据出处 |
+|---|---|---|---|---|
+| `str_array_bad_elem` | `x i32[3] = "ab"` | 按字节静默写入 int 数组，无诊断 | `ir: cannot initialize array 'x' with a string literal` + 无产物 | A 后端同条 |
+| `str_array_overflow` | `ch char[4] = "xiaoming"` | **截断到容量继续出码，实测产出可执行文件** | `ir: string needs 9 bytes with terminator, array 'ch' holds 4` + 无产物 | A 后端同条 |
+| `multi_arr_nostr` | `var {x = 1,y = 2} i32[4]` | 丢掉 `[4]` 发 `IR_MOV`，报错的是下游 `lvalue expected` | `ir: 'x' has fixed array type but no string literal initializer` + 无产物 | A 后端同条 |
+| `multi_arr_overflow` | `var {aa = "aa",bb = "bb"} char[2]` | 静默截断 | `ir: string needs 3 bytes with terminator, array 'aa' holds 2` + 无产物 | A 后端同条 |
+| `len_unknown` | `len(n)`，n 是标量 | 静默折成常量 0 | **本轮不动**：现有信息只有 `ve > 0`，直接判会把空动态字符串误伤，需先加 `len_known` 表 | A 侧用 `s->len_known` |
+| `void_subscript` | `void` 指针下标赋值 | 静默出码 | **本轮不动**：需指针指向类型跟踪（与台账 G1 的 `p.(T)` 同簇） | A 侧在同条路径已诊断 |
+
+门禁对照：改前 c / native 68P/0F/3S、ir-c / ir-native 28P/0F/43S；改后 c / native **不变**、ir-c / ir-native **32P/0F/39S**（新增的 4 份 PASS 就是上表前四行），0 FAIL，比对档 36 格不变。**台账同步**：E-c 6 → 2，pos 桶计数不变（G1 21 / G2 5 / G3 2）。
 
 **PB-61 实测：err 名单豁免与四档提升判定（2026-11-10，脚本在 `ncc/build/p61/`，gitignore）**
 

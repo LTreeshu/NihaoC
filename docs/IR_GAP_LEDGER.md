@@ -59,15 +59,17 @@
 |---|---|---|---|
 | **E-a 已诊断、文案不同源** | 3 | `cooking_bare_var` `is_dangling_range` `is_empty_range` | IR 有等价拒绝，只是句子与共用 `.expect` 不同源；已在待裁第 26 条（READY / PARTIAL / COLLIDES 三批清单）里 |
 | **E-b IR 在更外层就拒，够不到语义诊断** | 6 | `deref_bounds` `flow_move_frozen` `structof_bad_member` `void_member_unknown` `slice_str_overflow` `default_init_overflow` | 全都断在解析层（`expected ')', got 'i64'` / `unexpected token '.'`），**修复依赖本表第 2 节的 G1**，不是独立工作 |
-| **E-c IR 完全不诊断** | 6 | `len_unknown` `void_subscript` `str_array_bad_elem` `str_array_overflow` `multi_arr_nostr` `multi_arr_overflow` | **最严重的一桶**：非法程序被 IR 接受。其中 4 份的报错来自下游 C 编译器（`lvalue expected` / `implicit declaration`），不是 ncc；`str_array_overflow` **连下游都不拦，直接产出可执行文件**（实测 art=Y） |
+| **E-c IR 完全不诊断** | ~~6~~ → **2**（2026-11-10 PB-62 收了 4 份） | 已收：`str_array_bad_elem` `str_array_overflow` `multi_arr_nostr` `multi_arr_overflow`（现为「有诊断 + 无产物」并已入 `IR_ERR_COVERED`）；余：`len_unknown`（需 `len_known` 表，否则会把空动态字符串误判）、`void_subscript`（需指针指向类型跟踪，与 G1 的 `p.(T)` 同根） |
+
+更新（2026-11-10，PB-62）：**E-c 桶已由 6 份收到 2 份**——`str_array_bad_elem` / `str_array_overflow` / `multi_arr_nostr` / `multi_arr_overflow` 四份在 IR 前端补上与 A 同口径的三条诊断后转为「有诊断 + 无产物」，已入 `IR_ERR_COVERED`；门禁 ir-c / ir-native 由 28 份 PASS 升到 32 份（0 FAIL，c / native 与比对档不变，交叉矩阵 48/48 不变）。两份余量的卡点见本行右侧。
 
 ## 4. 从这张表读出的排期结论
 
-1. **单点最大的是「真实布局」**：G3 的 2 份 + E-c 的 6 份 + G2 的 3 份（多维读写、字符串数组、`alignof`）共
-   **11 份**挂在同一条欠账上（待裁第 23 条）。它不解，IR 线永远补不到 A 线的 68 份。
+1. **单点最大的是「真实布局」**：PB-61 时 G3 的 2 份 + E-c 的 6 份 + G2 的 3 份（多维读写、字符串数组、`alignof`）
+   共 **11 份**挂在同一条欠账上（待裁第 23 条）；PB-62 收掉 4 份 E-c 后为 **7 份**。它不解，IR 线永远补不到 A 线的 68 份。
 2. **G1 的 21 份聚成 4 簇**，不是 21 件事：`malloc(类型)` + `p.(T)`（6 份）、顶层声明与 `alias`（5 份）、数组 /
    切片容量档（3 份）、表达式细节与模式（7 份）。按簇排，一簇一轮。
-3. **E-c 那 6 份应当优先于「补齐语法」**：它们是「编译器不报错」而不是「编译器不支持」，属于会往外漏错程序的一类；
+3. **E-c 那 6 份应当优先于「补齐语法」**（PB-62 已照此收 4 份，余 2 份）：它们是「编译器不报错」而不是「编译器不支持」，属于会往外漏错程序的一类；
    最小动作是先给专属诊断（形状同 PA-52 / PA-59 那两轮），真实布局到位后再换成精确检查。
 4. **台账更新方式**：每轮 P2 收一簇后重跑 `build/p61/promotable.sh` 与本节计数，把改完的行从表里删掉——本文件只存
    「还欠什么」，不存历史（历史归 `CHANGELOG.md` 与 `docs/IMPLEMENTATION_STATUS.md`）。

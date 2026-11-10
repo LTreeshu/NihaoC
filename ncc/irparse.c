@@ -1931,6 +1931,8 @@ static void ir_multi_decl(CompilerState *cs, int vis)
     next_tok(cs);   /* { */
     const char *mnames[32];
     int minits[32];
+    int misstr[32];      /* PB-62：该名的初值是否字符串字面量（定长数组只收这个形态） */
+    int mslen[32];       /* 字面量长度（不含结尾 NUL） */
     int mc = 0;
     skip_newlines(cs);
     while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF && mc < 32) {
@@ -1942,6 +1944,8 @@ static void ir_multi_decl(CompilerState *cs, int vis)
         mnames[mc] = cs->parser.lex->tok_str;
         next_tok(cs);
         expect(cs, TOK_ASSIGN);
+        misstr[mc] = (cur_tok(cs) == TOK_STRING_LITERAL);
+        mslen[mc] = misstr[mc] ? (int)strlen(cs->parser.lex->tok_str) : 0;
         minits[mc] = ir_expr(cs);
         mc++;
         if (cur_tok(cs) != TOK_COMMA) break;
@@ -1950,8 +1954,9 @@ static void ir_multi_decl(CompilerState *cs, int vis)
     }
     expect(cs, TOK_RBRACE);
     /* 类型：基本类型或聚合类型，可带 [N] 数组 */
-    int elems = 0, ti = -1;
+    int elems = 0, ti = -1, arr_cap = 0, elt_char = 0;
     if (is_type_token(cur_tok(cs))) {
+        elt_char = (cur_tok(cs) == TOK_CHAR || cur_tok(cs) == TOK_I8);
         next_tok(cs);
     } else if (cur_tok(cs) == TOK_IDENTIFIER) {
         ti = agg_type_find(cs->parser.lex->tok_str);
@@ -1970,9 +1975,32 @@ static void ir_multi_decl(CompilerState *cs, int vis)
         next_tok(cs);
         if (cur_tok(cs) == TOK_INT_CONST) {
             elems = (int)cs->parser.lex->tok_val.i;
+            arr_cap = elems;
             next_tok(cs);
         }
         expect(cs, TOK_RBRACKET);
+    }
+    /* PB-62：定长数组的多变量声明只支持字符串字面量初值——此前直接 IR_MOV，
+     * 等于静默丢掉 `[N]` 生成 `int x = 1` 这类错误 C（台账 E-c 桶） */
+    if (arr_cap > 0) {
+        for (int k = 0; k < mc; k++) {
+            if (!misstr[k]) {
+                nihao_error(cs, "ir: '%s' has fixed array type but no string literal "
+                                "initializer; use a single-variable declaration for this form",
+                            mnames[k]);
+                continue;
+            }
+            if (!elt_char) {
+                nihao_error(cs, "ir: cannot initialize array '%s' with a string literal; "
+                                "its elements are not 'char', use a value list {v0, v1, ...}",
+                            mnames[k]);
+            }
+            if (mslen[k] + 1 > arr_cap) {
+                nihao_error(cs, "ir: string needs %d bytes with terminator, "
+                                "array '%s' holds %d",
+                            mslen[k] + 1, mnames[k], arr_cap);
+            }
+        }
     }
     for (int k = 0; k < mc; k++) {
         int vi = var_declare(mnames[k], elems, ti, vis);
@@ -3000,6 +3028,17 @@ static void ir_stmt(CompilerState *cs)
                 const char *str = cs->parser.lex->tok_str;
                 size_t slen = strlen(str);
                 next_tok(cs);
+                /* PB-62：与 A 后端同判据。此前元素非 char 也照收、放不下就静默截断，
+                 * 于是非法程序在 IR 线既不出诊断也不报错（台账 E-c 桶） */
+                if (vt_code != 2) {
+                    nihao_error(cs, "ir: cannot initialize array '%s' with a string literal; "
+                                    "its elements are not 'char', use a value list {v0, v1, ...}",
+                                name);
+                } else if ((int)slen + 1 > elems) {
+                    nihao_error(cs, "ir: string needs %d bytes with terminator, "
+                                    "array '%s' holds %d",
+                                (int)slen + 1, name, elems);
+                }
                 int cap = (int)slen + 1;
                 if (cap > elems) cap = elems;
                 for (int k = 0; k < cap; k++) {
