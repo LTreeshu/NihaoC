@@ -226,10 +226,21 @@ hotfix：   PA 分支修 bug → 合 main（tag v1.0.x）→ 同步共享文件�
 | 问 | 裁 | 落地口径 |
 |---|---|---|
 | ① Cortex-M0/M0+（ARMv6-M）要不要支持 | **要** | `ir-arm` 的**下限定在 ARMv6-M 的 16 位 Thumb 基础指令集**，一档同时覆盖 M0 / M0+ / M3 / M4 / M7 与 Cortex-A 的 Thumb 态，不做第二档位 |
-| ② Cortex-M 的执行验证环境 | **授权装 `qemu-system-arm`** | **尚未装成**。`apt-get install qemu-system-arm` 退出码 100：本机 apt 处于**先存的 dpkg 中断态**（`dpkg --audit` 指认半配置 `man-db`，另有 `dbus` / `libc-bin` 触发未处理，均与 qemu 无关）。apt 给的修法是 `dpkg --configure -a` 后重试，但那会配置 man-db、触发 dbus / libc-bin（含 `ldconfig`），**属共享系统状态**，故停在待确认。装成后 M 系列 freestanding 才能从 S3 升到可执行级 |
+| ② Cortex-M 的执行验证环境 | **授权装 `qemu-system-arm`** | **已装成（2026-11-10）**：首装退出码 100，根因是**先存的 dpkg 中断态**（半配置 `man-db`、`dbus` / `libc-bin` 触发未处理，与 qemu 无关）；经授权 `dpkg --configure -a` 修复后重装返回 0，版本 `1:8.2.2+ds-0ubuntu1.18`（与 qemu-user-static 8.2.2 同代），`-machine help` 匹配 microbit / stellaris / realview / vexpress 等 10 项 ⇒ M 系列 freestanding 可验到执行级 |
 | ③ 后端改名时机 | **代码不改名** | CLI 保持 `ir-riscv64` / `ir-loongarch64`；本文件 §5 名单里的 `ir-rv64` / `ir-loongarch` **一律按简称读**，正式名以 CLI 实名为准；新档跟随现有风格叫 **`ir-riscv32`** 与 **`ir-arm`**，**不引入任何别名**；§5.3 里 P4 的「改名 + 兼容别名」一项取消 |
 
 **对 §5.3 的两处影响**：P4 的 arm 子任务从「先 Linux-user 后 freestanding」改为「**按 ARMv6-M 基础
 Thumb 编到指令集，一次覆盖 M0 到 A 系**」，软件除法与字面量池两条前置进 P3 一并复核；P4 的改名子任务取消（第③条）。其余阶段与判据不变。
 
 **§5.1 第 3 条有一句今天作废**（就地声明，不回头改写原文）：我写的「ARMv6-M 没有 `LDRD`/`STRD`，所以 8 字节槽模型在那一档不成立」是错的——**错在默认 8 字节槽必须用双字载入指令访问**。两个 32 位 `ldr` / `str` 即可完成一次 8 字节槽读写，ARMv6-M 有这两条指令，所以「保持 8 字节槽 + 成对读写」这条裁定（§5.1 第 2 条）**对 M0 同样成立**，第 3 条的下限因此从 ARMv7E-M 降到 ARMv6-M。压到 ARMv6-M 换来的是四条实打实的约束，记在 §5.7 的发射器待办里：**软件除法**（无 `SDIV`/`UDIV`，`/` 与 `%` 需 helper）、**立即数只能走字面量池**（无 `MOVW`/`MOVT`）、**分支范围窄**（16 位 `B` 为 ±256，远距离需长跳）、**`LDR literal` 基址受限**与 `PUSH`/`POP` 寄存器表受限。
+
+### 5.7 发射器待办（arm 下限降到 ARMv6-M 带进来的四件事，2026-11-10）
+
+| 约束 | 具体含义 | 影响 |
+|---|---|---|
+| 软件除法 | ARMv6-M 无 `SDIV`/`UDIV`（M4/M7 才有）⇒ `/` 与 `%` 要么调 `__aeabi_idiv`/`uidiv` helper，要么内联循环除 | `ir-arm` |
+| 立即数只能走字面量池 | 无 `MOVW`/`MOVT`，32 位常量必须 `LDR Rd,[PC,#imm]` ⇒ 每个大常量都要管池与对齐 | `ir-arm` |
+| 分支范围窄 | 16 位 `B` 为 ±256、`BL` ±2048K ⇒ 远距离要长跳序列或 veneers，发射器要有分支距离检查 | `ir-arm` |
+| 受限寻址与压栈表 | `LDR literal` 在 M0 只允许 R7 以下基址；`PUSH`/`POP` 寄存器表受限 ⇒ 不能照抄 RV64 的帧习惯 | `ir-arm` |
+
+**共同前提**：8 字节槽在 32 位目标上按**两条 32 位 `ldr`/`str`** 访问（`ir-riscv32` 同理），这条已由 rv32 裁定覆盖，不需要为 M0 单开窄槽。执行验证前置已解除：`qemu-system-arm` `1:8.2.2+ds-0ubuntu1.18` 于 2026-11-10 装成（先 `dpkg --configure -a` 修先存中断态），`-machine help` 有 microbit / stellaris / realview / vexpress 等 10 项可选。

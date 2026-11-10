@@ -2,6 +2,7 @@
 
 本文档记录 NihaoC 语言规范（Chinese.md / English.md）中各项指针安全规则与编译器（ncc）实际实现的对应状态。
 
+> 更新日期：2026-11-10（**PB-63 IR 前端实现 `p.(T)` 类型解引用**）：新增 `ir_scalar_code_of_token`（与声明处 `vt_code` 同链，含 `FX32 → 4`），读站点按 T 定 double 标记与窄型 TRUNC，写站点与 `op=` 复合让显式 T 优先于 `pt[]`，聚合类型给专属诊断而非静默忽略。`malloc_demo` 四档一致移入 `IR_SUBSET`（无 `.expect` ⇒ 升比对档：4 后端 32→33、2 后端 4→3、IR SKIP 39→38，PASS 32 不变）；`flow` / `flow_move` / `flow_no_free` / `borrow` 过前端、改卡 `print`；交叉两档出码 48→53、三 lane 0 FAIL；Linux 复跑 68P/0F/4S 与 32P/0F/39S、0 FAIL。另记 `qemu-system-arm` 1:8.2.2 已装成（先修 dpkg 中断态）。详见下方 PB-63 实测表。
 > 更新日期：2026-11-10（**PB-62 收台账 E-c 桶**）：IR 前端在单变量字符串初始化与 `ir_multi_decl` 两站补上与 A 后端同口径的三条诊断（元素非 `char` 不得用字符串初始化、含结尾 NUL 必须放得下声明容量、定长数组的多变量声明只收字符串字面量），替换掉原来的静默截断与丢 `[N]` 出码路径。四份 err（`str_array_bad_elem` / `str_array_overflow` / `multi_arr_nostr` / `multi_arr_overflow`）转为 IR 侧有诊断且无产物，收进 `IR_ERR_COVERED`；门禁 ir-c / ir-native **28→32 PASS**、SKIP **43→39**、0 FAIL，c / native 与比对档不变。E-c 桶 6→2，余下两份的卡点写进台账。详见下方 PB-62 实测表。
 > 更新日期：2026-11-10（**PB-61 P1 缺口台账 + err 名单去豁免**）：零编译器改动。`IR_ERR_COVERED` 显式补入 11 份 m2 族并删除门禁里 `stem:startswith("m2")` 那条命名豁免，判据此后只认名单；门禁复跑 c / native 68P/0F/3S、ir-c / ir-native 28P/0F/43S、0 FAIL、err 档 SKIP 每档 15 份不变。逐份实测把 28 份 「只有 A 能编」的 pos 与 15 份 err 真缺口归入 G1 / G2 / G3 / G4 四桶，明细在 `docs/IR_GAP_LEDGER.md`。两份「看似可提升」的候选实测否掉，并钉住两个根因：IR 的 `alignof` 恒返回 8、IR 前端无「首匹配即止」机制（`__is_matched` 在 irparse 里 0 命中）。详见下方 PB-61 实测表。
 > 更新日期：2026-11-09（**PB-60 IR 前端 fx32/fx64 按同宽整型落地 + align/sizeof 缺口登记**）：`irparse.c` 体内声明与形参两处类型码链都没有 FX 分支，`TOK_FX32` 落到默认 0＝i64 ⇒ `fx32` 在 c / native 截断而在 ir-c / ir-native 不截；各补 `FX32 → 码 4` 后四后端一致。新增 `pos/fx_types.nc`（12 项断言，带 `.expect`，入 `IR_SUBSET`）：Windows 68P/0F/3S 与 28P/0F/43S、Linux 68P/0F/4S 与 28P/0F/44S、0 FAIL、比对档 Windows 36 格 / Linux 35 格不变，交叉矩阵 48/48。另登记待裁第 30 条（`align n { }` A 后端六种摆法全语法错、IR 整块静默丢弃）与第 31 条（`sizeof(变量)` 是 A 超出产生式）。详见下方 PB-60 实测表。
@@ -756,6 +757,21 @@
 | 判据细节（本轮踩到） | — | err 档把**整份 `.expect` 去尾空白后当连续子串**在 stderr 上匹配，**不做 ANSI 剥离**、**不做逐行匹配** | ⇒ 候选只能取 `错误: ` 之后的纯文本；**跨行 pin 可行但依赖行尾**（Linux 与 Windows 行尾不同）不建议；**照截断的展示列回填必然 FAIL**（本轮实测一次并回退） |
 | 归属分母 | — | **23/33 份 `PA` 也有；10 份本分支自有** | 自有 10 份里 READY 2、PARTIAL 8 ⇒ 「本分支能单方面把 err 档 pin 全部收窄」是错觉，真正可单侧动的是 2 份 |
 | 门禁 | 改前（PB-54/55 后基线） | 改后 | Windows c/native **66P/0F/3S**、ir **26P/0F/43S**；Linux **66P/0F/4S**、ir **26P/0F/44S**；比对 **36 格（4 后端 32 + 2 后端 4）**；**0 FAIL**、rc=0 ⇒ **一字不变**，收窄没有让任何一档变红也没有掩盖任何东西 |
+
+**PB-63 实测：`p.(T)` 前后的卡点位移（2026-11-10，两档 IR 结果一致）**
+
+| 用例 | 改前 IR | 改后 IR（实测） | 现卡点 |
+|---|---|---|---|
+| `malloc_demo` | `expected ')', got 'i32'` | **四档输出逐字相同**（`malloc ok` / `malloc write ok`） | 已放行，入 `IR_SUBSET` |
+| `flow` | 同上（前端断） | 前端通过，产物 C 里是裸 `print(t8)` | `tcc: error: undefined symbol 'print'`（待裁第 7 条） |
+| `flow_move` / `flow_no_free` / `borrow` | 同上 | 前端通过 | 同上（`print`） |
+| `deref_slice` | `expected '=', got '['` | 不变 | 数组 / 切片容量档声明形态 |
+| `ownerof` / `void_slot_infer` | `ir: unexpected token '.'` / `']'` | 不变 | `structof/holdof` 参数形态与 `void` 下标推断 |
+| `p.(Point)`（聚合解引用） | — | **专属诊断**（IR 无真实布局，不硬做） | 待裁第 23 条 |
+
+**门禁与交叉**：Windows c / native 68P/0F/3S 不变、ir-c / ir-native PASS 32 不变而 **SKIP 39→38**、比对档 4 后端 32→33 / 2 后端 4→3（总数 36 不变）、0 FAIL；Linux 68P/0F/4S 与 32P/0F/39S、0 FAIL、比对档 35 格（32 + 3）。交叉矩阵 `tests/pos` 全量：两档 ×（GNU as + zig llvm-mc）出码并过汇编由 **48 → 53**，`EMIT=FAIL` 48→38，**0 FAIL**。
+
+**环境**：`qemu-system-arm` `1:8.2.2+ds-0ubuntu1.18` 安装返回 0（前置 `dpkg --configure -a` 配置 `man-db`、处理 `dbus` / `libc-bin` 触发），`-machine help` 匹配 microbit / stellaris / realview / vexpress 等 10 项。
 
 **PB-62 实测：E-c 桶逐份判据对照（2026-11-10，ir-c 与 ir-native 双档结果一致）**
 

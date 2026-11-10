@@ -33,8 +33,8 @@
 | `multi_arr_decl` | IR 出码非法 C：`lvalue expected` | G2 | 多维数组读写在 IR 是降级路径，产物编译期就错 |
 | `str_array_init` | IR 出码：`assignment makes integer from pointer` | G2 | 字符串数组初始化按整型槽发，指针没落位 |
 | `use_mod` | IR 出码：`implicit declaration of function 'add'` | G2 | 跨模块符号未接（路线图阶段 2「link/use 跨文件」） |
-| `flow` / `flow_move` / `flow_no_free` / `malloc_demo` | `expected ')', got 'i32'` | G1 | `malloc(类型)` 的类型实参形态 + `p.(T)` 设计器（PB-56 已量这一条挡 8 份用例） |
-| `borrow` | 同上 | G1 | 同上，借用通路一起 |
+| ~~`flow` / `flow_move` / `flow_no_free` / `malloc_demo`~~ | **PB-63 已解**：真正卡点只有 `p.(T)` 一处（`malloc(类型)` 一直没问题——实测 `p void = malloc(i32)` 在 IR 能编能跑） | G1→放行 1 | `malloc_demo` 四档一致已入 `IR_SUBSET`；`flow` / `flow_move` / `flow_no_free` / `borrow` 过前端后改卡 **IR 不下降 `print`**（待裁第 7 条；IR-only 名单下已属必须做） |
+| `borrow` | 同 `flow` 族 | G1→卡 print | `print` 下降（A 侧口径见 §4 第 2 条） |
 | `deref_slice` / `len_builtin` / `array_capacity_tiers` | `expected '=', got '['` | G1 | 数组 / 切片容量档声明形态 |
 | `array_member_default` | `ir: unexpected token '[' in expression` | G3 | 数组元素默认值展开，需成员级真实偏移 |
 | `struct_member_default` | `ir: member default value: only simple constant supported` | G3 | 成员默认值只落了「简单常量」那一半，PA-49 / PA-56 家族未回灌完 |
@@ -67,7 +67,7 @@
 
 1. **单点最大的是「真实布局」**：PB-61 时 G3 的 2 份 + E-c 的 6 份 + G2 的 3 份（多维读写、字符串数组、`alignof`）
    共 **11 份**挂在同一条欠账上（待裁第 23 条）；PB-62 收掉 4 份 E-c 后为 **7 份**。它不解，IR 线永远补不到 A 线的 68 份。
-2. **G1 的 21 份聚成 4 簇**，不是 21 件事：**`p.(T)` 类型解引用（6 份；2026-11-10 实测确认 `malloc(类型)` 今天在 IR 上已能编能跑，`p void = malloc(i32)` 打印 `a ok`，所以这一簇只剩 `.(T)` 一处）**、顶层声明与 `alias`（5 份）、数组 / 切片容量档（3 份）、表达式细节与模式（7 份）。按簇排，一簇一轮。
+2. **G1 的 21 份聚成 4 簇**，不是 21 件事：**`p.(T)` 类型解引用（PB-63 已做：1 份当场放行、4 份改卡 `print`）**、**`print` 下降（现挡 4 份；A 侧口径已量清：`print(e)` → `printf("%lld\n", (long long)(e))`、`print("fmt", …)` → `printf` 透传）**、顶层声明与 `alias`（5 份）、数组 / 切片容量档（3 份）、表达式细节与模式（7 份）。按簇排，一簇一轮。
 3. **E-c 那 6 份应当优先于「补齐语法」**（PB-62 已照此收 4 份，余 2 份）：它们是「编译器不报错」而不是「编译器不支持」，属于会往外漏错程序的一类；
    最小动作是先给专属诊断（形状同 PA-52 / PA-59 那两轮），真实布局到位后再换成精确检查。
 4. **台账更新方式**：每轮 P2 收一簇后重跑 `build/p61/promotable.sh` 与本节计数，把改完的行从表里删掉——本文件只存

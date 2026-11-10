@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 2.0 线 P2 第二簇（PB-63：IR 前端实现 `p.(T)` 类型解引用；`malloc_demo` 四档一致并入名单；交叉两档出码 48→53，2026-11-10）
+
+- **卡点是一处，不是一簇**。`token.h` 把 `.(` 定义成单个 `TOK_DOT_PAREN`，IR 的读站点与写站点都直接 `expect(TOK_RPAREN)`，所以 `p.(i32)` 一律断在类型名上（`expected ')', got 'i32'`）；A 侧的 `deref_step` 早就同时支持 `.()` 与 `.(T)`。**这是纯 IR 侧欠账**，台账里 6 份用例挂在它上面。
+- **实现按同一条类型码链走**，避免再造一份映射：新增 `ir_scalar_code_of_token`（与变量声明处的 `vt_code` 同源，含 PB-60 补的 `FX32 → 4`）。读端由 T 决定 double 标记与窄型 `TRUNC`；写端与 `p.(T) op= e` 复合让**显式 T 优先于 `pt[]` 推出来的指向类型**。聚合类型 `p.(Point)` **给专属诊断**——IR 没有真实布局，硬做就是假通过，这正是 PB-62 刚立的「宁可拒绝，不许装没看见」规矩。
+- **实测分三层**：① `malloc_demo` 四档输出逐字相同 ⇒ 从「只有 A 能编」移进 `IR_SUBSET`；它没有 `.expect`，所以升的是**比对档**（4 后端一致格 32→33、2 后端格 4→3、IR 侧 SKIP 39→38），PASS 仍 32、0 FAIL；给它补 `.expect` 属 PA 结转用例资产，不自作主张。② `flow` / `flow_move` / `flow_no_free` / `borrow` 已过前端，**改卡在 IR 不下降 `print`**（产物 C 是裸 `print(...)`，tcc 报 undefined symbol，即待裁第 7 条——在 IR-only 名单下它已从「要不要做」变成「必须做」）。③ **交叉两档能出码的用例 48 → 53**（`EMIT=FAIL` 48→38），两档 ×（GNU as + zig llvm-mc）**0 FAIL**。
+- **双平台**：Windows c / native 68P/0F/3S、ir-c / ir-native 32P/0F/38S、0 FAIL、比对档 36 格（33 + 3）；Linux 同日复跑 68P/0F/4S 与 32P/0F/**39S**、0 FAIL、比对档 35 格（32 + 3）。
+- **环境一条**：上一轮记为「停在待确认」的 `qemu-system-arm`，经 ltree 授权后已装成——先 `dpkg --configure -a` 修掉先存的中断态（配置 `man-db`、处理 `dbus` / `libc-bin` 触发），`apt-get install` 返回 0，版本 `1:8.2.2+ds-0ubuntu1.18`（与 qemu-user-static 8.2.2 同代），`-machine help` 匹配 microbit / stellaris / realview / vexpress 等 10 项 ⇒ Cortex-M freestanding 的执行验证前置解除。
+
 ### 2.0 线 P2 首簇（PB-62：IR 前端补上「字符串 / 定长数组初始化」三条诊断，把台账 E-c 桶从 6 份收到 2 份；门禁 ir-c / ir-native 28→32 PASS、0 FAIL，2026-11-10）
 
 - **先修「不报错」，再修「不支持」**。P1 台账里最扎人的不是语法缺口，而是 E-c 那一桶：**非法程序在 IR 线静默通过**。`ch char[4] = "xiaoming"` 走的是 `if (cap > elems) cap = elems;`——**截断到容量继续出码**；`var {x = 1, y = 2} i32[4]` 直接把 `[4]` 丢掉发 `IR_MOV`，生成 `int x = 1` 这类错误 C，报错的还是下游编译器而不是 ncc。这类缺陷不会让门禁变红，只会让编译器往外漏错程序，所以排在语法补齐前面。
