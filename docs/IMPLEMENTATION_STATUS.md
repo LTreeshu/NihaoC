@@ -2,6 +2,7 @@
 
 本文档记录 NihaoC 语言规范（Chinese.md / English.md）中各项指针安全规则与编译器（ncc）实际实现的对应状态。
 
+> 更新日期：2026-11-11（**PB-66 IR 前端实现顶层声明与 `alias`**）：`irparse.c` 补上顶层声明这一层（顶层 `var` / `const` / `flow` / 模块级 `func` / `alias`），全局变量落成 `IrProg` 全局池（`__gN`）并复用既有 `IR_LD_ADDR` + `IR_LOAD` / `IR_STORE`——**不新增 IR 操作码，两档发射器一行未改**；顺带通了 `for` 的三形态 init 与任意表达式 step（step 移到 body 之后执行）、`else if` 链、struct 数组成员元素寻址。门禁 ir-c / ir-native 35→40 PASS、SKIP 34→29、0 FAIL，c / native 不变；Linux 68P/0F/4S + 40P/0F/30S；交叉整语料 106→116 份 `.s`、执行 96→102、8 条差异与改前逐条相同 ⇒ 零回归，三套 oracle 零告警。五份用例入 `IR_SUBSET`；台账 pos 缺口 28→23、G1 21→16。详见下方 PB-66 实测表。
 > 更新日期：2026-11-11（**PB-64 / PB-65 `print` 下降到 printf + 字符串池序列化转义**）：`irparse.c` 把内置名 `print` 按 A 口径下降（带格式串透传 `printf`、否则前置 `"%lld\n"` 且 CALL 实参数 +1，浮点先 DTOI）；`ir.c` 新增 `ir_str_escaped` 并接到 `ir_to_c` 与 `ir_backend` 两处——此前含换行的字符串在 ir-c 产物里是非法 C、在交叉 `.s` 里靠汇编器容错。门禁 ir-c / ir-native 32→35 PASS、SKIP 38→34、0 FAIL，c / native 不变；Linux 68P/0F/4S + 35P/0F/35S；交叉矩阵 53 OK / 0 FAIL 且 `unterminated string` 告警清零。flow 族四份入 IR_SUBSET；`str_array_init` 变为能编能跑但输出截断，属第 23 条家族、不入名单。详见下方实测表。
 > 更新日期：2026-11-10（**PB-63 IR 前端实现 `p.(T)` 类型解引用**）：新增 `ir_scalar_code_of_token`（与声明处 `vt_code` 同链，含 `FX32 → 4`），读站点按 T 定 double 标记与窄型 TRUNC，写站点与 `op=` 复合让显式 T 优先于 `pt[]`，聚合类型给专属诊断而非静默忽略。`malloc_demo` 四档一致移入 `IR_SUBSET`（无 `.expect` ⇒ 升比对档：4 后端 32→33、2 后端 4→3、IR SKIP 39→38，PASS 32 不变）；`flow` / `flow_move` / `flow_no_free` / `borrow` 过前端、改卡 `print`；交叉两档出码 48→53、三 lane 0 FAIL；Linux 复跑 68P/0F/4S 与 32P/0F/39S、0 FAIL。另记 `qemu-system-arm` 1:8.2.2 已装成（先修 dpkg 中断态）。详见下方 PB-63 实测表。
 > 更新日期：2026-11-10（**PB-62 收台账 E-c 桶**）：IR 前端在单变量字符串初始化与 `ir_multi_decl` 两站补上与 A 后端同口径的三条诊断（元素非 `char` 不得用字符串初始化、含结尾 NUL 必须放得下声明容量、定长数组的多变量声明只收字符串字面量），替换掉原来的静默截断与丢 `[N]` 出码路径。四份 err（`str_array_bad_elem` / `str_array_overflow` / `multi_arr_nostr` / `multi_arr_overflow`）转为 IR 侧有诊断且无产物，收进 `IR_ERR_COVERED`；门禁 ir-c / ir-native **28→32 PASS**、SKIP **43→39**、0 FAIL，c / native 与比对档不变。E-c 桶 6→2，余下两份的卡点写进台账。详见下方 PB-62 实测表。
@@ -811,6 +812,26 @@
 | 交叉矩阵 | 53 OK / 0 FAIL（含 4 条告警） | **53 OK / 0 FAIL，告警 0**（`EMIT=FAIL` 38 不变） |
 
 我自己这一环错了两次：先只改 C 侧漏了交叉，再在补转义时把字符常量写成双引号（`"\n"` 应为 `'\n'`），第一版转义输出是错字节；都由实测纠正。锚点：`irparse.c` 的 `call_first_str` 与 `print` 下降块、`ir.c` 的 `ir_str_escaped`、`ir_to_c.c` 与 `ir_backend.c` 的池输出行、名单在 `xmake.lua` 的 `IR_SUBSET`。
+
+**PB-66 实测：IR 顶层声明与 `alias`（2026-11-11）**
+
+| 判据 | 改前（IR 侧第一手） | 改后 |
+|---|---|---|
+| `features`（顶层 `alias` + `struct` + `enum` + `for` + `.(T)`） | `ir: unsupported top-level token 'alias'` | 四档输出逐字相同（`done`），入 `IR_SUBSET` |
+| `mathmod`（模块级 `func` + 顶层 `const`） | `ir: unsupported top-level token 'const'` | 四档都出 `.c` 产物，入 `IR_SUBSET` |
+| `transfer`（顶层 `flow` 声明 + `flow create()`） | `ir: unsupported top-level token 'flow'` | 四档输出逐字相同（`99` + `transfer ok`），入 `IR_SUBSET` |
+| `for_init_forms`（顶层变量 + for 五形态 + 全局变量跨函数） | `ir: unexpected top-level identifier 'count'` | 四档输出逐字相同（五行），入 `IR_SUBSET` |
+| `module_top_forms`（`[[export "..."]] const` + `[[inline]] func`） | `bracket attributes are only implemented for 'func' definitions` | 四档都出 `.c` 产物，入 `IR_SUBSET` |
+| 全局变量跨函数读写 | 无机制 | `IrProg` 全局池（`__gN` 符号）+ 既有 `IR_LD_ADDR` / `IR_LOAD` / `IR_STORE`——**不新增 IR 操作码，两档发射器一行未改** |
+| `for` 的 step | 只支持 `++` / `--` / `=` / `+=` 特判 | 任意表达式（`i++` / `i--` / `j = j - 1` / `tick()`），且执行位置移到 body 之后 |
+| `for` 的 init | 只支持 `i = 0` | 三形态：`i i32 = 0` / `i = 0` / `i (i32) = 0` |
+| `else if` 链 | `expected '{', got 'if'` | 支持（`ir_if_stmt` 递归） |
+| struct 数组成员 `p.name[0]` | 成员类型解析失步 | 支持；越出首槽 8 字节给专属诊断（布局仍是待裁第 23 条） |
+| 门禁 | Windows ir-c / ir-native 35P/34S | **40P / 29S**、0 FAIL；c / native 68P/3S 不变；Linux 68P/4S + 40P/30S、0 FAIL |
+| 比对档 | 4 后端 34 / 2 后端 2 | 不变（4 后端 **34** / 2 后端 **2**） |
+| 交叉整语料 | 106 份 `.s`：汇编 106/0、链接 104/2、执行 96/8 | 116 份：汇编 **116/0**、链接 110/6、执行 **102/8**；新增 4 条链接失败是 `mathmod` / `module_top_forms`（无 `main`，同 `use_mod`），8 条执行差异与改前逐条相同 ⇒ **零回归**；三套 oracle（msys2 GAS + zig LLVM + llvm-mc 18）告警 **0** |
+
+锚点：`irparse.c` 的 `ir_peek_ahead`（前瞻两个 token 判括号类型）、`ir_member_elem_addr`（数组成员元素寻址）、`ir_if_stmt`（`else if` 链）、`ir_top_decl` / `ir_alias_decl` / `ir_top_var` / `ir_func_named`（顶层声明分派）、`ir_stmt` 的 `TOK_FOR` 分支（step 摘下再挂回 body 之后）、`ir_type_decl` 的成员类型解析（`marr_len` / `marr_esize`）；`ir.h` 的全局池字段与 `ir_add_global` 声明、`ir.c` 的 `ir_add_global`、`ir_to_c.c` 的全局池输出与 `IR_LD_ADDR` 的 `&` 处理、`ir_backend.c` 的 `.data` 段输出；名单在 `xmake.lua` 的 `IR_SUBSET`。
 **fx32/fx64 与 align/sizeof 形态实测（PB-60，2026-11-09，探针在 `ncc/build/p60/`，不入版本库）**
 
 | 形态 | c / native | ir-c / ir-native（修前） | ir-c / ir-native（修后） | 交叉两档 |

@@ -103,6 +103,20 @@ int irgen_c_emit(IrProg *p, const char *outfile)
     }
     if (p->str_count) cb_put(&b, "\n");
 
+    /* 全局变量池（顶层 var/const 声明）：跨函数共享，文件作用域静态存储 */
+    for (int i = 0; i < p->glb_count; i++) {
+        if (p->glb_is_double[i]) {
+            /* 浮点全局：初值以位模式存放 → 还原成 double 字面量 */
+            double d;
+            memcpy(&d, &p->glb_init[i], sizeof(d));
+            cb_put(&b, "static double %s = %.17g;\n", p->glb_syms[i], d);
+        } else {
+            cb_put(&b, "static int64_t %s = %lld;\n", p->glb_syms[i],
+                   (long long)p->glb_init[i]);
+        }
+    }
+    if (p->glb_count) cb_put(&b, "\n");
+
     /* 用户函数前置原型：消除"调用先于定义"导致的隐式声明
      * （Windows tcc 对隐式声明的未知符号生成 __imp_ 外部引用而链接失败） */
     for (int fi = 0; fi < p->fn_count; fi++) {
@@ -249,7 +263,11 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                     cb_put(&b, "L%d:;\n", in->label);
                     break;
                 case IR_LD_ADDR:
-                    cb_put(&b, "    %s = (int64_t)(intptr_t)%s;\n", vrid[in->dst], in->sym);
+                    /* 符号池的字符串是数组（数组名退化为地址），全局变量是标量
+                     * （取地址要显式 &）——否则写出的是变量值而非地址。 */
+                    cb_put(&b, "    %s = (int64_t)(intptr_t)%s%s;\n", vrid[in->dst],
+                           (in->sym && strncmp(in->sym, "__g", 3) == 0) ? "&" : "",
+                           in->sym);
                     break;
                 case IR_ALLOCA:
                     /* C 中局部变量已声明；ALLOCA 槽即 vrid */

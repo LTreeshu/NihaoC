@@ -79,6 +79,25 @@ int ir_add_string(IrProg *p, const char *data)
     strcpy(p->str_syms[p->str_count], sym);
     return p->str_count++;
 }
+/* 全局变量入池：顶层 var/const 声明的存储。符号名 __gN 与字符串池 __str_N 同风格，
+ * 后端据此在 .data 段（交叉档）或文件作用域（ir-c）落一份真实存储。 */
+int ir_add_global(IrProg *p, int64_t init, int is_double)
+{
+    if (p->glb_count >= p->glb_cap) {
+        p->glb_cap = p->glb_cap ? p->glb_cap * 2 : 8;
+        p->glb_syms = nihao_realloc(g_cs, p->glb_syms, p->glb_cap * sizeof(char *));
+        p->glb_init = nihao_realloc(g_cs, p->glb_init, p->glb_cap * sizeof(int64_t));
+        p->glb_is_double = nihao_realloc(g_cs, p->glb_is_double, p->glb_cap * sizeof(int));
+    }
+    char sym[64];
+    snprintf(sym, sizeof(sym), "__g%d", p->glb_count);
+    p->glb_syms[p->glb_count] = nihao_malloc(g_cs, strlen(sym) + 1);
+    strcpy(p->glb_syms[p->glb_count], sym);
+    p->glb_init[p->glb_count] = init;
+    p->glb_is_double[p->glb_count] = is_double;
+    return p->glb_count++;
+}
+
 /* 字符串池存的是解密后的原始字节，两个后端在序列化时必须自己再转义一次：把换行
  * 原样写进 `.string "a<换行>b"` 或 C 的 `"a<换行>b";` 会把一条语句劈成两行
  * （2026-11-11 实测：ir-c 产物是非法 C，交叉 .s 只靠汇编器容错才编得过）。

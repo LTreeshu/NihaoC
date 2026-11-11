@@ -94,6 +94,12 @@ typedef struct {
     int str_cap;
     char **str_data;
     char **str_syms;
+    /* 全局变量池（顶层 var/const 声明）：符号名 + 初值位模式 + 是否 double */
+    int glb_count;
+    int glb_cap;
+    char **glb_syms;
+    int64_t *glb_init;
+    int *glb_is_double;
 } IrProg;
 
 IrProg *ir_prog_new(void);
@@ -103,6 +109,8 @@ int ir_emit(IrFn *f, IrOp op, int dst, int a, int b, int64_t imm);
 int ir_new_vreg(IrFn *f);
 int ir_new_label(IrFn *f);
 int ir_add_string(IrProg *p, const char *data);   /* 返回符号名序号 */
+/* 全局变量入池（顶层 var/const）：返回符号名序号 */
+int ir_add_global(IrProg *p, int64_t init, int is_double);
 /* 池里的字节落到 C 文本或汇编 .string 前必须过这个转义（实现见 ir.c 内注释） */
 const char *ir_str_escaped(const char *s);
 

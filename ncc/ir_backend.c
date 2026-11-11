@@ -95,6 +95,17 @@ int irgen_backend_emit(IrProg *p, const char *outfile, const char *backend)
         nb_put(&b, ".text\n");
     }
 
+    /* 全局变量池（顶层 var/const 声明）：8 字节定长槽，浮点初值存位模式 */
+    if (p->glb_count > 0) {
+        nb_put(&b, ".data\n");
+        for (int i = 0; i < p->glb_count; i++) {
+            nb_put(&b, ".align 3\n");
+            nb_put(&b, "%s:\n", p->glb_syms[i]);
+            nb_put(&b, "  .quad %lld\n", (long long)p->glb_init[i]);
+        }
+        nb_put(&b, ".text\n");
+    }
+
     int lbl_base = 0;   /* 跨函数 label 全局基数（label 编号 per-function 从 0 起） */
     for (int fi = 0; fi < p->fn_count; fi++) {
         IrFn *f = &p->fns[fi];

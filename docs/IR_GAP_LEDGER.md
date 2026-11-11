@@ -13,7 +13,8 @@
   只由名单决定。复跑门禁：c / native **68P/0F/3S**、ir-c / ir-native **28P/0F/43S**，0 FAIL，err 档 SKIP 仍 30 行
   （即每档 15 份），**行为一字未变**。
 - pos 侧「IR 能编 44 份」= `IR_SUBSET` 41 + `IR_ONLY` 3，与门禁里 ir-c 的 PASS 数（28）不同源：后者只数带 `.expect`
-  的那部分，其余进跨后端比对池。
+  的那部分，其余进跨后端比对池。**PB-66 后这行改为「IR 能编 49 份」= `IR_SUBSET` 46 + `IR_ONLY` 3**（顶层声明与 `alias`
+  簇五份放行入名单），pos 侧缺口相应由 28 份收到 **23** 份；门禁 ir-c / ir-native 的 PASS 数同步 35 → **40**。
 
 ## 1. 四桶定义
 
@@ -24,7 +25,7 @@
 | **G3 布局缺失** | 根因是「聚合体没有真实内存布局」（待裁第 23 条） | 需 ltree 先裁槽宽与布局口径 |
 | **G4 名单与用例** | 缺口在测试资产或名单本身：可提升、文案不同源、用例写法越界 | 改名单 / 改用例，不动编译器 |
 
-## 2. pos 缺口 28 份（72 份总数中，只有 A 线能编或能编但语义不同的那些）
+## 2. pos 缺口 23 份（72 份总数中，只有 A 线能编或能编但语义不同的那些）
 
 | 用例 | IR 侧第一手结果 | 桶 | 要补的动作 |
 |---|---|---|---|
@@ -39,10 +40,10 @@
 | `array_member_default` | `ir: unexpected token '[' in expression` | G3 | 数组元素默认值展开，需成员级真实偏移 |
 | `struct_member_default` | `ir: member default value: only simple constant supported` | G3 | 成员默认值只落了「简单常量」那一半，PA-49 / PA-56 家族未回灌完 |
 | `designator_init` | `ir: unexpected token '.' in expression` | G1 | `.field = v` 指定式初值不解析 |
-| `features` | `ir: unsupported top-level token 'alias'` | G1 | 顶层 `alias` |
-| `mathmod` / `transfer` | `unsupported top-level token 'const'` / `'flow'` | G1 | 顶层变量声明（含带可见性前缀的），在册既有缺口 |
-| `for_init_forms` | `ir: unexpected top-level identifier 'count'` | G1 | 同上，顶层变量 |
-| `module_top_forms` | bracket attributes 只对 `func` 生效（got `const`） | G1 | P12 只落属性表在 `func` 上那一档 |
+| ~~`features`~~ | ~~`ir: unsupported top-level token 'alias'`~~ | G1→放行 | **PB-66 已解**：顶层 `alias` + 顶层 `const` / `var` + `for` 声明式 init + `else if` 链 + struct 数组成员齐活，四档输出逐字相同，已入 `IR_SUBSET` |
+| ~~`mathmod` / `transfer`~~ | ~~`unsupported top-level token 'const'` / `'flow'`~~ | G1→放行 | **PB-66 已解**：顶层变量声明（含带可见性前缀的 `flow`）落成 `IrProg` 全局池，`transfer` 的 `flow create() void` 顶层函数声明一并放行 |
+| ~~`for_init_forms`~~ | ~~`ir: unexpected top-level identifier 'count'`~~ | G1→放行 | **PB-66 已解**：顶层变量 + `for` 的三种 init 形态（`i i32 = 0` / `i = 0` / `i (i32) = 0`）+ 任意表达式 step（`i++` / `i--` / `j = j - 1` / `tick()`）全部放行，step 改为 body 之后执行 |
+| ~~`module_top_forms`~~ | ~~bracket attributes 只对 `func` 生效（got `const`）~~ | G1→放行 | **PB-66 已解**：属性表落到 `const` 声明上（`[[export ".mydata"]]`），模块型用例四档都出 `.c` 产物 |
 | `is_pattern_forms` | `ir: bad 'is' pattern` | G1 | 带符号区间 `is -9..-5` 一类模式 |
 | `ownerof` | `ir: unexpected token '.' in expression` | G1 | `.()` 后缀链形态 |
 | `slice_str_infer` | `ir: expected member name` | G1 | 切片 / 字符串指针推断 |
@@ -50,7 +51,7 @@
 | `type_forms` | `ir: unexpected token 'i32' in expression` | G1 | 类型出现在表达式位置（C 风格转换形态） |
 | `void_slot_infer` | `ir: unexpected token ']' in expression` | G1 | `void` 指针下标推断 |
 
-**桶分布**：G1 **21**、G2 **5**、G3 **2**（G4 在 pos 侧本轮为 0——两份「看似可提升」的 `alignof_builtin` 与
+**桶分布**：G1 **16**、G2 **5**、G3 **2**（G4 在 pos 侧本轮为 0——两份「看似可提升」的 `alignof_builtin` 与
 `is_no_fallthrough` 实测四档输出不同，**不可提升**；这也复核了 PB-56 当时「可提升 0 份」的结论仍然成立）。
 
 ## 3. err 缺口 15 份（IR 侧不参与或参与了但判据不同源）
@@ -63,11 +64,12 @@
 
 更新（2026-11-10，PB-62）：**E-c 桶已由 6 份收到 2 份**——`str_array_bad_elem` / `str_array_overflow` / `multi_arr_nostr` / `multi_arr_overflow` 四份在 IR 前端补上与 A 同口径的三条诊断后转为「有诊断 + 无产物」，已入 `IR_ERR_COVERED`；门禁 ir-c / ir-native 由 28 份 PASS 升到 32 份（0 FAIL，c / native 与比对档不变，交叉矩阵 48/48 不变）。两份余量的卡点见本行右侧。
 更新（2026-11-11，PB-64 / PB-65）：**`print` 已在 IR 下降到 printf**，`flow` 四份全部放行——`flow` / `flow_no_free` / `borrow` 入 `IR_SUBSET` 并计 PASS，`flow_move` 入名单升比对档；`features` 现在只剩顶层 `alias` 一挡。同轮修掉**字符串池序列化不转义**的缺陷（含换行的串在 ir-c 产物里是非法 C、在交叉 `.s` 里劈成两行只靠汇编器容错），修好后交叉的 `unterminated string` 告警由 4 降到 0。`str_array_init` 由「出码语义坏」变成「能编能跑但输出截断」（IR `x/9/A` vs A `xiaoming/9/ABCDEFGH`），归第 23 条家族，**不入名单**。
+更新（2026-11-11，PB-66）：**顶层声明与 `alias` 那一簇 5 份全部放行**——`features` / `for_init_forms` / `transfer` / `mathmod` / `module_top_forms` 四档实跑输出逐字相同（三份带 `.expect` 计入 PASS，两份模块型只出 `.c` 产物），已入 `IR_SUBSET`；门禁 ir-c / ir-native 由 35 升到 **40 PASS**、SKIP 34 → **29**、0 FAIL，c / native 68P/0F/3S 不变，比对档 34 + 2 不变。pos 侧缺口 28 → **23** 份（G1 21 → 16）。**边界照旧诚实**：`char[32]` 这类数组成员在 IR 侧仍只占 1 个 8 字节槽（真实布局仍是待裁第 23 条），`features` 恰巧不回读该成员才逐字相同——它进名单是因为输出相同，不是因为布局已定案；越出首槽的元素写给专属诊断。
 ## 4. 从这张表读出的排期结论
 
 1. **单点最大的是「真实布局」**：PB-61 时 G3 的 2 份 + E-c 的 6 份 + G2 的 3 份（多维读写、字符串数组、`alignof`）
    共 **11 份**挂在同一条欠账上（待裁第 23 条）；PB-62 收掉 4 份 E-c 后为 **7 份**。它不解，IR 线永远补不到 A 线的 68 份。
-2. **G1 的 21 份聚成 4 簇**，不是 21 件事：**`p.(T)` 类型解引用（PB-63 已做：1 份当场放行、4 份改卡 `print`）**、**`print` 下降（现挡 4 份；A 侧口径已量清：`print(e)` → `printf("%lld\n", (long long)(e))`、`print("fmt", …)` → `printf` 透传）**、顶层声明与 `alias`（5 份）、数组 / 切片容量档（3 份）、表达式细节与模式（7 份）。按簇排，一簇一轮。
+2. **G1 的 16 份聚成 3 簇**，不是 16 件事：**`p.(T)` 类型解引用（PB-63 已做：1 份当场放行、4 份改卡 `print`）**、**`print` 下降（PB-64 已做，四份全放行）**、**顶层声明与 `alias`（PB-66 已做，5 份全放行）**、数组 / 切片容量档（3 份）、表达式细节与模式（7 份）。按簇排，一簇一轮。
 3. **E-c 那 6 份应当优先于「补齐语法」**（PB-62 已照此收 4 份，余 2 份）：它们是「编译器不报错」而不是「编译器不支持」，属于会往外漏错程序的一类；
    最小动作是先给专属诊断（形状同 PA-52 / PA-59 那两轮），真实布局到位后再换成精确检查。
 4. **台账更新方式**：每轮 P2 收一簇后重跑 `build/p61/promotable.sh` 与本节计数，把改完的行从表里删掉——本文件只存

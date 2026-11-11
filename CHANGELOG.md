@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 2.0 线 P2 第四簇（PB-66：IR 前端实现顶层声明与 `alias`，五份用例入名单；`for` 三形态 init 与任意表达式 step、`else if` 链、struct 数组成员顺带一起通，2026-11-11）
+
+- **五份用例、五种报错，根因是同一处**：IR 前端没有顶层声明这一层。`features` 卡 `alias`、`mathmod` 卡 `const`、`transfer` 卡 `flow`、`for_init_forms` 卡顶层变量 `count`、`module_top_forms` 卡「属性只对 `func` 生效」。补上顶层声明之后，`for` 的 init 三形态、`else if` 链、struct 数组成员这三处**顺带一起通了**——它们各自也在这五份里被踩到，不是另开的工单。
+- **全局变量没有新造机制**：顶层 `var` / `const` 落成 `IrProg` 的**全局池**（`ir.h` 加 `glb_syms` / `glb_init` / `glb_is_double`，`ir.c` 加 `ir_add_global`），跨函数共享复用已有的 `IR_LD_ADDR` + `IR_LOAD` / `IR_STORE` ⇒ **不新增任何 IR 操作码，两档发射器一行未改**；`ir_to_c.c` 与 `ir_backend.c` 各补一处符号定义（`.data` 段 / `static` 变量）即可。`IR_LD_ADDR` 对 `__g*` 补了显式 `&`——标量取地址要写 `&__g0`，否则发出的是变量**值**而不是地址，落到 IR→C 上就是空指针解引用（这个坑是逐份二分最小用例时撞出来的）。
+- **`for` 的 step 语义要落到 body 之后**：源码里 `for init; cond; step { body }` 的 step 写在 body 之前，但语义上每轮迭代在 body **之后**执行。实现上先把 step 发出的指令摘下来、body 之后再挂回去；step 本身改为**任意表达式**（`i++` / `i--` / `j = j - 1` / `tick()` 同走一条 `ir_expr`），不再需要为每种步进单开一条特判。init 则补齐三形态（`i i32 = 0` / `i = 0` / `i (i32) = 0`），括号类型靠新增的 `ir_peek_ahead` 前瞻两个 token 判定，与 `parser.c` 的 `peek_ahead` 同语义。
+- **边界照旧诚实**：struct 的数组成员在 IR 侧仍只占 **1 个 8 字节槽**（真实布局是待裁第 23 条，本轮不动），所以元素寻址只允许落在首槽 8 字节内，越界给专属诊断。`features` 恰好不回读该成员才四档逐字相同——**它进名单是因为输出相同，不是因为布局已定案**。
+- **计数**：Windows c / native 68P/0F/3S 不变、ir-c / ir-native **35 → 40 PASS**、SKIP **34 → 29**、0 FAIL，比对档 34 + 2 不变；Linux 同日复跑 68P/0F/4S 与 40P/0F/30S、0 FAIL、比对档 35 格。**交叉整语料重跑**：改前 106 份 `.s`（汇编 106/0、链接 104/2、执行 96/8）→ 改后 116 份（汇编 116/0、链接 110/6、执行 102/8）；新增的 4 条链接失败是 `mathmod` / `module_top_forms` 两份模块型用例（无 `main`，与 `use_mod` 同因），**不是回归**；8 条执行差异与改前逐条相同（`alignof_builtin` / `is_no_fallthrough` / `multi_arr_decl` / `str_array_init` 两档各一），**零回归**；三套汇编 oracle（msys2 GAS + zig LLVM + llvm-mc 18）**零告警**。
+- **台账**：pos 侧缺口 28 → **23** 份（G1 21 → 16），`docs/IR_GAP_LEDGER.md` 的五行改写为「已放行」并同步计数与排期结论。
+
 ### 2.0 线 P2 第三簇（PB-64 / PB-65：`print` 在 IR 下降到 printf，四份 flow 族入名单；顺带修掉字符串池序列化的转义缺失——ir-c 此前会发出非法 C，2026-11-11）
 
 - **`print` 是 IR 线缺的最后一个高频内置名**：A 后端把它翻成 `printf`，IR 却当外部符号原样发出，产物里是裸 `print(...)`，只在链接期报 undefined symbol。PB-63 放行 `.(T)` 之后，`flow` / `flow_move` / `flow_no_free` / `borrow` 四份就卡在这点上。本轮按 A 同口径下降（带格式串透传、不带则前置 `"%lld\n"`，浮点先 DTOI）。

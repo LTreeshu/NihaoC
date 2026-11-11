@@ -39,6 +39,22 @@ static int *vptr;          /* 是否指针类（void）：1=是（仅指针类�
 /* 可见性常量直接用 ncc.h 的 Visibility 枚举（PB-27.3+9：与 cgen 端 enum nihao_vis 数值统一：
  *   VIS_UNDEF=0, VIS_CONST=1, VIS_FLOW=2, VIS_STATIC=3, VIS_VAR=4）。 */
 
+/* 前瞻第 offset 个 token（0=当前 token，1=下一个）——与 parser.c 的 peek_ahead 同语义。
+ * 词法状态整体快照/还原；标识符串由 strdup 永久持有（还原后仍可读）。
+ * lexer_peek 只看一个 token，判定「括号类型」`(i32)` 需要看两个 → 用这里的前瞻。 */
+static TokenType ir_peek_ahead(CompilerState *cs, int offset)
+{
+    LexerState *lex = cs->parser.lex;
+    LexerState save = *lex;
+    TokenType t = lex->tok;
+    for (int i = 0; i < offset; i++) {
+        lexer_next(lex);
+        t = lex->tok;
+    }
+    *lex = save;
+    return t;
+}
+
 /* ---------- M2 所有权/借用静态检查（移植自 vis.c，基于 vi 索引） ---------- */
 #define IR_VS_VALID   0
 #define IR_VS_FROZEN  1
@@ -341,6 +357,8 @@ typedef struct {
     int mbits[IR_MAX_MEMB];            /* 位域宽度（0=非位域；槽内低 N 位） */
     int mtype[IR_MAX_MEMB];            /* 成员聚合类型索引（-1=标量；嵌套用） */
     int moff[IR_MAX_MEMB];             /* 成员起始槽偏移（递归展开） */
+    int marr_len[IR_MAX_MEMB];         /* 成员是数组时的元素数（0=非数组成员） */
+    int marr_esize[IR_MAX_MEMB];       /* 数组成员的元素字节宽（1/2/4/8） */
     int mcount;
     int mslots;                        /* 类型总槽数（递归；union=1 enum=1） */
 } IrAggType;
@@ -405,6 +423,45 @@ static int agg_member_find(int ti, const char *mname)
     IrAggType *a = &agg_types[ti];
     for (int i = 0; i < a->mcount; i++)
         if (strcmp(a->mnames[i], mname) == 0) return i;
+    return -1;
+}
+
+/* ---- 类型别名表（顶层 alias Name = Type，BNF §2.2）----
+ * 别名只落「指向什么」：标量类型码或聚合类型索引。解析处遇到别名名时按此解引用。 */
+#define IR_MAX_ALIAS 32
+typedef struct {
+    const char *name;
+    int scalar_code;   /* 指向的标量类型码（-1 = 非标量） */
+    int agg_ti;        /* 指向的聚合类型索引（-1 = 非聚合） */
+} IrAliasType;
+static IrAliasType ir_aliases[IR_MAX_ALIAS];
+static int ir_alias_count;
+
+static int alias_find(const char *name)
+{
+    for (int i = 0; i < ir_alias_count; i++)
+        if (strcmp(ir_aliases[i].name, name) == 0) return i;
+    return -1;
+}
+
+/* ---- 全局变量表（顶层 var/const 声明）----
+ * 局部变量表是 per-function 的（var_reset），跨函数共享的顶层变量另存一份，
+ * 存储落在 IrProg 的全局池里（后端在 .data 段 / 文件作用域落一份真实存储）。 */
+#define IR_MAX_GLOBAL 64
+typedef struct {
+    const char *name;
+    int sym_idx;      /* IrProg.glb_syms 下标 */
+    int is_double;
+    int type_code;    /* 窄整型码（0=i64 1=f64 2=i8 3=i16 4=i32 5=u8 6=u16 7=u32 8=f32） */
+    int vis;          /* 可见性前缀（VIS_CONST = 只读；其余同局部变量语义） */
+} IrGlobalVar;
+static IrGlobalVar ir_globals[IR_MAX_GLOBAL];
+static int ir_global_count;
+
+static int global_find(const char *name)
+{
+    for (int i = 0; i < ir_global_count; i++)
+        if (strcmp(ir_globals[i].name, name) == 0) return i;
     return -1;
 }
 
@@ -641,6 +698,46 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
     return vn_count++;
 }
 
+/* ---- 全局变量读写（跨函数共享，落到 IrProg 全局池）---- */
+
+/* 全局变量地址：LD_ADDR(__gN) */
+static int ir_global_addr(int gi)
+{
+    int vr = ir_new_vreg(F);
+    IrIns *in = &F->ins[ir_emit(F, IR_LD_ADDR, vr, -1, -1, 0)];
+    in->sym = P->glb_syms[ir_globals[gi].sym_idx];
+    return vr;
+}
+
+/* 读全局变量：LD_ADDR → LOAD */
+static int ir_global_read(int gi)
+{
+    int addr = ir_global_addr(gi);
+    int vr = ir_new_vreg(F);
+    ir_emit(F, IR_LOAD, vr, addr, -1, 0);
+    if (ir_globals[gi].is_double) ir_set_double(vr);
+    return vr;
+}
+
+/* 写全局变量：LD_ADDR → STORE */
+static void ir_global_write(int gi, int val)
+{
+    int addr = ir_global_addr(gi);
+    ir_emit(F, IR_STORE, -1, addr, val, 0);
+}
+
+/* 把一段已发射的指令接到函数末尾（for 的 step：源码在 body 前，执行在 body 后） */
+static void ir_ins_move_to_end(IrFn *f, const IrIns *saved, int n)
+{
+    for (int k = 0; k < n; k++) {
+        int idx = ir_emit(f, saved[k].op, saved[k].dst, saved[k].a, saved[k].b,
+                          saved[k].imm);
+        f->ins[idx].label = saved[k].label;
+        f->ins[idx].fn = saved[k].fn;
+        f->ins[idx].sym = saved[k].sym;
+    }
+}
+
 /* 数组元素寻址宽度：槽模型数组一律 8 字节；仅动态字符串（vetyp 码 8，
  * char[] 池地址）按 1 字节。vetyp 其他码只影响值截断（ir_coerce），不参与寻址 */
 static int ir_elem_width(int code)
@@ -672,6 +769,47 @@ static int ir_elem_addr(CompilerState *cs, int base_vreg, int idx_vreg, int widt
     ir_emit(F, IR_ADDR, base, base_vreg, -1, 0);
     int addr = ir_new_vreg(F);
     ir_emit(F, IR_ELEM_ADDR, addr, base, idx_vreg, width == 8 ? 0 : width);
+    return addr;
+}
+
+/* 数组成员的元素寻址：p.name[0] → 成员首槽地址 + idx*元素宽。
+ * IR 槽模型下数组成员只占 1 个 8 字节槽（真实布局待裁定），越出首槽的元素
+ * 没有地址可寻 → 常量下标越界时给专属诊断。返回元素地址 vreg（失败 -1）。
+ * 调用方负责在调用前让 cur_tok 停在 '[' 上；本函数消费 '[ idx ]'。 */
+static int ir_member_elem_addr(CompilerState *cs, int vi, int ti, int fi, int off,
+                                const char *mname, int *esize_out)
+{
+    int elen = agg_types[ti].marr_len[fi];
+    int esize = agg_types[ti].marr_esize[fi];
+    if (elen <= 0) {
+        nihao_error(cs, "ir: member '%s' is not an array", mname);
+        return -1;
+    }
+    next_tok(cs);       /* [ */
+    int idx = ir_expr(cs);
+    expect(cs, TOK_RBRACKET);
+    long long iv;
+    if (vreg_const(F, idx, &iv)) {
+        if (iv < 0 || iv >= elen) {
+            nihao_error(cs, "ir: array index %lld is out of range for member '%s' "
+                            "(%d elements)", iv, mname, elen);
+        } else if (iv * esize >= 8) {
+            nihao_error(cs, "ir: member '%s' element %lld lies beyond the IR 8-byte slot "
+                            "(only the first 8 bytes of an array member are addressable)",
+                        mname, iv);
+        }
+    }
+    int base = ir_new_vreg(F);
+    ir_emit(F, IR_ADDR, base, vt[vi], -1, off);
+    int iv2 = ir_new_vreg(F);
+    ir_emit(F, IR_MOV, iv2, idx, -1, 0);
+    int wv = ir_new_vreg(F);
+    ir_emit(F, IR_CONST, wv, -1, -1, esize);
+    int boff = ir_new_vreg(F);
+    ir_emit(F, IR_MUL, boff, iv2, wv, 0);
+    int addr = ir_new_vreg(F);
+    ir_emit(F, IR_ADD, addr, base, boff, 0);
+    if (esize_out) *esize_out = esize;
     return addr;
 }
 
@@ -1183,6 +1321,10 @@ static int ir_primary(CompilerState *cs)
         }
         int vi = var_find(name);
         if (vi < 0) {
+            /* 顶层全局变量（跨函数共享）：LD_ADDR → LOAD。
+             * 注意：name 已被上面 next_tok 消费，这里不要再推进 token！ */
+            int gi = global_find(name);
+            if (gi >= 0) return ir_global_read(gi);
             /* cooking 编译期变量：运行时引用折叠为常量（PB-9 深化）。
              * 注意：name 已被上面 next_tok 消费，这里不要再推进 token！ */
             if (ct_var_exist(name)) {
@@ -1363,10 +1505,19 @@ static int ir_primary(CompilerState *cs)
                 }
                 break;
             }
-            int addr = ir_new_vreg(F);
-            ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
+            int esize = 0;
+            int addr;
+            if (cur_tok(cs) == TOK_LBRACKET) {
+                /* 数组成员读 p.name[0] */
+                addr = ir_member_elem_addr(cs, vi, ti, last_fi, off, fname, &esize);
+                if (addr < 0) return ir_new_vreg(F);
+            } else {
+                addr = ir_new_vreg(F);
+                ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
+            }
             int vr = ir_new_vreg(F);
-            ir_emit(F, IR_LOAD, vr, addr, -1, 0);
+            if (esize == 1) ir_emit(F, IR_LOAD8, vr, addr, -1, 0);
+            else ir_emit(F, IR_LOAD, vr, addr, -1, 0);
             /* 位域成员：AND 掩码取低 N 位 */
             if (agg_types[ti].mbits[last_fi] > 0) {
                 int mv = ir_bitmask(agg_types[ti].mbits[last_fi]);
@@ -2082,6 +2233,29 @@ static void ir_block(CompilerState *cs)
     skip_newlines(cs);
 }
 
+/* if / else 语句（BNF §6 <if-stmt>）：`else` 后可接块或另一条 if（else if 链） */
+static void ir_if_stmt(CompilerState *cs)
+{
+    next_tok(cs);                 /* if */
+    int c = ir_expr(cs);
+    int l_else = ir_new_label(F);
+    int l_end = ir_new_label(F);
+    ir_emit(F, IR_JZ, -1, c, -1, 0);
+    F->ins[F->ins_count - 1].label = l_else;
+    ir_block(cs);
+    ir_emit(F, IR_JMP, -1, -1, -1, 0);
+    F->ins[F->ins_count - 1].label = l_end;
+    ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+    F->ins[F->ins_count - 1].label = l_else;
+    if (cur_tok(cs) == TOK_ELSE) {
+        next_tok(cs);
+        if (cur_tok(cs) == TOK_IF) ir_if_stmt(cs);
+        else ir_block(cs);
+    }
+    ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+    F->ins[F->ins_count - 1].label = l_end;
+}
+
 static void ir_stmt(CompilerState *cs)
 {
     TokenType t = cur_tok(cs);
@@ -2123,23 +2297,7 @@ static void ir_stmt(CompilerState *cs)
         return;
     }
     if (t == TOK_IF) {
-        next_tok(cs);
-        int c = ir_expr(cs);
-        int l_else = ir_new_label(F);
-        int l_end = ir_new_label(F);
-        ir_emit(F, IR_JZ, -1, c, -1, 0);
-        F->ins[F->ins_count - 1].label = l_else;
-        ir_block(cs);
-        ir_emit(F, IR_JMP, -1, -1, -1, 0);
-        F->ins[F->ins_count - 1].label = l_end;
-        ir_emit(F, IR_LABEL, -1, -1, -1, 0);
-        F->ins[F->ins_count - 1].label = l_else;
-        if (cur_tok(cs) == TOK_ELSE) {
-            next_tok(cs);
-            ir_block(cs);
-        }
-        ir_emit(F, IR_LABEL, -1, -1, -1, 0);
-        F->ins[F->ins_count - 1].label = l_end;
+        ir_if_stmt(cs);
     } else if (t == TOK_SWITCH) {
         /* C 风格：switch (expr) { case e: stmts... [default: stmts] }
          * 单遍布局（延迟绑定）：
@@ -2245,17 +2403,50 @@ static void ir_stmt(CompilerState *cs)
         /* for init; cond; step { body }
          * IR 布局：cond 检查 → body → L_cont(step) → JMP cond
          * 源码 step 在 body 前解析，但指令需在 body 后发射 → 先记录后重放 */
-        typedef struct { int vi, kind, val, has_val; } ForStep;
-        ForStep fs = { -1, 0, -1, 0 };
         next_tok(cs);
+        /* ---- for-init（BNF §6）：<identifier> "=" <expr> | <var-decl>（name Type
+         * / name (Type)）| 任意表达式 ---- */
         if (cur_tok(cs) == TOK_IDENTIFIER) {
-            const char *vname = cs->parser.lex->tok_str;
-            next_tok(cs);
-            expect(cs, TOK_ASSIGN);
-            int vi = var_find(vname);
-            if (vi < 0) vi = var_declare(vname, 0, -1, VIS_VAR);
-            int v = ir_expr(cs);
-            ir_emit(F, IR_MOV, vt[vi], v, -1, 0);
+            TokenType nt = ir_peek_ahead(cs, 1);
+            /* 「括号类型」`(i32)` 与函数调用 `f(x)` 的区分：括号内是类型名且紧跟 ) */
+            int paren_type = (nt == TOK_LPAREN) &&
+                             is_type_token(ir_peek_ahead(cs, 2)) &&
+                             ir_peek_ahead(cs, 3) == TOK_RPAREN;
+            if (nt == TOK_ASSIGN || is_type_token(nt) || paren_type) {
+                const char *vname = cs->parser.lex->tok_str;
+                next_tok(cs);           /* name */
+                int vcode = 0;
+                int assign_form = 0;    /* 1 = `name = expr`（无类型，沿用已有变量类型） */
+                if (nt == TOK_ASSIGN) {
+                    next_tok(cs);       /* = */
+                    assign_form = 1;
+                } else if (paren_type) {
+                    next_tok(cs);       /* ( */
+                    vcode = ir_scalar_code_of_token(cur_tok(cs));
+                    next_tok(cs);       /* 类型名 */
+                    expect(cs, TOK_RPAREN);
+                } else {
+                    vcode = ir_scalar_code_of_token(cur_tok(cs));
+                    next_tok(cs);       /* 类型名 */
+                }
+                int vi = var_find(vname);
+                if (vi < 0) vi = var_declare(vname, 0, -1, VIS_VAR);
+                if (vcode != 0) {
+                    vtype[vi] = vcode;
+                    if (vcode == 1 || vcode == 8) ir_set_double(vt[vi]);
+                }
+                /* 初值：赋值形式即当前位置；声明形式可选 `= expr` */
+                if (assign_form || cur_tok(cs) == TOK_ASSIGN) {
+                    if (!assign_form) next_tok(cs);   /* 消费 = */
+                    int v = ir_expr(cs);
+                    v = ir_coerce(v, vtype[vi]);
+                    ir_emit(F, IR_MOV, vt[vi], v, -1, 0);
+                }
+            } else {
+                ir_expr(cs);            /* 表达式形式 */
+            }
+        } else {
+            ir_expr(cs);
         }
         expect(cs, TOK_SEMICOLON);
         int l_cond = ir_new_label(F);
@@ -2270,49 +2461,22 @@ static void ir_stmt(CompilerState *cs)
         ir_emit(F, IR_JZ, -1, c, -1, 0);
         F->ins[F->ins_count - 1].label = l_end;
         expect(cs, TOK_SEMICOLON);   /* cond 与 step 之间的 ; */
-        /* 解析 step（只记录，不发射写回） */
-        if (cur_tok(cs) == TOK_IDENTIFIER) {
-            const char *sname = cs->parser.lex->tok_str;
-            next_tok(cs);
-            TokenType st = cur_tok(cs);
-            fs.vi = var_find(sname);
-            if (fs.vi >= 0) {
-                if (st == TOK_INCREMENT) { fs.kind = 0; next_tok(cs); }
-                else if (st == TOK_DECREMENT) { fs.kind = 1; next_tok(cs); }
-                else if (st == TOK_ASSIGN) {
-                    fs.kind = 4; next_tok(cs);
-                    fs.val = ir_expr(cs); fs.has_val = 1;
-                } else if (st == TOK_PLUS_ASSIGN) {
-                    fs.kind = 2; next_tok(cs);
-                    fs.val = ir_expr(cs); fs.has_val = 1;
-                } else if (st == TOK_MINUS_ASSIGN) {
-                    fs.kind = 3; next_tok(cs);
-                    fs.val = ir_expr(cs); fs.has_val = 1;
-                }
-            }
-        }
+        /* ---- for-step：任意表达式（赋值 / i++ / i-- / 函数调用）----
+         * 源码里 step 写在 body 之前，但语义上每轮迭代在 body 之后执行
+         * → 解析时把发出的指令摘下来，body 之后再接回去。 */
+        int step_mark = F->ins_count;
+        ir_expr(cs);
+        IrIns step_ins[64];
+        int step_n = F->ins_count - step_mark;
+        if (step_n > 64) step_n = 64;
+        for (int k = 0; k < step_n; k++) step_ins[k] = F->ins[step_mark + k];
+        F->ins_count = step_mark;
         /* NihaoC for 语法：for init; cond; step { body } —— step 后无分号 */
         ir_block(cs);
         /* body 后发射 step */
         ir_emit(F, IR_LABEL, -1, -1, -1, 0);
         F->ins[F->ins_count - 1].label = l_cont;
-        if (fs.vi >= 0) {
-            if (fs.kind == 0 || fs.kind == 1) {
-                IrOp sop = (fs.kind == 0) ? IR_ADD : IR_SUB;
-                int one = ir_new_vreg(F);
-                ir_emit(F, IR_CONST, one, -1, -1, 1);
-                int sv = ir_new_vreg(F);
-                ir_emit(F, sop, sv, vt[fs.vi], one, 0);
-                ir_emit(F, IR_MOV, vt[fs.vi], sv, -1, 0);
-            } else if (fs.kind == 2 || fs.kind == 3) {
-                IrOp sop = (fs.kind == 2) ? IR_ADD : IR_SUB;
-                int sv = ir_new_vreg(F);
-                ir_emit(F, sop, sv, vt[fs.vi], fs.val, 0);
-                ir_emit(F, IR_MOV, vt[fs.vi], sv, -1, 0);
-            } else if (fs.kind == 4 && fs.has_val) {
-                ir_emit(F, IR_MOV, vt[fs.vi], fs.val, -1, 0);
-            }
-        }
+        ir_ins_move_to_end(F, step_ins, step_n);
         ir_emit(F, IR_JMP, -1, -1, -1, 0);
         F->ins[F->ins_count - 1].label = l_cond;
         ir_emit(F, IR_LABEL, -1, -1, -1, 0);
@@ -2548,6 +2712,24 @@ static void ir_stmt(CompilerState *cs)
             next_tok(cs);           /* name */
             next_tok(cs);           /* = */
             int vi = var_find(name);
+            if (vi < 0) {
+                /* 顶层全局变量赋值：写全局池，不在当前函数里开同名局部 */
+                int gi = global_find(name);
+                if (gi >= 0) {
+                    if (ir_globals[gi].vis == VIS_CONST) {
+                        nihao_error(cs, "ir: cannot assign to the const global '%s'",
+                                    name);
+                        ir_expr(cs);
+                        skip_newlines(cs);
+                        return;
+                    }
+                    int gv = ir_expr(cs);
+                    gv = ir_coerce(gv, ir_globals[gi].type_code);
+                    ir_global_write(gi, gv);
+                    skip_newlines(cs);
+                    return;
+                }
+            }
             if (vi < 0) vi = var_declare(name, 0, -1, VIS_VAR);
             if (vty[vi] >= 0 && agg_types[vty[vi]].kind != 2 &&
                 cur_tok(cs) == TOK_IDENTIFIER) {
@@ -2655,6 +2837,17 @@ static void ir_stmt(CompilerState *cs)
             next_tok(cs);           /* op= */
             int vi = var_find(name);
             if (vi < 0) {
+                int gi = global_find(name);
+                if (gi >= 0) {
+                    int cur = ir_global_read(gi);
+                    int b = ir_expr(cs);
+                    int nv = ir_new_vreg(F);
+                    ir_emit(F, op, nv, cur, b, 0);
+                    nv = ir_coerce(nv, ir_globals[gi].type_code);
+                    ir_global_write(gi, nv);
+                    skip_newlines(cs);
+                    return;
+                }
                 nihao_error(cs, "ir: undeclared variable '%s'", name);
                 skip_newlines(cs);
                 return;
@@ -2685,6 +2878,18 @@ static void ir_stmt(CompilerState *cs)
             next_tok(cs);           /* ++ / -- */
             int vi = var_find(name);
             if (vi < 0) {
+                int gi = global_find(name);
+                if (gi >= 0) {
+                    int one = ir_new_vreg(F);
+                    ir_emit(F, IR_CONST, one, -1, -1, 1);
+                    int cur = ir_global_read(gi);
+                    int gv = ir_new_vreg(F);
+                    ir_emit(F, op, gv, cur, one, 0);
+                    gv = ir_coerce(gv, ir_globals[gi].type_code);
+                    ir_global_write(gi, gv);
+                    skip_newlines(cs);
+                    return;
+                }
                 nihao_error(cs, "ir: undeclared variable '%s'", name);
                 skip_newlines(cs);
                 return;
@@ -2915,6 +3120,16 @@ static void ir_stmt(CompilerState *cs)
                 }
                 break;
             }
+            /* 数组成员元素写 p.name[0] = e：元素地址 = 成员首槽 + idx*元素宽 */
+            int esize = 0;
+            int elem_addr = -1;
+            if (cur_tok(cs) == TOK_LBRACKET) {
+                elem_addr = ir_member_elem_addr(cs, vi, ti, fi, off, fname, &esize);
+                if (elem_addr < 0) {
+                    skip_newlines(cs);
+                    return;
+                }
+            }
             TokenType at = cur_tok(cs);
             /* 注意：不用 -1 哨兵判断——IrOp 枚举在 tcc 下底层为 unsigned，
              * `aop < 0` 恒假会导致纯赋值误入复合路径。用布尔标志。 */
@@ -2934,7 +3149,12 @@ static void ir_stmt(CompilerState *cs)
                     nv = b;
                 } else {
                     int cur;
-                    if (bfbits > 0) {
+                    if (elem_addr >= 0) {
+                        /* 数组成员复合赋值：当前值取元素地址处的内容 */
+                        cur = ir_new_vreg(F);
+                        if (esize == 1) ir_emit(F, IR_LOAD8, cur, elem_addr, -1, 0);
+                        else ir_emit(F, IR_LOAD, cur, elem_addr, -1, 0);
+                    } else if (bfbits > 0) {
                         /* 位域复合赋值：基于位域值运算（LOAD+AND 取低 N 位） */
                         int caddr = ir_new_vreg(F);
                         ir_emit(F, IR_ADDR, caddr, vt[vi], -1, off);
@@ -2946,9 +3166,15 @@ static void ir_stmt(CompilerState *cs)
                     nv = ir_new_vreg(F);
                     ir_emit(F, aop, nv, cur, b, 0);
                 }
-                int addr = ir_new_vreg(F);
-                ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
-                ir_bf_store(addr, nv, bfbits);
+                if (elem_addr >= 0) {
+                    /* 数组成员元素写：1 字节元素用 STORE8，其余 8 字节槽 */
+                    if (esize == 1) ir_emit(F, IR_STORE8, -1, elem_addr, nv, 0);
+                    else ir_emit(F, IR_STORE, -1, elem_addr, nv, 0);
+                } else {
+                    int addr = ir_new_vreg(F);
+                    ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
+                    ir_bf_store(addr, nv, bfbits);
+                }
                 skip_newlines(cs);
             } else {
                 nihao_error(cs, "ir: expected '=' after member access");
@@ -3288,12 +3514,12 @@ static void ir_skip_rest_of_line(CompilerState *cs)
     if (cur_tok(cs) == TOK_NEWLINE) next_tok(cs);
 }
 
-static void ir_func(CompilerState *cs, int attrs)
+static void ir_func_named(CompilerState *cs, const char *fname, int pre_vis, int attrs)
 {
-    /* func name ( params ) ret */
-    const char *fname = cs->parser.lex->tok_str;
+    /* func name ( params ) ret
+     * pre_vis：名字前的 return-attr 前缀（flow/static/const/var，BNF §7）；
+     *           -1 = 无前缀（`func` 关键字形态）。 */
     int is_main = strcmp(fname, "main") == 0;
-    next_tok(cs);
     F = ir_fn_new(P, fname, is_main);
     F->attrs = attrs;
     var_reset();
@@ -3358,6 +3584,7 @@ static void ir_func(CompilerState *cs, int attrs)
         else if (cur_tok(cs) == TOK_CONST)  { rv = VIS_CONST;  next_tok(cs); }
         else if (cur_tok(cs) == TOK_VAR)    { rv = VIS_VAR;    next_tok(cs); }
         else if (cur_tok(cs) == TOK_STATIC) { rv = VIS_STATIC; next_tok(cs); }
+        else if (pre_vis >= 0)              { rv = pre_vis; }
         F->ret_vis = rv;
         /* struct 返回 = sret：具名聚合类型 → 隐藏 out-param 机制
          * （返回聚合值经 _mr_ret 缓冲指针，调用方 malloc+拷贝） */
@@ -3371,6 +3598,8 @@ static void ir_func(CompilerState *cs, int attrs)
         F->ret_is_double =
             (cur_tok(cs) == TOK_F32 || cur_tok(cs) == TOK_F64) ? 1 : 0;
         next_tok(cs);           /* 其他返回类型 */
+    } else if (pre_vis >= 0) {
+        F->ret_vis = pre_vis;  /* 无显式返回类型，但名字前有 return-attr 前缀 */
     }
     /* 注册变量：mr 时 _mr_ret 必须是第 0 槽（调用约定：缓冲指针为第一参数）。
      * PB-16 struct 参数按值展开：聚合参数占 mcount 个虚拟参数槽（成员槽 vreg
@@ -3411,6 +3640,149 @@ static void ir_func(CompilerState *cs, int attrs)
     F->param_count = vpi;
     ir_block(cs);
     ir_fn_end(F);
+}
+
+/* `func` 关键字形态的函数定义（return-attr 为 func，无所有权语义） */
+static void ir_func(CompilerState *cs, int attrs)
+{
+    const char *fname = cs->parser.lex->tok_str;
+    next_tok(cs);
+    ir_func_named(cs, fname, -1, attrs);
+}
+
+/* ---- 顶层声明：alias / 全局变量 / 带前缀的函数定义 ---- */
+
+/* 顶层 alias：alias Name = Type（BNF §2.2） */
+static void ir_alias_decl(CompilerState *cs)
+{
+    next_tok(cs);                 /* alias */
+    if (cur_tok(cs) != TOK_IDENTIFIER) {
+        nihao_error(cs, "ir: expected a name after 'alias'");
+        ir_skip_rest_of_line(cs);
+        return;
+    }
+    const char *aname = cs->parser.lex->tok_str;
+    next_tok(cs);
+    expect(cs, TOK_ASSIGN);
+    int sc = -1, ati = -1;
+    if (is_type_token(cur_tok(cs))) {
+        sc = ir_scalar_code_of_token(cur_tok(cs));
+        next_tok(cs);
+    } else if (cur_tok(cs) == TOK_IDENTIFIER) {
+        const char *tn = cs->parser.lex->tok_str;
+        int ti = agg_type_find(tn);
+        if (ti >= 0) {
+            ati = ti;
+        } else {
+            int ai = alias_find(tn);
+            if (ai >= 0) {
+                sc = ir_aliases[ai].scalar_code;
+                ati = ir_aliases[ai].agg_ti;
+            } else {
+                nihao_error(cs, "ir: alias '%s' refers to unknown type '%s'",
+                            aname, tn);
+                next_tok(cs);
+                ir_skip_rest_of_line(cs);
+                return;
+            }
+        }
+        next_tok(cs);
+    } else {
+        nihao_error(cs, "ir: expected a type after 'alias %s ='", aname);
+        ir_skip_rest_of_line(cs);
+        return;
+    }
+    if (ir_alias_count >= IR_MAX_ALIAS) {
+        nihao_error(cs, "ir: too many type aliases");
+        ir_skip_rest_of_line(cs);
+        return;
+    }
+    ir_aliases[ir_alias_count].name = aname;
+    ir_aliases[ir_alias_count].scalar_code = sc;
+    ir_aliases[ir_alias_count].agg_ti = ati;
+    ir_alias_count++;
+}
+
+/* 顶层变量声明：name <type> [= <常量表达式>] → 落进全局变量池（跨函数共享） */
+static void ir_top_var(CompilerState *cs, const char *name, int vis)
+{
+    int tcode = 0;
+    int is_double = 0;
+    if (is_type_token(cur_tok(cs))) {
+        tcode = ir_scalar_code_of_token(cur_tok(cs));
+        is_double = (tcode == 1 || tcode == 8);
+        next_tok(cs);
+    } else if (cur_tok(cs) == TOK_IDENTIFIER) {
+        const char *tn = cs->parser.lex->tok_str;
+        int ai = alias_find(tn);
+        int ti = agg_type_find(tn);
+        if (ai >= 0) {
+            tcode = ir_aliases[ai].scalar_code;
+            is_double = (tcode == 1 || tcode == 8);
+        } else if (ti >= 0) {
+            nihao_error(cs, "ir: aggregate global '%s' is not supported yet", name);
+            ir_skip_rest_of_line(cs);
+            return;
+        } else {
+            nihao_error(cs, "ir: unknown type '%s' in global declaration", tn);
+            ir_skip_rest_of_line(cs);
+            return;
+        }
+        next_tok(cs);
+    } else {
+        nihao_error(cs, "ir: expected a type in the global declaration of '%s'",
+                    name);
+        ir_skip_rest_of_line(cs);
+        return;
+    }
+    if (cur_tok(cs) == TOK_LBRACKET) {
+        nihao_error(cs, "ir: global arrays are not supported yet");
+        ir_skip_rest_of_line(cs);
+        return;
+    }
+    long long init = 0;
+    if (cur_tok(cs) == TOK_ASSIGN) {
+        next_tok(cs);
+        if (is_double && cur_tok(cs) == TOK_FLOAT_CONST) {
+            union { double d; int64_t i; } u;
+            u.d = cs->parser.lex->tok_val.f;
+            init = u.i;
+            next_tok(cs);
+        } else {
+            init = ir_const_expr(cs);
+        }
+    }
+    if (ir_global_count >= IR_MAX_GLOBAL) {
+        nihao_error(cs, "ir: too many global variables");
+        ir_skip_rest_of_line(cs);
+        return;
+    }
+    int sym = ir_add_global(P, (int64_t)init, is_double);
+    ir_globals[ir_global_count].name = name;
+    ir_globals[ir_global_count].sym_idx = sym;
+    ir_globals[ir_global_count].is_double = is_double;
+    ir_globals[ir_global_count].type_code = tcode;
+    ir_globals[ir_global_count].vis = vis;
+    ir_global_count++;
+}
+
+/* 顶层带前缀的声明：<return-attr> <identifier> ...
+ * 名字后紧跟 '(' → 函数定义；否则 → 全局变量声明。 */
+static void ir_top_decl(CompilerState *cs, int vis, int attrs)
+{
+    (void)attrs;   /* 属性表对全局变量在 IR 落地上无影响（导出段名等留给后端） */
+    if (cur_tok(cs) != TOK_IDENTIFIER) {
+        nihao_error(cs, "ir: expected a name after the declaration prefix");
+        ir_skip_rest_of_line(cs);
+        return;
+    }
+    const char *name = cs->parser.lex->tok_str;
+    next_tok(cs);
+    if (cur_tok(cs) == TOK_LPAREN) {
+        ir_func_named(cs, name, vis, attrs);
+        return;
+    }
+    ir_top_var(cs, name, vis);
 }
 
 /* 顶层类型定义：Name struct { fields } / Name union { fields } / Name enum { A, B } */
@@ -3474,25 +3846,35 @@ static void ir_type_decl(CompilerState *cs)
             }
             a->mnames[a->mcount] = cs->parser.lex->tok_str;
             next_tok(cs);
-            /* 成员类型：自定义聚合类型（IDENTIFIER）记录索引，否则跳过基本类型；
+            /* 成员类型：自定义聚合类型（IDENTIFIER）记录索引，否则基本类型
+             * （可带数组后缀 [N]，记录元素数与元素宽）。
              * 注意：struct 体内换行不产生 NEWLINE（brace_depth>0），
              * 遇非类型 token（下一成员名/冒号/赋值）即成员结束。 */
             a->mtype[a->mcount] = -1;
+            a->marr_len[a->mcount] = 0;
+            a->marr_esize[a->mcount] = 0;
             if (cur_tok(cs) == TOK_IDENTIFIER) {
                 int ti2 = agg_type_find(cs->parser.lex->tok_str);
                 if (ti2 >= 0) {
                     a->mtype[a->mcount] = ti2;
                     next_tok(cs);
                 }
-            } else {
-                while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF &&
-                       cur_tok(cs) != TOK_COLON && cur_tok(cs) != TOK_ASSIGN) {
-                    if (is_type_token(cur_tok(cs)) ||
-                        cur_tok(cs) == TOK_LBRACKET || cur_tok(cs) == TOK_RBRACKET) {
+            } else if (is_type_token(cur_tok(cs))) {
+                int esize = (int)type_size_token(cur_tok(cs));
+                next_tok(cs);
+                if (cur_tok(cs) == TOK_LBRACKET) {
+                    /* 数组成员 name char[32]：记录元素数与元素宽。
+                     * 槽模型下该成员仍只占 1 个 8 字节槽（真实布局待裁定），
+                     * 元素寻址越出首槽时由 ir_member_elem_addr 诊断。 */
+                    next_tok(cs);
+                    long long n = 0;
+                    if (cur_tok(cs) == TOK_INT_CONST) {
+                        n = cs->parser.lex->tok_val.i;
                         next_tok(cs);
-                        continue;
                     }
-                    break;
+                    expect(cs, TOK_RBRACKET);
+                    a->marr_len[a->mcount] = (int)n;
+                    a->marr_esize[a->mcount] = esize > 0 ? esize : 1;
                 }
             }
             if (cur_tok(cs) == TOK_COLON) {        /* 位域 :N——记录宽度（槽内低 N 位） */
@@ -3551,31 +3933,37 @@ int ir_parse_file(CompilerState *cs, const char *filename)
     }
 
     /* 函数与类型定义列表 */
-    while (cur_tok(cs) != TOK_EOF) {
+    for (;;) {
         skip_newlines(cs);
-        if (cur_tok(cs) == TOK_FUNC) {
-            next_tok(cs);
-            ir_func(cs, 0);
-        } else if (cur_tok(cs) == TOK_LBRACKET) {
+        if (cur_tok(cs) == TOK_EOF) break;
+        int attrs = 0;
+        if (cur_tok(cs) == TOK_LBRACKET) {
             /* <bracket-attr-list>（BNF §7）：属性表可与其声明分行 */
-            int attrs = ir_bracket_attr_list(cs);
+            attrs = ir_bracket_attr_list(cs);
             if (attrs < 0) {
                 /* 单个 `[` 不是属性表：整行消费，一条错不级联成两三条 */
                 ir_skip_rest_of_line(cs);
                 continue;
             }
             skip_newlines(cs);
-            if (cur_tok(cs) == TOK_FUNC) {
-                next_tok(cs);
-                ir_func(cs, attrs);
-            } else {
-                nihao_error(cs, "ir: bracket attributes are only implemented for "
-                            "`func` definitions in this subset (got '%s')",
-                            token_name(cur_tok(cs)));
-                ir_skip_rest_of_line(cs);
-            }
+        }
+        if (cur_tok(cs) == TOK_FUNC) {
+            next_tok(cs);
+            ir_func(cs, attrs);
+        } else if (cur_tok(cs) == TOK_ALIAS) {
+            /* 顶层类型别名：alias Name = Type */
+            ir_alias_decl(cs);
+        } else if (cur_tok(cs) == TOK_FLOW || cur_tok(cs) == TOK_CONST ||
+                   cur_tok(cs) == TOK_STATIC || cur_tok(cs) == TOK_VAR) {
+            /* 顶层声明前缀（return-attr / 可见性）：名字后是 '(' → 函数定义，
+             * 否则 → 全局变量声明 */
+            int vis = (cur_tok(cs) == TOK_FLOW) ? VIS_FLOW :
+                      (cur_tok(cs) == TOK_CONST) ? VIS_CONST :
+                      (cur_tok(cs) == TOK_STATIC) ? VIS_STATIC : VIS_VAR;
+            next_tok(cs);
+            ir_top_decl(cs, vis, attrs);
         } else if (cur_tok(cs) == TOK_IDENTIFIER) {
-            /* 可能是类型定义：Name struct/union/enum */
+            /* 可能是类型定义：Name struct/union/enum；也可能是顶层变量：name <type> */
             LexerState *lx = cs->parser.lex;
             lx->peek_valid = 0;
             lexer_peek(lx);
@@ -3583,6 +3971,10 @@ int ir_parse_file(CompilerState *cs, const char *filename)
             lx->peek_valid = 0;
             if (nxt == TOK_STRUCT || nxt == TOK_UNION || nxt == TOK_ENUM) {
                 ir_type_decl(cs);
+            } else if (is_type_token(nxt)) {
+                const char *name = cs->parser.lex->tok_str;
+                next_tok(cs);
+                ir_top_var(cs, name, VIS_VAR);
             } else {
                 nihao_error(cs, "ir: unexpected top-level identifier '%s'",
                             cs->parser.lex->tok_str);

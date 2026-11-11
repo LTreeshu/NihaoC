@@ -184,7 +184,15 @@ end
 -- 在门禁里 0 份覆盖，而 IR 前端把 FX32 落到 i64 那一档（声明与形参两处类型码链都没有 FX 分支），
 -- 于是同一份源码在 c / native 截断、在 ir-c / ir-native 不截断；本轮补齐两处类型码并逐形态实测四后端
 -- 输出逐字相同（含二次赋值截断与 fx64 宽整型对照），两交叉档也出码过汇编
-local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true, fx_types = true, malloc_demo = true, flow = true, flow_no_free = true, borrow = true, flow_move = true}
+-- PB-66（2026-11-11）新增 features / for_init_forms / transfer / mathmod / module_top_forms 五份：
+-- 这五份此前在 IR 侧挂「IR 子集未覆盖」，真因是 IR 前端没有顶层声明（顶层 var/const、模块级
+-- func、alias、for 的声明式 init 与任意表达式 step、else if 链、struct 数组成员）。
+-- PB-66 在 irparse.c 补齐这些形态之后，四档实跑输出逐字相同（transfer `99`+`transfer ok`、
+-- for_init_forms 五行、features `done`），两份模块型用例（mathmod / module_top_forms）
+-- 四档都出 .c 产物 ⇒ 入 IR_SUBSET，IR 侧 PASS 35→40、SKIP 34→29。
+-- 边界照旧诚实：`char[32]` 这类数组成员在 IR 侧仍只占 1 个 8 字节槽（真实布局是待裁第 23 条），
+-- features 恰好不回读该成员才逐字相同——它进名单是因为输出相同，不是因为布局已定案。
+local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true, fx_types = true, malloc_demo = true, flow = true, flow_no_free = true, borrow = true, flow_move = true, features = true, for_init_forms = true, transfer = true, mathmod = true, module_top_forms = true}
 local IR_ONLY = {ir_builtin = true, ir_slice = true, ir_sparam = true}
 -- IR_ERR_COVERED: err 用例中 IR 前端已实现对应诊断的（未列出的非 m2 用例仍在 IR 侧跳过）
 -- cooking_bare_var 刻意不入：IR 前端对块内裸 <var-decl> 只给 `ir: undeclared variable 'K'`，
