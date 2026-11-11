@@ -1026,6 +1026,7 @@ static int ir_primary(CompilerState *cs)
             }
             next_tok(cs);
             int argn = 0;
+            int call_first_str = 0;   /* PB-64：print 的首个实参是否为格式串 */
             int arglist[64];
             /* PB-16 struct 参数：按展开后参数索引查目标函数聚合签名 */
             IrFn *tfn = ir_find_fn(name);
@@ -1084,6 +1085,7 @@ static int ir_primary(CompilerState *cs)
                             int sv = var_find(cs->parser.lex->tok_str);
                             if (sv >= 0) src_vi = sv;
                         }
+                        if (argi == 0) call_first_str = (cur_tok(cs) == TOK_STRING_LITERAL);
                         int a = ir_expr(cs);
                         if (argn < 64) arglist[argn++] = a;
                         if (tfn && src_vi >= 0 && call_pi >= 0 && call_pi < 32) {
@@ -1140,13 +1142,34 @@ static int ir_primary(CompilerState *cs)
                 last_mr_buf = buf;      /* 调用方据此拷贝 */
                 return vr;
             }
+            /* PB-64：内置名 `print` 下降到 printf（A 后端同口径）。此前它被当外部符号
+             * 原样发出，产物 C 里是裸 `print(...)`，tcc 只报 undefined symbol——
+             * 台账里 flow 族四份用例就卡在这一条上。 */
+            int print_fmt = -1;
+            if (strcmp(name, "print") == 0 && argn >= 1) {
+                name = "printf";
+                if (!call_first_str) {
+                    /* print(e) → printf("%lld\n", (long long)e)：格式化整型，
+                     * 浮点实参先 DTOI，与 A 侧那个 (long long) 转换等价 */
+                    if (ir_is_double(arglist[0])) {
+                        int dt = ir_new_vreg(F);
+                        ir_emit(F, IR_DTOI, dt, arglist[0], -1, 0);
+                        arglist[0] = dt;
+                    }
+                    int si = ir_add_string(P, "%lld\n");
+                    print_fmt = ir_new_vreg(F);
+                    IrIns *ai = &F->ins[ir_emit(F, IR_LD_ADDR, print_fmt, -1, -1, 0)];
+                    ai->sym = P->str_syms[si];
+                }
+            }
             /* 非 mr 普通调用：按序发射 PARAM + CALL */
+            if (print_fmt >= 0) ir_emit(F, IR_PARAM, -1, print_fmt, -1, 0);
             for (int k = 0; k < argn; k++) {
                 ir_emit(F, IR_PARAM, -1, arglist[k], -1, 0);
             }
             int vr = ir_new_vreg(F);
-            IrIns *in = &F->ins[ir_emit(F, IR_CALL, vr, -1, -1, argn)];
-            in->sym = name;         /* 外部符号（puts 等） */
+            IrIns *in = &F->ins[ir_emit(F, IR_CALL, vr, -1, -1, argn + (print_fmt >= 0 ? 1 : 0))];
+            in->sym = name;         /* 外部符号（puts / printf 等） */
             in->fn = -1;
             /* PB-浮点 ABI：目标函数浮点返回 → 标记 dst vreg（后端按此存储 xmm0/fa0） */
             for (int fi = 0; fi < P->fn_count; fi++) {

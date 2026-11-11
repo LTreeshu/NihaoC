@@ -168,6 +168,11 @@ end
 -- PB-59（2026-11-05）新增 goto_forms（本分支自写）：BNF 声明的合法标签形态里，此前门禁只有
 -- pos/ir_goto.nc 一份向后跳转。新用例把前跳、同名标签分处两函数、标签在内层块、从 case 体
 -- goto 跳出 switch 四档一并覆盖，四后端输出逐字相同且有 .expect，故入 IR_SUBSET 并计入 PASS 档
+-- PB-64（2026-11-10）flow / flow_no_free / borrow / flow_move 四份入 IR_SUBSET：`print` 在 IR 下降到
+-- printf 之后，加上 PB-63 放行的 `.(T)`，这四份在四档输出逐字相同（`300/77/5`、`42`+`flow ok`、
+-- `900`+`ok`、`literal/99/5`）。前三份带 .expect ⇒ IR 侧 PASS +3；`flow_move` 没有 ⇒ 只升比对档。
+-- 同轮里 `str_array_init` 变成能编能跑但输出截断（IR 打 `x/9/A`、A 打 `xiaoming/9/ABCDEFGH`）——那是
+-- 真实布局家族（待裁第 23 条），绝不入名单：入去就是当场红。
 -- PB-63（2026-11-10）把 malloc_demo 从 A 专属移进 IR_SUBSET：IR 前端补上 `.(T)` 类型解引用（读站点与
 -- 写站点各一处，新增 ir_scalar_code_of_token 与声明处同一条类型码链）之后，这份用例四档都能编、
 -- 实跑输出逐字相同（`malloc ok` / `malloc write ok`）。它没有 .expect，所以升的是比对档不是 PASS 计数
@@ -179,7 +184,7 @@ end
 -- 在门禁里 0 份覆盖，而 IR 前端把 FX32 落到 i64 那一档（声明与形参两处类型码链都没有 FX 分支），
 -- 于是同一份源码在 c / native 截断、在 ir-c / ir-native 不截断；本轮补齐两处类型码并逐形态实测四后端
 -- 输出逐字相同（含二次赋值截断与 fx64 宽整型对照），两交叉档也出码过汇编
-local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true, fx_types = true, malloc_demo = true}
+local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true, fx_types = true, malloc_demo = true, flow = true, flow_no_free = true, borrow = true, flow_move = true}
 local IR_ONLY = {ir_builtin = true, ir_slice = true, ir_sparam = true}
 -- IR_ERR_COVERED: err 用例中 IR 前端已实现对应诊断的（未列出的非 m2 用例仍在 IR 侧跳过）
 -- cooking_bare_var 刻意不入：IR 前端对块内裸 <var-decl> 只给 `ir: undeclared variable 'K'`，
