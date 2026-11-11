@@ -79,3 +79,29 @@ int ir_add_string(IrProg *p, const char *data)
     strcpy(p->str_syms[p->str_count], sym);
     return p->str_count++;
 }
+/* 字符串池存的是解密后的原始字节，两个后端在序列化时必须自己再转义一次：把换行
+ * 原样写进 `.string "a<换行>b"` 或 C 的 `"a<换行>b";` 会把一条语句劈成两行
+ * （2026-11-11 实测：ir-c 产物是非法 C，交叉 .s 只靠汇编器容错才编得过）。
+ * C 与 GAS 都接受八进制转义，故其余不可打印字节走 "\NNN"。 */
+const char *ir_str_escaped(const char *s)
+{
+    static char bufs[2][1024];
+    static int which;
+    char *out = bufs[which];
+    which ^= 1;
+    char *o = out;
+    const unsigned char *q = (const unsigned char *)s;
+    for (; *q && (o - out) < 980; q++) {
+        unsigned char c = *q;
+        if (c == '\\' || c == '"') {
+            *o++ = '\\';
+            *o++ = (char)c;
+        } else if (c == '\n') { *o++ = '\\'; *o++ = 'n'; }
+        else if (c == '\t') { *o++ = '\\'; *o++ = 't'; }
+        else if (c == '\r') { *o++ = '\\'; *o++ = 'r'; }
+        else if (c < 0x20 || c == 0x7f) { o += sprintf(o, "\\%03o", c); }
+        else *o++ = (char)c;
+    }
+    *o = 0;
+    return out;
+}

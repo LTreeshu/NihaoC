@@ -90,7 +90,7 @@ int irgen_backend_emit(IrProg *p, const char *outfile, const char *backend)
         nb_put(&b, ".section .rodata\n");
         for (int i = 0; i < p->str_count; i++) {
             nb_put(&b, "%s:\n", p->str_syms[i]);
-            nb_put(&b, "  .string \"%s\"\n", p->str_data[i]);
+            nb_put(&b, "  .string \"%s\"\n", ir_str_escaped(p->str_data[i]));
         }
         nb_put(&b, ".text\n");
     }

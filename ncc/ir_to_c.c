@@ -99,7 +99,7 @@ int irgen_c_emit(IrProg *p, const char *outfile)
     /* 字符串池 */
     for (int i = 0; i < p->str_count; i++) {
         cb_put(&b, "static const char %s[] = \"%s\";\n",
-               p->str_syms[i], p->str_data[i]);
+               p->str_syms[i], ir_str_escaped(p->str_data[i]));
     }
     if (p->str_count) cb_put(&b, "\n");
 

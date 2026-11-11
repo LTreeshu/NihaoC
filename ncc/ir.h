@@ -103,6 +103,8 @@ int ir_emit(IrFn *f, IrOp op, int dst, int a, int b, int64_t imm);
 int ir_new_vreg(IrFn *f);
 int ir_new_label(IrFn *f);
 int ir_add_string(IrProg *p, const char *data);   /* 返回符号名序号 */
+/* 池里的字节落到 C 文本或汇编 .string 前必须过这个转义（实现见 ir.c 内注释） */
+const char *ir_str_escaped(const char *s);
 
 /* 后端入口（由 ncc 的 -backend=ir-c / ir-native / ir-riscv64 / ir-loongarch64 调用；
  * 机器码发射器统一走 ir_backend.h 的 irgen_backend_emit） */
