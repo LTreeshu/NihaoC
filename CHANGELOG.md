@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 2.0 线 P2 第三簇（PB-64 / PB-65：`print` 在 IR 下降到 printf，四份 flow 族入名单；顺带修掉字符串池序列化的转义缺失——ir-c 此前会发出非法 C，2026-11-11）
+
+- **`print` 是 IR 线缺的最后一个高频内置名**：A 后端把它翻成 `printf`，IR 却当外部符号原样发出，产物里是裸 `print(...)`，只在链接期报 undefined symbol。PB-63 放行 `.(T)` 之后，`flow` / `flow_move` / `flow_no_free` / `borrow` 四份就卡在这点上。本轮按 A 同口径下降（带格式串透传、不带则前置 `"%lld\n"`，浮点先 DTOI）。
+- **撞出一个真的序列化缺陷**：为了让格式串合法，我在交叉 `.s` 里看到 `.string "%lld` + 真换行 + `"`，zig 与 GNU as 都用「unterminated string; newline inserted」**告警后继续**，于是这类产物一直被判成 OK。往下追：用户串 `puts("a\nb")` 在 **ir-c 产物里就是 `static const char __str_0[] = "a<换行>b";`，即非法 C**——A 侧同类问题当年由 PA-50 修过，IR 侧从没修。根因是**池里存解密后的原始字节，而 `ir_to_c` 与 `ir_backend` 输出时都不再转义**。修法是在 `ir.c` 加 `ir_str_escaped`（`\\`、`\"`、`\n`、`\t`、`\r`，其余不可打印走八进制 `\NNN`，C 与 GAS 都接受），两个后端各接一处。
+- **本轮我自己错两次**（记下来免得下轮重犯）：第一版只改了 C 侧、漏了交叉；补转义时把字符常量写成双引号（`"\n"` 而不是 `'\n'`），转义结果反倒变成错字节。两处都在同轮实测中纠正，验证方法是 `esc.nc` 的双档产物逐字检查 + 交叉矩阵告警计数清零。
+- **计数**：Windows c / native 68P/0F/3S 不变、ir-c / ir-native **35 PASS** / 34 SKIP / 0 FAIL，比对档 34 + 2；Linux 68P/0F/4S 与 35P/0F/35S、0 FAIL；交叉矩阵 **53 OK / 0 FAIL**，`unterminated string` 告警由 4 降到 **0**。
+- **台账**：`print` 簇放行四份（三份带 `.expect` 计入 PASS，`flow_move` 只升比对档）；`str_array_init` 由「出码语义坏」变「能编能跑但输出截断」（IR `x/9/A` vs A `xiaoming/9/ABCDEFGH`），属真实布局家族（第 23 条），**不入名单**——入去就是当场红。
+
 ### 2.0 线 P2 第二簇（PB-63：IR 前端实现 `p.(T)` 类型解引用；`malloc_demo` 四档一致并入名单；交叉两档出码 48→53，2026-11-10）
 
 - **卡点是一处，不是一簇**。`token.h` 把 `.(` 定义成单个 `TOK_DOT_PAREN`，IR 的读站点与写站点都直接 `expect(TOK_RPAREN)`，所以 `p.(i32)` 一律断在类型名上（`expected ')', got 'i32'`）；A 侧的 `deref_step` 早就同时支持 `.()` 与 `.(T)`。**这是纯 IR 侧欠账**，台账里 6 份用例挂在它上面。

@@ -2,6 +2,7 @@
 
 本文档记录 NihaoC 语言规范（Chinese.md / English.md）中各项指针安全规则与编译器（ncc）实际实现的对应状态。
 
+> 更新日期：2026-11-11（**PB-64 / PB-65 `print` 下降到 printf + 字符串池序列化转义**）：`irparse.c` 把内置名 `print` 按 A 口径下降（带格式串透传 `printf`、否则前置 `"%lld\n"` 且 CALL 实参数 +1，浮点先 DTOI）；`ir.c` 新增 `ir_str_escaped` 并接到 `ir_to_c` 与 `ir_backend` 两处——此前含换行的字符串在 ir-c 产物里是非法 C、在交叉 `.s` 里靠汇编器容错。门禁 ir-c / ir-native 32→35 PASS、SKIP 38→34、0 FAIL，c / native 不变；Linux 68P/0F/4S + 35P/0F/35S；交叉矩阵 53 OK / 0 FAIL 且 `unterminated string` 告警清零。flow 族四份入 IR_SUBSET；`str_array_init` 变为能编能跑但输出截断，属第 23 条家族、不入名单。详见下方实测表。
 > 更新日期：2026-11-10（**PB-63 IR 前端实现 `p.(T)` 类型解引用**）：新增 `ir_scalar_code_of_token`（与声明处 `vt_code` 同链，含 `FX32 → 4`），读站点按 T 定 double 标记与窄型 TRUNC，写站点与 `op=` 复合让显式 T 优先于 `pt[]`，聚合类型给专属诊断而非静默忽略。`malloc_demo` 四档一致移入 `IR_SUBSET`（无 `.expect` ⇒ 升比对档：4 后端 32→33、2 后端 4→3、IR SKIP 39→38，PASS 32 不变）；`flow` / `flow_move` / `flow_no_free` / `borrow` 过前端、改卡 `print`；交叉两档出码 48→53、三 lane 0 FAIL；Linux 复跑 68P/0F/4S 与 32P/0F/39S、0 FAIL。另记 `qemu-system-arm` 1:8.2.2 已装成（先修 dpkg 中断态）。详见下方 PB-63 实测表。
 > 更新日期：2026-11-10（**PB-62 收台账 E-c 桶**）：IR 前端在单变量字符串初始化与 `ir_multi_decl` 两站补上与 A 后端同口径的三条诊断（元素非 `char` 不得用字符串初始化、含结尾 NUL 必须放得下声明容量、定长数组的多变量声明只收字符串字面量），替换掉原来的静默截断与丢 `[N]` 出码路径。四份 err（`str_array_bad_elem` / `str_array_overflow` / `multi_arr_nostr` / `multi_arr_overflow`）转为 IR 侧有诊断且无产物，收进 `IR_ERR_COVERED`；门禁 ir-c / ir-native **28→32 PASS**、SKIP **43→39**、0 FAIL，c / native 与比对档不变。E-c 桶 6→2，余下两份的卡点写进台账。详见下方 PB-62 实测表。
 > 更新日期：2026-11-10（**PB-61 P1 缺口台账 + err 名单去豁免**）：零编译器改动。`IR_ERR_COVERED` 显式补入 11 份 m2 族并删除门禁里 `stem:startswith("m2")` 那条命名豁免，判据此后只认名单；门禁复跑 c / native 68P/0F/3S、ir-c / ir-native 28P/0F/43S、0 FAIL、err 档 SKIP 每档 15 份不变。逐份实测把 28 份 「只有 A 能编」的 pos 与 15 份 err 真缺口归入 G1 / G2 / G3 / G4 四桶，明细在 `docs/IR_GAP_LEDGER.md`。两份「看似可提升」的候选实测否掉，并钉住两个根因：IR 的 `alignof` 恒返回 8、IR 前端无「首匹配即止」机制（`__is_matched` 在 irparse 里 0 命中）。详见下方 PB-61 实测表。
@@ -798,6 +799,18 @@
 | pos 缺口 28 份分桶 | G1 语法缺失 **21**（聚成 4 簇）、G2 语义缺失 **5**、G3 布局缺失 **2**、G4 可提升 **0** |
 | err 真缺口 15 份分桶 | E-a 文案不同源 **3**、E-b 断在解析层够不到诊断 **6**、**E-c 非法程序被静默接受 6**（`str_array_overflow` 实测产出可执行文件） |
 
+**PB-64 / PB-65 实测（2026-11-11）**
+
+| 判据 | 改前 | 改后 |
+|---|---|---|
+| `flow` / `flow_move` / `flow_no_free` / `borrow` | 前端已过（PB-63），链接期 `undefined symbol 'print'` | 四档输出逐字相同（`300/77/5`、`42`+`flow ok`、`900`+`ok`、`literal/99/5`） |
+| `ir-c` 产物里的含换行字符串 | `static const char __str_0[] = "a<换行>b";`（**非法 C**） | `"a\nb"` ✓，实跑打印两行 |
+| 交叉 `.s` 的 `.string` | `.string "%lld<换行>"`，zig 与 GNU as 报 `unterminated string; newline inserted` 后仍算 OK | `.string "%lld\n"` / `"a\nb"`，告警 **0** |
+| 门禁 | Windows 32P/38S（IR 侧）、Linux 同 | **35P/34S**、0 FAIL；c / native 68P/3S 不变；Linux 68P/4S + 35P/35S |
+| 比对档 | 4 后端 33 / 2 后端 3 | 4 后端 **34** / 2 后端 **2**（`flow_move` 无 .expect ⇒ 只升档） |
+| 交叉矩阵 | 53 OK / 0 FAIL（含 4 条告警） | **53 OK / 0 FAIL，告警 0**（`EMIT=FAIL` 38 不变） |
+
+我自己这一环错了两次：先只改 C 侧漏了交叉，再在补转义时把字符常量写成双引号（`"\n"` 应为 `'\n'`），第一版转义输出是错字节；都由实测纠正。锚点：`irparse.c` 的 `call_first_str` 与 `print` 下降块、`ir.c` 的 `ir_str_escaped`、`ir_to_c.c` 与 `ir_backend.c` 的池输出行、名单在 `xmake.lua` 的 `IR_SUBSET`。
 **fx32/fx64 与 align/sizeof 形态实测（PB-60，2026-11-09，探针在 `ncc/build/p60/`，不入版本库）**
 
 | 形态 | c / native | ir-c / ir-native（修前） | ir-c / ir-native（修后） | 交叉两档 |

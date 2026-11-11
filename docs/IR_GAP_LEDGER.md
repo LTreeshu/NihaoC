@@ -62,7 +62,7 @@
 | **E-c IR 完全不诊断** | ~~6~~ → **2**（2026-11-10 PB-62 收了 4 份） | 已收：`str_array_bad_elem` `str_array_overflow` `multi_arr_nostr` `multi_arr_overflow`（现为「有诊断 + 无产物」并已入 `IR_ERR_COVERED`）；余：`len_unknown`（需 `len_known` 表，否则会把空动态字符串误判）、`void_subscript`（需指针指向类型跟踪，与 G1 的 `p.(T)` 同根） |
 
 更新（2026-11-10，PB-62）：**E-c 桶已由 6 份收到 2 份**——`str_array_bad_elem` / `str_array_overflow` / `multi_arr_nostr` / `multi_arr_overflow` 四份在 IR 前端补上与 A 同口径的三条诊断后转为「有诊断 + 无产物」，已入 `IR_ERR_COVERED`；门禁 ir-c / ir-native 由 28 份 PASS 升到 32 份（0 FAIL，c / native 与比对档不变，交叉矩阵 48/48 不变）。两份余量的卡点见本行右侧。
-
+更新（2026-11-11，PB-64 / PB-65）：**`print` 已在 IR 下降到 printf**，`flow` 四份全部放行——`flow` / `flow_no_free` / `borrow` 入 `IR_SUBSET` 并计 PASS，`flow_move` 入名单升比对档；`features` 现在只剩顶层 `alias` 一挡。同轮修掉**字符串池序列化不转义**的缺陷（含换行的串在 ir-c 产物里是非法 C、在交叉 `.s` 里劈成两行只靠汇编器容错），修好后交叉的 `unterminated string` 告警由 4 降到 0。`str_array_init` 由「出码语义坏」变成「能编能跑但输出截断」（IR `x/9/A` vs A `xiaoming/9/ABCDEFGH`），归第 23 条家族，**不入名单**。
 ## 4. 从这张表读出的排期结论
 
 1. **单点最大的是「真实布局」**：PB-61 时 G3 的 2 份 + E-c 的 6 份 + G2 的 3 份（多维读写、字符串数组、`alignof`）
