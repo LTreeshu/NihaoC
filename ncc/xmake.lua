@@ -192,7 +192,15 @@ end
 -- 四档都出 .c 产物 ⇒ 入 IR_SUBSET，IR 侧 PASS 35→40、SKIP 34→29。
 -- 边界照旧诚实：`char[32]` 这类数组成员在 IR 侧仍只占 1 个 8 字节槽（真实布局是待裁第 23 条），
 -- features 恰好不回读该成员才逐字相同——它进名单是因为输出相同，不是因为布局已定案。
-local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true, fx_types = true, malloc_demo = true, flow = true, flow_no_free = true, borrow = true, flow_move = true, features = true, for_init_forms = true, transfer = true, mathmod = true, module_top_forms = true}
+-- PB-67（2026-11-11）新增 len_builtin / array_capacity_tiers 两份：这两份此前挂在「数组 / 切片
+-- 容量档声明形态」一簇，PB-67 在 irparse.c 补齐四件事之后四档实跑输出逐字相同——
+-- ① 多维数组声明 `m i32[2][3]`（按行主序摊平成连续槽，len() 取各维乘积），
+-- ② 切片读入声明数组 `cp i32[3] = arr[1..4]`（复制个数取目标声明容量，与 A 侧 memcpy 同口径），
+-- ③ 开区间切片 rhs `sw = arr[..5]`（指针 = &arr[0]，长度 = hi），
+-- ④ 字面量推断字符串的 len()（`s = "abc"` → 长度 3，此前 IR 静默给 0）。
+-- 两份都带 .expect ⇒ IR 侧 PASS +2、SKIP −2。第三份 deref_slice 仍不入——它的真因不是容量档，
+-- 而是「指针类型后缀档」（`void[][]` 逐层解引用 / `.(char[9])` 数组型后缀 / 指针数组），已改记台账。
+local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true, fx_types = true, malloc_demo = true, flow = true, flow_no_free = true, borrow = true, flow_move = true, features = true, for_init_forms = true, transfer = true, mathmod = true, module_top_forms = true, len_builtin = true, array_capacity_tiers = true}
 local IR_ONLY = {ir_builtin = true, ir_slice = true, ir_sparam = true}
 -- IR_ERR_COVERED: err 用例中 IR 前端已实现对应诊断的（未列出的非 m2 用例仍在 IR 侧跳过）
 -- cooking_bare_var 刻意不入：IR 前端对块内裸 <var-decl> 只给 `ir: undeclared variable 'K'`，

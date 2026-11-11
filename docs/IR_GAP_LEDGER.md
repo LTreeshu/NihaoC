@@ -15,6 +15,8 @@
 - pos 侧「IR 能编 44 份」= `IR_SUBSET` 41 + `IR_ONLY` 3，与门禁里 ir-c 的 PASS 数（28）不同源：后者只数带 `.expect`
   的那部分，其余进跨后端比对池。**PB-66 后这行改为「IR 能编 49 份」= `IR_SUBSET` 46 + `IR_ONLY` 3**（顶层声明与 `alias`
   簇五份放行入名单），pos 侧缺口相应由 28 份收到 **23** 份；门禁 ir-c / ir-native 的 PASS 数同步 35 → **40**。
+  **PB-67 后这行再改为「IR 能编 51 份」= `IR_SUBSET` 48 + `IR_ONLY` 3**（数组 / 切片容量档簇里两份放行入名单），
+  pos 侧缺口由 23 份收到 **21** 份；门禁 ir-c / ir-native 的 PASS 数同步 40 → **42**、SKIP 29 → **27**。
 
 ## 1. 四桶定义
 
@@ -25,7 +27,7 @@
 | **G3 布局缺失** | 根因是「聚合体没有真实内存布局」（待裁第 23 条） | 需 ltree 先裁槽宽与布局口径 |
 | **G4 名单与用例** | 缺口在测试资产或名单本身：可提升、文案不同源、用例写法越界 | 改名单 / 改用例，不动编译器 |
 
-## 2. pos 缺口 23 份（72 份总数中，只有 A 线能编或能编但语义不同的那些）
+## 2. pos 缺口 21 份（72 份总数中，只有 A 线能编或能编但语义不同的那些）
 
 | 用例 | IR 侧第一手结果 | 桶 | 要补的动作 |
 |---|---|---|---|
@@ -36,7 +38,8 @@
 | `use_mod` | IR 出码：`implicit declaration of function 'add'` | G2 | 跨模块符号未接（路线图阶段 2「link/use 跨文件」） |
 | ~~`flow` / `flow_move` / `flow_no_free` / `malloc_demo`~~ | **PB-63 已解**：真正卡点只有 `p.(T)` 一处（`malloc(类型)` 一直没问题——实测 `p void = malloc(i32)` 在 IR 能编能跑） | G1→放行 1 | `malloc_demo` 四档一致已入 `IR_SUBSET`；`flow` / `flow_move` / `flow_no_free` / `borrow` 过前端后改卡 **IR 不下降 `print`**（待裁第 7 条；IR-only 名单下已属必须做） |
 | `borrow` | 同 `flow` 族 | G1→卡 print | `print` 下降（A 侧口径见 §4 第 2 条） |
-| `deref_slice` / `len_builtin` / `array_capacity_tiers` | `expected '=', got '['` | G1 | 数组 / 切片容量档声明形态 |
+| ~~`len_builtin` / `array_capacity_tiers`~~ | **PB-67 已解**：多维数组声明、切片读入声明数组、开区间切片 rhs、字面量推断字符串的 `len()` 四处补齐后四档输出逐字相同，已入 `IR_SUBSET` | G1→放行 2 | — |
+| `deref_slice` | `ir: array dimension 1 must have a positive length`（`void[][]`）/ `expected ']', got '['`（`p3[][].(i32)`）——**PB-61 快照**；2026-11-11 PB-67 复测后当前实况是 `ir: array dimension 1 must have a positive length` + `array dimension 2 ...`（`void[][]` 两维都取不到长度）/ `ir: unexpected token ']' in expression`（`p3[][].(i32)`），**仍被拒** | G1 | **改记「指针类型后缀档」**：第一手复测证明它的真因**不是容量档**——挡住它的是 `void[][]` 逐层解引用、`.(char[9])` 数组型后缀、`void[2]` 指针数组与 `malloc(void[3])` 这一族指针类型形态（详见 §4 第 2 条） |
 | `array_member_default` | `ir: unexpected token '[' in expression` | G3 | 数组元素默认值展开，需成员级真实偏移 |
 | `struct_member_default` | `ir: member default value: only simple constant supported` | G3 | 成员默认值只落了「简单常量」那一半，PA-49 / PA-56 家族未回灌完 |
 | `designator_init` | `ir: unexpected token '.' in expression` | G1 | `.field = v` 指定式初值不解析 |
@@ -51,8 +54,10 @@
 | `type_forms` | `ir: unexpected token 'i32' in expression` | G1 | 类型出现在表达式位置（C 风格转换形态） |
 | `void_slot_infer` | `ir: unexpected token ']' in expression` | G1 | `void` 指针下标推断 |
 
-**桶分布**：G1 **16**、G2 **5**、G3 **2**（G4 在 pos 侧本轮为 0——两份「看似可提升」的 `alignof_builtin` 与
+**桶分布**：G1 **14**、G2 **5**、G3 **2**（G4 在 pos 侧本轮为 0——两份「看似可提升」的 `alignof_builtin` 与
 `is_no_fallthrough` 实测四档输出不同，**不可提升**；这也复核了 PB-56 当时「可提升 0 份」的结论仍然成立）。
+**PB-67 追加**：G1 由 16 收到 **14**——`len_builtin` / `array_capacity_tiers` 两份放行；`deref_slice` 留在 G1 但
+**改记到「指针类型后缀档」一簇**（本轮第一手复测的结论，见下）。
 
 ## 3. err 缺口 15 份（IR 侧不参与或参与了但判据不同源）
 
@@ -69,8 +74,18 @@
 
 1. **单点最大的是「真实布局」**：PB-61 时 G3 的 2 份 + E-c 的 6 份 + G2 的 3 份（多维读写、字符串数组、`alignof`）
    共 **11 份**挂在同一条欠账上（待裁第 23 条）；PB-62 收掉 4 份 E-c 后为 **7 份**。它不解，IR 线永远补不到 A 线的 68 份。
-2. **G1 的 16 份聚成 3 簇**，不是 16 件事：**`p.(T)` 类型解引用（PB-63 已做：1 份当场放行、4 份改卡 `print`）**、**`print` 下降（PB-64 已做，四份全放行）**、**顶层声明与 `alias`（PB-66 已做，5 份全放行）**、数组 / 切片容量档（3 份）、表达式细节与模式（7 份）。按簇排，一簇一轮。
-3. **E-c 那 6 份应当优先于「补齐语法」**（PB-62 已照此收 4 份，余 2 份）：它们是「编译器不报错」而不是「编译器不支持」，属于会往外漏错程序的一类；
+2. **G1 的 14 份聚成 5 簇**，不是 14 件事：**`p.(T)` 类型解引用（PB-63 已做：1 份当场放行、4 份改卡 `print`）**、
+   **`print` 下降（PB-64 已做，四份全放行）**、**顶层声明与 `alias`（PB-66 已做，5 份全放行）**、
+   **数组 / 切片容量档（PB-67 已做：`len_builtin` / `array_capacity_tiers` 两份全放行）**、
+   **指针类型后缀档（PB-67 新分出：1 份，即 `deref_slice`）**、表达式细节与模式（7 份）。按簇排，一簇一轮。
+   ——PB-67 的第一手复测还纠正了台账旧分类：`deref_slice` 此前记在「数组 / 切片容量档」簇，
+   实测其真因是**指针类型后缀档**（`void[][]` 逐层解引用、`.(char[9])` 数组型后缀、`void[2]` 指针数组、
+   `malloc(void[3])`、`.(i32) += 1` 落在指针数组元素上），与容量档无关。
+3. **「指针类型后缀档」是下一轮（PB-68）的对象**，且**部分依赖待裁第 23 条**（真实布局）：
+   指针数组 `void[2]` 与 `malloc(void[3])` 要落真实存储，不能沿用「单槽存指针」的既有做法；
+   该簇先做不需要真实布局的纯语法/类型形态（`void[][]` 逐层解引用、`.(char[9])` 数组型后缀、
+   `.(i32) += 1` 复合赋值），落布局的部分挂到第 23 条一起做。
+4. **E-c 那 6 份应当优先于「补齐语法」**（PB-62 已照此收 4 份，余 2 份）：它们是「编译器不报错」而不是「编译器不支持」，属于会往外漏错程序的一类；
    最小动作是先给专属诊断（形状同 PA-52 / PA-59 那两轮），真实布局到位后再换成精确检查。
-4. **台账更新方式**：每轮 P2 收一簇后重跑 `build/p61/promotable.sh` 与本节计数，把改完的行从表里删掉——本文件只存
+5. **台账更新方式**：每轮 P2 收一簇后重跑 `build/p61/promotable.sh` 与本节计数，把改完的行从表里删掉——本文件只存
    「还欠什么」，不存历史（历史归 `CHANGELOG.md` 与 `docs/IMPLEMENTATION_STATUS.md`）。

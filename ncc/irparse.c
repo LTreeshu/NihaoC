@@ -36,6 +36,14 @@ static int *vstate;        /* M2 借用状态：0=VALID 1=FROZEN 2=INVALID（所
 static int *vborrow_src;   /* 本变量借用的源 vi（-1=无）；作用域退出时解冻源 */
 static int *vptr;          /* 是否指针类（void）：1=是（仅指针类有所有权语义） */
 
+/* 数组维度：vdim[vi][k] = 第 k 维长度（行主序）；vndim[vi] = 维数。
+ * 0=标量；1=平铺一维（历史行为）；>=2=多维（PB-67）。
+ * 槽模型下多维数组按行主序摊平成连续槽：扁平下标 = Σ idx[k] * stride[k]，
+ * stride[k] = 第 k 维之后各维长度之积。 */
+#define IR_MAX_DIMS 4
+static int (*vdim)[IR_MAX_DIMS];
+static int *vndim;
+
 /* 可见性常量直接用 ncc.h 的 Visibility 枚举（PB-27.3+9：与 cgen 端 enum nihao_vis 数值统一：
  *   VIS_UNDEF=0, VIS_CONST=1, VIS_FLOW=2, VIS_STATIC=3, VIS_VAR=4）。 */
 
@@ -622,6 +630,8 @@ static void var_reset(void)
         vborrow_src = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vptr = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vtype = nihao_malloc(g_cs, vn_cap * sizeof(int));
+        vdim = nihao_malloc(g_cs, vn_cap * sizeof(*vdim));
+        vndim = nihao_malloc(g_cs, vn_cap * sizeof(int));
     }
 }
 
@@ -663,6 +673,8 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
         vborrow_src = nihao_realloc(g_cs, vborrow_src, vn_cap * sizeof(int));
         vptr = nihao_realloc(g_cs, vptr, vn_cap * sizeof(int));
         vtype = nihao_realloc(g_cs, vtype, vn_cap * sizeof(int));
+        vdim = nihao_realloc(g_cs, vdim, vn_cap * sizeof(*vdim));
+        vndim = nihao_realloc(g_cs, vndim, vn_cap * sizeof(int));
     }
     vn[vn_count] = name;
     pt[vn_count] = -1;
@@ -671,6 +683,8 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
     vty[vn_count] = type_idx;
     vvis[vn_count] = vis;
     vtype[vn_count] = 0;
+    vndim[vn_count] = 0;
+    for (int k = 0; k < IR_MAX_DIMS; k++) vdim[vn_count][k] = 0;
     int base = -1;
     if (elems > 0 && type_idx < 0) {
         /* 基本类型数组：分配 elems 个连续 vreg（native 槽字节连续），
@@ -814,6 +828,75 @@ static int ir_member_elem_addr(CompilerState *cs, int vi, int ti, int fi, int of
 }
 
 /* ---- 表达式：返回持有结果的 vreg ---- */
+
+/* 多维数组的扁平下标：Σ idx[k] * stride[k]，stride[k] = 第 k 维之后各维长度之积。
+ * 槽模型下多维数组按行主序摊平成连续槽（PB-67），故访问只按扁平下标算址。
+ * nidx < 维数时结果是「子行首地址」（与 C/A 同口径：m[1] 是第 1 行的指针）。 */
+static int ir_flat_index(CompilerState *cs, int vi, const int *idx, int nidx)
+{
+    int nd = vndim[vi];
+    if (nd <= 0) {
+        nihao_error(cs, "ir: '%s' is not a multi-dimensional array", vn[vi]);
+        return ir_new_vreg(F);
+    }
+    if (nidx > nd) {
+        nihao_error(cs, "ir: '%s' has %d dimension(s) but %d index(es) were given",
+                    vn[vi], nd, nidx);
+        return ir_new_vreg(F);
+    }
+    int flat = ir_new_vreg(F);
+    ir_emit(F, IR_CONST, flat, -1, -1, 0);
+    for (int k = 0; k < nidx; k++) {
+        int stride = 1;
+        for (int j = k + 1; j < nd; j++) stride *= vdim[vi][j];
+        int sv = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, sv, -1, -1, stride);
+        int prod = ir_new_vreg(F);
+        ir_emit(F, IR_MUL, prod, idx[k], sv, 0);
+        int sum = ir_new_vreg(F);
+        ir_emit(F, IR_ADD, sum, flat, prod, 0);
+        flat = sum;
+    }
+    return flat;
+}
+
+/* 数组初始化列表（PB-67 支持多维）：按维度递归填槽。
+ * level = 当前维度下标，offset = 该维首元素的扁平下标。
+ * 叶层逐个 STORE；复合层每个子列表对应一个元素。 */
+static void ir_array_init_list(CompilerState *cs, int vi, int level, int offset)
+{
+    int nd = vndim[vi];
+    int cnt = vdim[vi][level];
+    if (level == nd - 1) {
+        int k = 0;
+        if (cur_tok(cs) != TOK_RBRACE) {
+            for (;;) {
+                int v = ir_expr(cs);
+                v = ir_coerce(v, vetyp[vi] == 8 ? 2 : vetyp[vi]);   /* PB-1：元素类型协调（vetyp 8=char 元素，与 vtype 8=f32 编码冲突→按 i8 截断） */
+                int addr = ir_new_vreg(F);
+                ir_emit(F, IR_ADDR, addr, vt[vi], -1, offset + k);
+                ir_emit(F, IR_STORE, -1, addr, v, 0);
+                k++;
+                if (cur_tok(cs) != TOK_COMMA) break;
+                next_tok(cs);
+            }
+        }
+        return;
+    }
+    int stride = 1;
+    for (int j = level + 1; j < nd; j++) stride *= vdim[vi][j];
+    int g = 0;
+    if (cur_tok(cs) != TOK_RBRACE) {
+        for (;;) {
+            expect(cs, TOK_LBRACE);
+            ir_array_init_list(cs, vi, level + 1, offset + g * stride);
+            expect(cs, TOK_RBRACE);
+            g++;
+            if (cur_tok(cs) != TOK_COMMA) break;
+            next_tok(cs);
+        }
+    }
+}
 
 /* 基本类型字节大小（语言语义） */
 static long long type_size_token(TokenType t)
@@ -1365,6 +1448,25 @@ static int ir_primary(CompilerState *cs)
                 return ir_elem_addr(cs, vt[vi], idx, ir_elem_width(vetyp[vi]), vetyp[vi] == 8);
             }
             expect(cs, TOK_RBRACKET);
+            /* 多维（PB-67）：继续收 [j]…，按行主序摊平成一个扁平下标 */
+            int idxs[IR_MAX_DIMS];
+            int nidx = 0;
+            idxs[nidx++] = idx;
+            while (cur_tok(cs) == TOK_LBRACKET && nidx < IR_MAX_DIMS) {
+                next_tok(cs);
+                int j = ir_expr(cs);
+                expect(cs, TOK_RBRACKET);
+                idxs[nidx++] = j;
+            }
+            if (nidx > 1 || vndim[vi] >= 2) {
+                int flat = ir_flat_index(cs, vi, idxs, nidx);
+                int addr = ir_elem_addr(cs, vt[vi], flat, ir_elem_width(vetyp[vi]), vetyp[vi] == 8);
+                if (nidx < vndim[vi]) return addr;   /* 只给部分下标 → 子行首地址 */
+                int vr2 = ir_new_vreg(F);
+                ir_emit(F, IR_LOAD, vr2, addr, -1, 0);
+                if (vetyp[vi] == 1) ir_set_double(vr2);
+                return vr2;
+            }
             int addr = ir_elem_addr(cs, vt[vi], idx, ir_elem_width(vetyp[vi]), vetyp[vi] == 8);
             int vr = ir_new_vreg(F);
             if (vetyp[vi] == 8) {
@@ -2730,7 +2832,8 @@ static void ir_stmt(CompilerState *cs)
                     return;
                 }
             }
-            if (vi < 0) vi = var_declare(name, 0, -1, VIS_VAR);
+            int fresh = 0;
+            if (vi < 0) { vi = var_declare(name, 0, -1, VIS_VAR); fresh = 1; }
             if (vty[vi] >= 0 && agg_types[vty[vi]].kind != 2 &&
                 cur_tok(cs) == TOK_IDENTIFIER) {
                 /* 聚合整体赋值：逐成员拷贝（struct 按展开槽数（嵌套递归），
@@ -2748,7 +2851,7 @@ static void ir_stmt(CompilerState *cs)
                 }
             }
             if (cur_tok(cs) == TOK_IDENTIFIER) {
-                /* 切片 rhs：s = arr[lo..hi]——记录逻辑长度（常量边界）+ 指针 */
+                /* 切片 rhs：s = arr[lo..hi] / s = arr[..hi]——记录逻辑长度（常量边界）+ 指针 */
                 LexerState *lx2 = cs->parser.lex;
                 lx2->peek_valid = 0;
                 lexer_peek(lx2);
@@ -2758,17 +2861,33 @@ static void ir_stmt(CompilerState *cs)
                     if (avi >= 0) {
                         next_tok(cs);   /* arr */
                         next_tok(cs);   /* [ */
-                        int lo = ir_expr(cs);
+                        int open_lo = 0;    /* arr[..hi]：省略起始 */
+                        int lo = -1;
+                        if (cur_tok(cs) == TOK_RANGE) {
+                            open_lo = 1;
+                        } else {
+                            lo = ir_expr(cs);
+                        }
                         if (cur_tok(cs) == TOK_RANGE) {
                             next_tok(cs);
                             int hi = ir_expr(cs);
                             expect(cs, TOK_RBRACKET);
-                            long long lov, hiv;
-                            if (vreg_const(F, lo, &lov) && vreg_const(F, hi, &hiv))
-                                ve[vi] = (int)(hiv - lov);
-                            int addr = ir_elem_addr(cs, vt[avi], lo,
-                                                    ir_elem_width(vetyp[avi]),
-                                                    vetyp[avi] == 8);
+                            long long hiv;
+                            int addr;
+                            if (open_lo) {
+                                /* arr[..hi] → &arr[0]，长度 = hi */
+                                if (vreg_const(F, hi, &hiv))
+                                    ve[vi] = (int)hiv;
+                                addr = ir_new_vreg(F);
+                                ir_emit(F, IR_ADDR, addr, vt[avi], -1, 0);
+                            } else {
+                                long long lov;
+                                if (vreg_const(F, lo, &lov) && vreg_const(F, hi, &hiv))
+                                    ve[vi] = (int)(hiv - lov);
+                                addr = ir_elem_addr(cs, vt[avi], lo,
+                                                        ir_elem_width(vetyp[avi]),
+                                                        vetyp[avi] == 8);
+                            }
                             ir_emit(F, IR_MOV, vt[vi], addr, -1, 0);
                             skip_newlines(cs);
                             return;
@@ -2813,6 +2932,13 @@ static void ir_stmt(CompilerState *cs)
                 }
                 lx2->peek_valid = 0;
                 /* 非标量/聚合目标：& 未消费，回退通用 ir_expr 解析 */
+            }
+            if (cur_tok(cs) == TOK_STRING_LITERAL &&
+                (fresh || vetyp[vi] == 8)) {
+                /* s = "abc"（类型由字面量推断）：逻辑长度 = 字面量长（len() 用），
+                 * 槽值 = 池地址，vetyp=8 标记 byte 寻址（与 char[] 同语义） */
+                ve[vi] = (int)strlen(cs->parser.lex->tok_str);
+                if (fresh) vetyp[vi] = 8;
             }
             int vr = ir_expr(cs);
             /* PB-1 补缺（2026-09-01）：窄整数目标此前只在「声明初始化」路径经
@@ -3210,6 +3336,8 @@ static void ir_stmt(CompilerState *cs)
             next_tok(cs);           /* 类型 */
             int elems = 0;
             int is_arr = 0;         /* 出现过 [..]（数组/字符串；标量 char 非数组） */
+            int dims[IR_MAX_DIMS];  /* 各维长度（PB-67：多维数组） */
+            int nd = 0;
             if (cur_tok(cs) == TOK_LPAREN) {
                 /* 函数指针类型 void(params) [ret]：跳过参数列表与可选返回类型 */
                 next_tok(cs);
@@ -3222,28 +3350,48 @@ static void ir_stmt(CompilerState *cs)
                 if (is_type_token(cur_tok(cs)) || cur_tok(cs) == TOK_IDENTIFIER) {
                     next_tok(cs);   /* 返回类型 */
                 }
-            } else if (cur_tok(cs) == TOK_LBRACKET) {
-                next_tok(cs);
-                is_arr = 1;         /* char[] 动态字符串与数组共用此标记 */
-                if (cur_tok(cs) == TOK_RANGE || cur_tok(cs) == TOK_ELLIPSIS) {
-                    /* 纯动态数组 [...] / [..]：固定默认容量 8 槽（增长语义留 TODO） */
-                    elems = 8;
+            } else {
+                /* 数组维度后缀（可多维，PB-67）：逐段解析 [..]，记录各维长度。
+                 * 槽模型下多维按行主序摊平成连续槽，总槽数 = 各维之积。 */
+                while (cur_tok(cs) == TOK_LBRACKET) {
                     next_tok(cs);
-                    if (cur_tok(cs) == TOK_INT_CONST) {
-                        /* [...N] / [..N]：历史兼容写法（A 方案早期实现），
-                         * 等同 BNF 规范的 [N...] —— 2026-09-01 与 parser.c 对齐 */
-                        elems = (int)cs->parser.lex->tok_val.i;
-                        next_tok(cs);
-                    }
-                } else if (cur_tok(cs) == TOK_INT_CONST) {
-                    elems = (int)cs->parser.lex->tok_val.i;
-                    next_tok(cs);
+                    is_arr = 1;     /* char[] 动态字符串与数组共用此标记 */
+                    int cnt = 0;
                     if (cur_tok(cs) == TOK_RANGE || cur_tok(cs) == TOK_ELLIPSIS) {
-                        /* N... 动态数组：初始容量 N 个槽（增长忽略） */
+                        /* 纯动态数组 [...] / [..]：固定默认容量 8 槽（增长语义留 TODO） */
+                        cnt = 8;
                         next_tok(cs);
+                        if (cur_tok(cs) == TOK_INT_CONST) {
+                            /* [...N] / [..N]：历史兼容写法（A 方案早期实现），
+                             * 等同 BNF 规范的 [N...] —— 2026-09-01 与 parser.c 对齐 */
+                            cnt = (int)cs->parser.lex->tok_val.i;
+                            next_tok(cs);
+                        }
+                    } else if (cur_tok(cs) == TOK_INT_CONST) {
+                        cnt = (int)cs->parser.lex->tok_val.i;
+                        next_tok(cs);
+                        if (cur_tok(cs) == TOK_RANGE || cur_tok(cs) == TOK_ELLIPSIS) {
+                            /* N... 动态数组：初始容量 N 个槽（增长忽略） */
+                            next_tok(cs);
+                        }
                     }
+                    expect(cs, TOK_RBRACKET);
+                    if (nd < IR_MAX_DIMS) dims[nd++] = cnt;
+                    elems = cnt;
                 }
-                expect(cs, TOK_RBRACKET);
+                if (nd > 1) {
+                    /* 多维：总槽数 = 各维之积（行主序摊平） */
+                    long long total = 1;
+                    for (int k = 0; k < nd; k++) {
+                        if (dims[k] <= 0) {
+                            nihao_error(cs, "ir: array dimension %d must have a "
+                                            "positive length", k + 1);
+                            dims[k] = 1;
+                        }
+                        total *= dims[k];
+                    }
+                    elems = (int)total;
+                }
             }
             expect(cs, TOK_ASSIGN); /* 消费 =（expect 已推进） */
             int src_vi = -1;
@@ -3268,6 +3416,13 @@ static void ir_stmt(CompilerState *cs)
                 }
             }
             int vi = var_declare(name, elems, -1, decl_vis);
+            /* 记录维度（PB-67）：只有多维（nd>=2）进维度表；一维与动态字符串
+             * （char[] / void[]）沿用历史单维寻址路径，行为不变 */
+            if (nd >= 2) {
+                vndim[vi] = nd;
+                for (int k = 0; k < IR_MAX_DIMS; k++)
+                    vdim[vi][k] = (k < nd) ? dims[k] : 0;
+            }
             if (nt == TOK_VOID) vptr[vi] = 1;   /* 指针类标记（仅 void 触发所有权语义） */
             if (src_vi >= 0) {
                 ir_vis_check_assign(cs, vi, src_vi);  /* M2 转移检查（裸变量 RHS） */
@@ -3301,19 +3456,24 @@ static void ir_stmt(CompilerState *cs)
                 vtype[vi] = vt_code;    /* 窄整数：赋值时截断（IR_TRUNC） */
             }
             if (cur_tok(cs) == TOK_LBRACE) {
-                /* 数组初始化列表 {e0, e1, ...}：逐个 STORE 到元素槽 */
+                /* 数组初始化列表 {e0, e1, ...}：逐个 STORE 到元素槽；
+                 * 多维（PB-67）按维度递归填槽（行主序摊平） */
                 next_tok(cs);
-                int k = 0;
-                if (cur_tok(cs) != TOK_RBRACE) {
-                    for (;;) {
-                        int v = ir_expr(cs);
-                        v = ir_coerce(v, vetyp[vi] == 8 ? 2 : vetyp[vi]);   /* PB-1：元素类型协调（vetyp 8=char 元素，与 vtype 8=f32 编码冲突→按 i8 截断） */
-                        int addr = ir_new_vreg(F);
-                        ir_emit(F, IR_ADDR, addr, vt[vi], -1, k);
-                        ir_emit(F, IR_STORE, -1, addr, v, 0);
-                        k++;
-                        if (cur_tok(cs) != TOK_COMMA) break;
-                        next_tok(cs);
+                if (vndim[vi] >= 2) {
+                    ir_array_init_list(cs, vi, 0, 0);
+                } else {
+                    int k = 0;
+                    if (cur_tok(cs) != TOK_RBRACE) {
+                        for (;;) {
+                            int v = ir_expr(cs);
+                            v = ir_coerce(v, vetyp[vi] == 8 ? 2 : vetyp[vi]);   /* PB-1：元素类型协调（vetyp 8=char 元素，与 vtype 8=f32 编码冲突→按 i8 截断） */
+                            int addr = ir_new_vreg(F);
+                            ir_emit(F, IR_ADDR, addr, vt[vi], -1, k);
+                            ir_emit(F, IR_STORE, -1, addr, v, 0);
+                            k++;
+                            if (cur_tok(cs) != TOK_COMMA) break;
+                            next_tok(cs);
+                        }
                     }
                 }
                 expect(cs, TOK_RBRACE);
@@ -3350,9 +3510,60 @@ static void ir_stmt(CompilerState *cs)
                 int vr = ir_expr(cs);
                 ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             } else {
-                int vr = ir_expr(cs);
-                vr = ir_coerce(vr, vtype[vi]);   /* PB-1：目标类型协调（DTOI/ITOD/TRUNC） */
-                ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
+                /* 切片读入声明数组：cp i32[3] = arr[1..4] —— 按目标容量复制
+                 * （A 侧语义 memcpy(&cp, &arr[lo], elems*sizeof(T))：复制个数取
+                 * 声明容量而非切片长度） */
+                int copied = 0;
+                if (elems > 0 && cur_tok(cs) == TOK_IDENTIFIER) {
+                    LexerState *lx = cs->parser.lex;
+                    lx->peek_valid = 0;
+                    lexer_peek(lx);
+                    TokenType after = lx->peek_tok;
+                    lx->peek_valid = 0;
+                    if (after == TOK_LBRACKET) {
+                        int avi = var_find(cs->parser.lex->tok_str);
+                        if (avi >= 0 && ve[avi] > 0) {
+                            next_tok(cs);   /* arr */
+                            next_tok(cs);   /* [ */
+                            int lo = ir_expr(cs);
+                            if (cur_tok(cs) != TOK_RANGE) {
+                                nihao_error(cs, "ir: array '%s' must be initialized "
+                                                "from a slice 'arr[lo..hi]'", name);
+                                skip_newlines(cs);
+                                return;
+                            }
+                            next_tok(cs);   /* .. */
+                            ir_expr(cs);    /* hi：复制个数取目标容量，边界忽略 */
+                            expect(cs, TOK_RBRACKET);
+                            int swid = ir_elem_width(vetyp[avi]);
+                            int sis8 = (vetyp[avi] == 8);
+                            for (int k = 0; k < elems; k++) {
+                                int ik = ir_new_vreg(F);
+                                if (k == 0) {
+                                    ir_emit(F, IR_MOV, ik, lo, -1, 0);
+                                } else {
+                                    int kv = ir_new_vreg(F);
+                                    ir_emit(F, IR_CONST, kv, -1, -1, k);
+                                    ir_emit(F, IR_ADD, ik, lo, kv, 0);
+                                }
+                                int saddr = ir_elem_addr(cs, vt[avi], ik, swid, sis8);
+                                int val = ir_new_vreg(F);
+                                if (sis8) ir_emit(F, IR_LOAD8, val, saddr, -1, 0);
+                                else ir_emit(F, IR_LOAD, val, saddr, -1, 0);
+                                int daddr = ir_new_vreg(F);
+                                ir_emit(F, IR_ADDR, daddr, vt[vi], -1, k);
+                                if (sis8) ir_emit(F, IR_STORE8, -1, daddr, val, 0);
+                                else ir_emit(F, IR_STORE, -1, daddr, val, 0);
+                            }
+                            copied = 1;
+                        }
+                    }
+                }
+                if (!copied) {
+                    int vr = ir_expr(cs);
+                    vr = ir_coerce(vr, vtype[vi]);   /* PB-1：目标类型协调（DTOI/ITOD/TRUNC） */
+                    ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
+                }
             }
             skip_newlines(cs);
         } else if (nt == TOK_LBRACKET) {
