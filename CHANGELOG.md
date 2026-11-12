@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 2.0 线 P2 真实布局首刀（PB-74：`alignof` 真实对齐——ltree 裁 (b)「写宽降到元素宽度」的第一处落地；`alignof_builtin` 入名单，2026-11-12）
+
+- **待裁第 23 条三口径里 ltree 选了 (b)**：写宽降到元素宽度（`int32_t` / 窄 STORE），放弃「一切皆 8 字节槽」。这是这个方向的第一次提交。
+- **`alignof` 此前在 IR 恒返 8**（那句「IR 8 字节槽对齐」的注释就是根因），`alignof_builtin` 九条断言全部打 `bad`。本轮改为按类型真实对齐的编译期折叠：**标量 = 字节宽**（`void` / `string` 是宽度 0/8 的指针，对齐取 8）、**聚合体 = 成员最大对齐**（递归嵌套、union 同）、**enum = 4**、**数组 = 元素对齐**。
+- **为此给 `IrAggType` 补了标量成员字节宽 `msize[]`**——此前成员表只记数组成员宽（`marr_esize`），标量成员的类型宽度在解析时被丢弃。这是「成员真实宽度」信息进入前端的第一处，阶段 B（聚合体真实布局）正好复用同一张表。
+- **名单与计数**：`alignof_builtin` 入 `IR_SUBSET`（**60 条**）⇒ Windows ir-c / ir-native **50 → 51 PASS**、SKIP **19 → 18**、0 FAIL，c / native 68P/0F/3S 与比对档 36 格不变；Linux 68P/0F/4S、ir **51P/0F/19S**、0 FAIL。**不新增 IR 操作码，两档发射器、`ir_to_c.c`、A 线一行未改。** 交叉与 PB-73 基线 `comm` 对账**逐条不变**，`alignof_builtin` 两档输出改对（9 行与 `.expect` 相同）。
+- **下一步（台账 §10 的两阶段改造）**：阶段 A 窄标量——vreg 加字节宽表、窄型 LOAD/STORE、`ir_to_c` 发 `int32_t`、两发射器变宽帧槽（同时修掉 PB-48 D1 的 `malloc(i32)` 堆越界 8 字节写）；阶段 B 聚合/数组真实布局——成员按真实字节偏移、数组成员真实宽。剩 9 份 pos 缺口，阶段 B 收尾后一次性入名单。
+
 ### 2.0 线 P2 倒数第二簇（PB-73：IR 侧模块加载——`use` 把模块顶层声明内联进同一 IrProg；`use_mod` 入名单，追平撞墙在待裁第 23 条，2026-11-12）
 
 - **这是台账里最后一份不需要裁定的 pos 缺口**。A 侧 `module_import` 用「保存 lexer / 上下文 → 为模块源码建新 lexer → 递归 `parse_module` → 还原」把模块函数内联进同一份产物（产物 C 里 `int32_t add(...)` 直接出现在 main 之前）；IR 的 `ir_parse_file` 每次调用都 `P = ir_prog_new()`，是真正的单文件模型，`use` 被解析后跳过 ⇒ `use_mod` 报 `implicit declaration` + `undefined symbol 'add'`。

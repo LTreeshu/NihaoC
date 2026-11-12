@@ -381,6 +381,7 @@ typedef struct {
     int moff[IR_MAX_MEMB];             /* 成员起始槽偏移（递归展开） */
     int marr_len[IR_MAX_MEMB];         /* 成员是数组时的元素数（0=非数组成员） */
     int marr_esize[IR_MAX_MEMB];       /* 数组成员的元素字节宽（1/2/4/8） */
+    int msize[IR_MAX_MEMB];            /* 标量成员的字节宽（1/2/4/8；0=聚合成员）（PB-74 补） */
     int mcount;
     int mslots;                        /* 类型总槽数（递归；union=1 enum=1） */
 } IrAggType;
@@ -1488,6 +1489,30 @@ static long long type_size_token(TokenType t)
     }
 }
 
+/* alignof（PB-74）：标量对齐 = 字节宽；void/string 是对齐 8 的指针。 */
+static long long type_align_token(TokenType t)
+{
+    if (t == TOK_VOID || t == TOK_STRING) return 8;
+    long long s = type_size_token(t);
+    return s >= 0 ? s : -1;
+}
+
+/* 聚合体对齐 = 成员最大对齐（struct/union 同），递归嵌套；enum 按 int 4 字节。 */
+static long long ir_agg_align(int ti)
+{
+    IrAggType *a = &agg_types[ti];
+    if (a->kind == 2) return 4;                 /* enum */
+    long long al = 1;
+    for (int i = 0; i < a->mcount; i++) {
+        long long ma;
+        if (a->mtype[i] >= 0)            ma = ir_agg_align(a->mtype[i]);
+        else if (a->marr_esize[i] > 0)   ma = a->marr_esize[i];
+        else                             ma = a->msize[i] > 0 ? a->msize[i] : 1;
+        if (ma > al) al = ma;
+    }
+    return al;
+}
+
 /* `.(T)` 的显式类型 → 标量类型码（0=i64 1=f64 2=i8 3=i16 4=i32 5=u8 6=u16 7=u32 8=f32）。
  * 与变量声明处那条 vt_code 链同源；返回 -1 表示不是标量类型（`.()` 无类型形态或聚合类型）。 */
 static int ir_scalar_code_of_token(TokenType tt)
@@ -1754,18 +1779,43 @@ static int ir_primary(CompilerState *cs)
         return vr;
     }
     if (t == TOK_SIZEOF || t == TOK_TYPEOF || t == TOK_ALIGNOF) {
-        /* sizeof(type/expr) / typeof（映射为 sizeof）/ alignof（IR 槽模型返回 8） */
+        /* sizeof(type/expr) / typeof（映射为 sizeof）/ alignof（PB-74 按类型真实对齐，
+         * 不再恒返 8） */
         next_tok(cs);
         expect(cs, TOK_LPAREN);
         long long sz;
-        if (is_type_token(cur_tok(cs)) || cur_tok(cs) == TOK_IDENTIFIER) {
+        if (t == TOK_ALIGNOF) {
+            TokenType tt = cur_tok(cs);
+            long long al = type_align_token(tt);
+            if (al >= 0) {
+                next_tok(cs);
+            } else if (tt == TOK_IDENTIFIER) {
+                int ti = agg_type_find(cs->parser.lex->tok_str);
+                if (ti < 0) {
+                    nihao_error(cs, "ir: unknown type '%s'", cs->parser.lex->tok_str);
+                    next_tok(cs);
+                    al = 1;
+                } else {
+                    next_tok(cs);
+                    al = ir_agg_align(ti);
+                }
+            } else {
+                nihao_error(cs, "ir: expected a type name after 'alignof'");
+                al = 1;
+            }
+            if (cur_tok(cs) == TOK_LBRACKET) {   /* T[N]：数组对齐 = 元素对齐，吞掉后缀 */
+                next_tok(cs);
+                if (cur_tok(cs) == TOK_INT_CONST) next_tok(cs);
+                expect(cs, TOK_RBRACKET);
+            }
+            sz = al;
+        } else if (is_type_token(cur_tok(cs)) || cur_tok(cs) == TOK_IDENTIFIER) {
             sz = type_size_of(cs, NULL);
         } else {
             ir_expr(cs);            /* sizeof(expr)：表达式值为 8 字节 */
             sz = 8;
         }
         expect(cs, TOK_RPAREN);
-        if (t == TOK_ALIGNOF) sz = 8;   /* IR 8 字节槽对齐 */
         int vr = ir_new_vreg(F);
         ir_emit(F, IR_CONST, vr, -1, -1, sz);
         return vr;
@@ -4824,6 +4874,7 @@ static void ir_type_decl(CompilerState *cs)
             a->mtype[a->mcount] = -1;
             a->marr_len[a->mcount] = 0;
             a->marr_esize[a->mcount] = 0;
+            a->msize[a->mcount] = 0;
             if (cur_tok(cs) == TOK_IDENTIFIER) {
                 int ti2 = agg_type_find(cs->parser.lex->tok_str);
                 if (ti2 >= 0) {
@@ -4846,6 +4897,9 @@ static void ir_type_decl(CompilerState *cs)
                     expect(cs, TOK_RBRACKET);
                     a->marr_len[a->mcount] = (int)n;
                     a->marr_esize[a->mcount] = esize > 0 ? esize : 1;
+                } else {
+                    /* PB-74：标量成员也记下字节宽（alignof 与真实布局用） */
+                    a->msize[a->mcount] = esize > 0 ? esize : 8;
                 }
             }
             if (cur_tok(cs) == TOK_COLON) {        /* 位域 :N——记录宽度（槽内低 N 位） */
