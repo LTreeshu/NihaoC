@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 2.0 里程碑：A 线退役，仓库收敛为 IR-only 单一管线（2026-11-12）
+
+- **物理删除 A 线**（ltree 裁「物理删除」）：`parser.c` / `cgen.c` / `native.c` 及符号表 / 类型 / 可见性 / 模块 / 链接 / 内建运行时七个子系统共 **9 个源文件删除（-5495 行）**。NihaoC 现在是单一 IR 管线：`irparse.c`（前端）→ `ir.c`（中间层）→ `ir_to_c.c` / `ir_backend.c` / `ir_riscv64.c` / `ir_loongarch64.c`（出码）。
+- **CLI**：`-backend` 只接受 `ir-c | ir-native | ir-riscv64 | ir-loongarch64`（默认 `ir-c`）；`c` / `native` / `ir-arm64` / `ir-x86_64` 一律报「was removed」；`-run` 随 native 删除。
+- **门禁**：矩阵由四档（c/native/ir-c/ir-native）收敛为**两档**（ir-c / ir-native），无 `.expect` 用例的跨后端比对退化为「2 后端一致」。产物 C 的可移植性抽查（`-fsyntax-only`）由 c 档改挂 ir-c 档，**连锁暴露一条历史欠账**：`flow_no_free` 的 ir-c 产物 `puts(int64_t)` 缺 `(char*)` cast（ir-c 产物 C 此前从未被门禁查过，PB-52 家族），登记为 `xmake.lua` 的 `STRICT_SKIP` 豁免、待修。
+- **门禁现值**：ir-c **51P/0F/18S**、ir-native **51P/0F/18S**、0 FAIL、比对 36 格。
+- **追平口径因此终止**：删除 A 线砍掉了「IR vs A 逐字节一致」这把尺子，剩余 9 份 pos 缺口（真实布局家族）与 9 份 err 缺口不在「追平 A」框架内，改录为 **IR 线的已知边界**（见 `docs/IR_GAP_LEDGER.md`）；待裁清单第 23 / 33 / 34 条随之消解。
+
 ### 2.0 线 P2 真实布局阶段 A（PB-75：窄指针存取 + `malloc(T)` 指向类型——修掉 PB-48 D1 堆越界；ltree 裁 (b) 的存储层第一刀，2026-11-12）
 
 - **目标**：待裁第 23 条选 (b)「写宽降到元素宽度」。本提交是存储层的最小第一步：**指针解引用 / 下标存取的宽度降到元素宽**，先消灭 PB-48 的 D1——`malloc(i32)` 折 `malloc(4)` 后 `.()` 读写发 8 字节 `*(int64_t*)`，确定性覆盖紧邻的下一个存活分配（PB-53 已证 musl 相邻 `malloc(4)` 只差 4 字节）。
