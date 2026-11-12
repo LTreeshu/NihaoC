@@ -230,7 +230,18 @@ end
 --    声明型 string 的 ve[] 一直是 0 ⇒ len(s) 静默给 0）——只登记长度，不改 vetyp/寻址宽度。
 -- 括号类型 `(T)` / `(T)[N]` 也同轮落地（归一成内层类型 token 走同一条声明路径），但 type_forms **不入名单**：
 -- 它四条断言里 `arrow typed` 仍打 bad——`r->y` 是聚合体第二成员、越出 IR 的 1 个 8 字节槽，属待裁第 23 条。
-local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true, fx_types = true, malloc_demo = true, flow = true, flow_no_free = true, borrow = true, flow_move = true, features = true, for_init_forms = true, transfer = true, mathmod = true, module_top_forms = true, len_builtin = true, array_capacity_tiers = true, deref_slice = true, is_pattern_forms = true, stmt_terminators = true, literal_forms = true}
+-- PB-71 / PB-72（2026-11-12）新增 is_no_fallthrough（pos）与 len_unknown / void_subscript（err）：
+-- ⇒ IR 侧 PASS 46→49、SKIP 23→20。三处落地全在 irparse.c，不新增 IR 操作码，发射器与 A 线一行未改：
+-- ① 首匹配即止（A 侧 __is_matched，PA-16 / P4）：新增 is_matched_vreg，每轮 while 迭代在条件检查后、
+--    body 之前重置为 0；每条 is 子句开头 IR_JNZ 跳过、模式匹配后在进块前 MOV 置 1。A 侧把置位放在守卫
+--    条件里（`&& (__is_matched = 1)`），IR 无短路表达式故改为条件跳转之后发一条 MOV，语义等价。
+--    is_no_fallthrough 改前 IR 打 14 行（多 wild/range）、改后 7 行与 .expect 逐字节相同。
+-- ② len() 的静态可知性：新增 vlen_known 表（A 侧 Symbol.len_known 同判据）。ve[] 的 0 既表示标量也表示
+--    空动态字符串，光看 ve>0 会把后者误判 ⇒ 单开标志表，只在数组声明 / 字符串字面量初值 / 常量边界切片
+--    这些真正确定长度处登记。此前 len(标量) 静默给 0 并产出可执行文件（台账 E-c 桶）。
+-- ③ 通用 void 指针的裸下标 / 切片：ir_check_void_subscript，与 A 侧同判据同文案。两条例外——空下标 `p[]`
+--    是省略类型解引用（合法）、PB-68 的 VM_PTRARR（ve[] 为 0 但可下标）。此前静默接受非法程序。
+local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true, fx_types = true, malloc_demo = true, flow = true, flow_no_free = true, borrow = true, flow_move = true, features = true, for_init_forms = true, transfer = true, mathmod = true, module_top_forms = true, len_builtin = true, array_capacity_tiers = true, deref_slice = true, is_pattern_forms = true, stmt_terminators = true, literal_forms = true, is_no_fallthrough = true}
 local IR_ONLY = {ir_builtin = true, ir_slice = true, ir_sparam = true}
 -- IR_ERR_COVERED: err 用例中 IR 前端已实现对应诊断的（未列出的非 m2 用例仍在 IR 侧跳过）
 -- cooking_bare_var 刻意不入：IR 前端对块内裸 <var-decl> 只给 `ir: undeclared variable 'K'`，
@@ -250,7 +261,7 @@ local IR_ONLY = {ir_builtin = true, ir_slice = true, ir_sparam = true}
 -- 前缀故与 A 侧不同源、不能进 IR_ERR_COVERED」，本轮复测证伪——前缀在子串**之前**，共用子串
 -- `'is' pattern match only valid inside while loop body` 照样整体命中；`PA` 侧同判据（其
 -- IR_ERR_SKIP 黑名单从未含这两份，即 PA 的 IR 门禁一直真跑它们）
-local IR_ERR_COVERED = {safe_assign_removed = true, safe_dot_removed = true, linkas_not_implemented = true, bracket_attr_unknown = true, is_bad_pattern = true, is_outside_while = true, is_in_do_body = true, m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, m2e_param = true, m2f_retflow = true, m2f_retflow_const_flow = true, m2f_retflow_const_static = true, m2f_retflow_const_var = true, m2f_retflow_static_flow = true, m2f_retflow_static_var = true, str_array_bad_elem = true, str_array_overflow = true, multi_arr_nostr = true, multi_arr_overflow = true}
+local IR_ERR_COVERED = {safe_assign_removed = true, safe_dot_removed = true, linkas_not_implemented = true, bracket_attr_unknown = true, is_bad_pattern = true, is_outside_while = true, is_in_do_body = true, m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, m2e_param = true, m2f_retflow = true, m2f_retflow_const_flow = true, m2f_retflow_const_static = true, m2f_retflow_const_var = true, m2f_retflow_static_flow = true, m2f_retflow_static_var = true, str_array_bad_elem = true, str_array_overflow = true, multi_arr_nostr = true, multi_arr_overflow = true, len_unknown = true, void_subscript = true}
 
 task("test")
     on_run(function ()

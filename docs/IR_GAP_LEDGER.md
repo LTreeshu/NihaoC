@@ -48,6 +48,10 @@
   SKIP **26 → 23**（本轮共放行 3 份），c / native **68P/0F/3S** 不变、四档 0 FAIL。
   三方对账已按 §4 第 5 条执行：名单 ∩ 文件 = 57 / 3 / 22 无悬空；补集 12 与本文件标题及桶分布一致；
   `xmake test -b ir-c` 的 `[PASS]` / `[SKIP]` 逐类计数吻合。
+- **PB-71 / PB-72（2026-11-12）后现值**：`IR_SUBSET` **58** + `IR_ONLY` 3 ⇒ **pos IR 能编 61 / 72，缺口 11**；
+  `IR_ERR_COVERED` **24** ⇒ **err 覆盖 24 / 33，缺口 9**。门禁 ir-c / ir-native **46 → 49 PASS**、
+  SKIP **23 → 20**，c / native 68P/0F/3S 不变、四档 0 FAIL；Linux 68P/0F/4S + **49P/0F/21S**、0 FAIL。
+  **E-c 桶（非法程序被静默接受）本轮清空**——这是台账里最该优先收的一桶（PB-61 的排期结论第 4 条）。
 
 ## 1. 四桶定义
 
@@ -58,7 +62,7 @@
 | **G3 布局缺失** | 根因是「聚合体没有真实内存布局」（待裁第 23 条） | 需 ltree 先裁槽宽与布局口径 |
 | **G4 名单与用例** | 缺口在测试资产或名单本身：可提升、文案不同源、用例写法越界 | 改名单 / 改用例，不动编译器 |
 
-## 2. pos 缺口 12 份（72 份总数中，只有 A 线能编或能编但语义不同的那些）
+## 2. pos 缺口 11 份（72 份总数中，只有 A 线能编或能编但语义不同的那些）
 
 > **2026-11-12（PB-69）更正**：本节标题原写「20 份」，实测 **15** 份（判据与根因见 §0 末条）。表内同时改正两处成员错误：`borrow` 行划掉（PB-64 已放行）、补入从未进表的 `literal_forms`。
 > **2026-11-12（PB-70）**：15 → **12** 份（放行 3 份），另 5 份改归 G3；**G1 桶清空**，详见本节末的桶分布。
@@ -66,7 +70,7 @@
 | 用例 | IR 侧第一手结果 | 桶 | 要补的动作 |
 |---|---|---|---|
 | `alignof_builtin` | 四档都出码，但 IR 把 4 行 `align ... ok` 全打成 `bad` | G2 | `alignof` 在 IR 恒返回 8（那句「IR 8 字节槽对齐」的注释就是根因），要按类型真实对齐取值 |
-| `is_no_fallthrough` | 四档都出码，IR 多打 `wild` / `range` | G2 | IR 前端没有「首匹配即止」标记（`__is_matched` 在 irparse 里 0 命中），重叠 `is` 子句全部执行 |
+| ~~`is_no_fallthrough`~~ | ~~四档都出码，IR 多打 `wild` / `range`~~（14 行 vs A 的 7 行） | G2→放行 | **PB-71 已解**：按 A 侧 `__is_matched`（PA-16 / P4）同口径移植——新增 `is_matched_vreg`，每轮 while 迭代在条件检查后、body 之前重置 0；每条 `is` 子句开头 `IR_JNZ` 跳过、匹配后进块前 `MOV` 置 1。四档输出与 `.expect` 七行逐字节相同，已入 `IR_SUBSET` |
 | `multi_arr_decl` | IR 出码非法 C：`lvalue expected` | G2 | 多维数组读写在 IR 是降级路径，产物编译期就错 |
 | `str_array_init` | IR 出码：`assignment makes integer from pointer` | G2 | 字符串数组初始化按整型槽发，指针没落位 |
 | `use_mod` | IR 出码：`implicit declaration of function 'add'` | G2 | 跨模块符号未接（路线图阶段 2「link/use 跨文件」） |
@@ -109,12 +113,13 @@ G4 在 pos 侧仍为 0（`alignof_builtin` 与 `is_no_fallthrough` 四档输出�
 - **G1 语法缺失 0 份——纯语法缺口桶本轮清空**。这是 P2 的一个里程碑：`irparse.c` 能自决的那一类活干完了。
 - **G2 语义缺失 5 份**（不变）：`alignof_builtin`、`is_no_fallthrough`、`multi_arr_decl`、`str_array_init`、`use_mod`
 - **G3 布局缺失 7 份**：`array_member_default`、`struct_member_default`、`designator_init`、`ownerof`、`slice_str_infer`、`type_forms`、`void_slot_infer`
+**（PB-71 后 `is_no_fallthrough` 已放行，本段「12 份」按 11 份读：G2 由 5 收到 4。）**
 **⇒ 剩下 12 份里没有一份能靠「补语法」解决**：7 份直接挂待裁第 23 条，另 5 份 G2 里 `multi_arr_decl` /
 `str_array_init` / `alignof_builtin` 三份也与第 23 条同源（合计 **10 份**），只有 `is_no_fallthrough`
 （`__is_matched` 首匹配即止）与 `use_mod`（跨模块符号）是独立可做的。**下一手要么等第 23 条裁定，
 要么先做这两份独立的 G2。**
 
-## 3. err 缺口 11 份（IR 侧不参与或参与了但判据不同源）
+## 3. err 缺口 9 份（IR 侧不参与或参与了但判据不同源）
 
 > **2026-11-12（PB-69）更正**：本节标题原写「15 份」，那是 **PB-62 之前**的值；PB-62 收掉 4 份 E-c 后应为 **11**，标题当时漏改，于是与它自己的子类计数（3 + 6 + 2 = 11）自相矛盾了两天。实测 `IR_ERR_COVERED` 22 条 / err 33 份 ⇒ 缺口 **11**，与门禁 ir-c 的 11 条 `[SKIP] err/` 吻合。逐份：`cooking_bare_var`、`is_dangling_range`、`is_empty_range`（E-a 3）；`deref_bounds`、`flow_move_frozen`、`structof_bad_member`、`void_member_unknown`、`slice_str_overflow`、`default_init_overflow`（E-b 6）；`len_unknown`、`void_subscript`（E-c 2）。
 
@@ -122,7 +127,7 @@ G4 在 pos 侧仍为 0（`alignof_builtin` 与 `is_no_fallthrough` 四档输出�
 |---|---|---|---|
 | **E-a 已诊断、文案不同源** | 3 | `cooking_bare_var` `is_dangling_range` `is_empty_range` | IR 有等价拒绝，只是句子与共用 `.expect` 不同源；已在待裁第 26 条（READY / PARTIAL / COLLIDES 三批清单）里 |
 | **E-b IR 在更外层就拒，够不到语义诊断** | 6 | `deref_bounds` `flow_move_frozen` `structof_bad_member` `void_member_unknown` `slice_str_overflow` `default_init_overflow` | 全都断在解析层（`expected ')', got 'i64'` / `unexpected token '.'`），**修复依赖本表第 2 节的 G1**，不是独立工作 |
-| **E-c IR 完全不诊断** | ~~6~~ → **2**（2026-11-10 PB-62 收了 4 份） | 已收：`str_array_bad_elem` `str_array_overflow` `multi_arr_nostr` `multi_arr_overflow`（现为「有诊断 + 无产物」并已入 `IR_ERR_COVERED`）；余：`len_unknown`（需 `len_known` 表，否则会把空动态字符串误判）、`void_subscript`（需指针指向类型跟踪，与 G1 的 `p.(T)` 同根） |
+| **E-c IR 完全不诊断** | ~~6~~ → ~~2~~ → **0**（PB-62 收 4 份，**PB-72 收余下 2 份**） | 全部已收：`str_array_bad_elem` `str_array_overflow` `multi_arr_nostr` `multi_arr_overflow`（PB-62）+ **`len_unknown`**（新增 `vlen_known` 表，与 A 侧 `Symbol.len_known` 同判据）、**`void_subscript`**（`ir_check_void_subscript`，与 A 侧同判据同文案；两条例外：空下标 `p[]` 合法、PB-68 的 `VM_PTRARR` 可下标）。六份现在都是「有诊断 + 无产物」且已入 `IR_ERR_COVERED` ⇒ **E-c 桶清空** |
 
 更新（2026-11-10，PB-62）：**E-c 桶已由 6 份收到 2 份**——`str_array_bad_elem` / `str_array_overflow` / `multi_arr_nostr` / `multi_arr_overflow` 四份在 IR 前端补上与 A 同口径的三条诊断后转为「有诊断 + 无产物」，已入 `IR_ERR_COVERED`；门禁 ir-c / ir-native 由 28 份 PASS 升到 32 份（0 FAIL，c / native 与比对档不变，交叉矩阵 48/48 不变）。两份余量的卡点见本行右侧。
 更新（2026-11-11，PB-64 / PB-65）：**`print` 已在 IR 下降到 printf**，`flow` 四份全部放行——`flow` / `flow_no_free` / `borrow` 入 `IR_SUBSET` 并计 PASS，`flow_move` 入名单升比对档；`features` 现在只剩顶层 `alias` 一挡。同轮修掉**字符串池序列化不转义**的缺陷（含换行的串在 ir-c 产物里是非法 C、在交叉 `.s` 里劈成两行只靠汇编器容错），修好后交叉的 `unterminated string` 告警由 4 降到 0。`str_array_init` 由「出码语义坏」变成「能编能跑但输出截断」（IR `x/9/A` vs A `xiaoming/9/ABCDEFGH`），归第 23 条家族，**不入名单**。
@@ -240,3 +245,29 @@ err 侧 11 份不变，其中 E-b 6 份的修复依赖 pos 侧，E-a 3 份属第
 （各 2 份仍被帧护栏拒：`deref_slice` 3328、`ir_slice` 2208 > 2047），qemu 实跑各 **54 → 58 AGREE**、
 **2 CRASH_139 不变**（`ir_str` / `str_array_init`，PB-68 已用 HEAD 版 `irparse.c` 证明是先存缺陷）。
 `comm` 对账：**新增 8 行 AGREE（4 份 × 2 档）、消失 0 行** ⇒ 零回归。扫脚本与产物在 `ncc/build/p70x/`（gitignore）。
+
+## 8. PB-71 / PB-72 实测：首匹配即止 + E-c 桶清空（2026-11-12）
+
+**三项全部是「追平 A 的既有语义」，无新设计**：
+
+| 项 | A 侧机制 | IR 侧落地 | 结果 |
+|---|---|---|---|
+| `is_no_fallthrough` | `__is_matched`（PA-16 / P4）：while 每轮重置、每条 `is` 守卫 `!__is_matched && (…) && (__is_matched = 1)` | `is_matched_vreg`：每轮在条件检查后 / body 前 `MOV 0`；子句开头 `IR_JNZ` 跳过、匹配后进块前 `MOV 1` | IR 由 14 行降到 **7 行**，四档与 `.expect` 逐字节相同 |
+| `len_unknown` | `Symbol.len_known`，`len(x)` 对未登记者即时报错 | 新增 `vlen_known` 表（**不能用 `ve>0` 判**：0 既是标量也是空动态字符串），只在数组声明 / 字符串字面量初值 / **常量边界**切片处登记 | 由「静默给 0 且产出可执行文件」转为**有诊断 + 无产物** |
+| `void_subscript` | 非空下标落在 `TYPE_VOID` 变量上即拒 | `ir_check_void_subscript`，同判据同文案；**两条例外**：空下标 `p[]` 是省略类型解引用（合法）、PB-68 的 `VM_PTRARR`（`ve[]` 为 0 但可下标） | 同上 |
+
+**A 侧置位放在守卫条件里、IR 放在条件跳转之后**——IR 没有短路表达式，故改为「条件跳转 → MOV 1 → 块体」，
+语义等价（能走到 MOV 就说明模式已匹配）。这是移植时唯一需要改形的地方。
+
+**E-c 桶清空的意义**：PB-61 的排期结论把「编译器不报错」排在「编译器不支持」之前，理由是前者会**往外漏错程序**。
+六份现在全部有专属诊断且无产物，这一类风险在 IR 线上归零。
+
+**剩余缺口（pos 11 / err 9）**：
+- pos：**G3 布局 7 份** + **G2 4 份**（`alignof_builtin` / `multi_arr_decl` / `str_array_init` / `use_mod`）。
+  其中 **10 份挂待裁第 23 条**，只有 **`use_mod`** 独立可做——它需要 **IR 侧的模块加载**：
+  A 侧 `module_import` 用「保存 lexer / 上下文 → 为模块源码建新 lexer → 递归 `parse_module` → 还原」
+  把模块函数内联进同一份产物；而 `ir_parse_file` **每次调用都新建 `P = ir_prog_new()`**，是真正的单文件模型。
+  落地要把顶层声明循环抽成可重入的助手 + 模块路径解析。**注意 `module_import` 内部调的是 A 的 `parse_module`，
+  IR 不能直接复用它**；路径解析要么在 `irparse.c` 内自带一份，要么动共享的 `module.c`——**这一步的取舍另立一轮**。
+- err：**E-a 3 份**（文案不同源，属待裁第 26 条的分批清单）+ **E-b 6 份**（断在解析层，修复依赖 pos 侧的 G3）。
+  **E-c 0 份。**

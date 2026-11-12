@@ -52,6 +52,11 @@ static int *vndim;
 #define VM_PTRARR 1
 static int *vmode;
 
+/* PB-72：逻辑长度是否静态可知（A 侧 Symbol.len_known）。ve[] 的 0 既表示「标量」
+ * 也表示「空动态字符串」，光看 ve>0 会把后者误判成不可知 ⇒ 单开一张标志表。
+ * 只在数组声明 / 字符串字面量初值 / 切片赋值这些真正确定长度的地方置 1。 */
+static int *vlen_known;
+
 /* 可见性常量直接用 ncc.h 的 Visibility 枚举（PB-27.3+9：与 cgen 端 enum nihao_vis 数值统一：
  *   VIS_UNDEF=0, VIS_CONST=1, VIS_FLOW=2, VIS_STATIC=3, VIS_VAR=4）。 */
 
@@ -596,6 +601,10 @@ static int loop_depth;
 
 /* ---- is 模式匹配：当前循环条件表达式的值 vreg（while/do 设置，体内 is 匹配） ---- */
 static int is_val_vreg = -1;
+/* PB-71：首匹配即止标记（A 侧 __is_matched，PA-16 / P4）。每轮 while 迭代重置为 0，
+ * 每条 is 子句先检查它、匹配后在进块前置 1 ⇒ 同一轮里只有首个匹配的子句执行。
+ * -1 = 当前不在 while 体内（与 is_val_vreg 同步保存/恢复，支持嵌套）。 */
+static int is_matched_vreg = -1;
 
 /* PB-27.7：is 模式比较的类型感知——按 is_val_vreg 类型选 int (IR_CMP_*) 或
  * double (IR_FCMP) 指令；double 常量转位模式存 IR_CONST imm。 */
@@ -664,6 +673,7 @@ static void var_reset(void)
         vdim = nihao_malloc(g_cs, vn_cap * sizeof(*vdim));
         vndim = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vmode = nihao_malloc(g_cs, vn_cap * sizeof(int));
+        vlen_known = nihao_malloc(g_cs, vn_cap * sizeof(int));
     }
 }
 
@@ -708,6 +718,7 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
         vdim = nihao_realloc(g_cs, vdim, vn_cap * sizeof(*vdim));
         vndim = nihao_realloc(g_cs, vndim, vn_cap * sizeof(int));
         vmode = nihao_realloc(g_cs, vmode, vn_cap * sizeof(int));
+        vlen_known = nihao_realloc(g_cs, vlen_known, vn_cap * sizeof(int));
     }
     vn[vn_count] = name;
     pt[vn_count] = -1;
@@ -718,6 +729,7 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
     vtype[vn_count] = 0;
     vndim[vn_count] = 0;
     vmode[vn_count] = VM_SLOT;
+    vlen_known[vn_count] = (elems > 0) ? 1 : 0;
     for (int k = 0; k < IR_MAX_DIMS; k++) vdim[vn_count][k] = 0;
     int base = -1;
     if (elems > 0 && type_idx < 0) {
@@ -1021,6 +1033,21 @@ static void ir_scan_postfix(CompilerState *cs, int start, int *groups, int *has_
  *   - 根变量是「指针值数组」（malloc 退化形态）→ 下标寻址语义与帧数组不同；
  *   - 链含新形态（空下标 p[] / 数组型后缀 .(T[N])）；
  *   - 链有两组以上后缀（多步链）。 */
+/* PB-72：通用 void 指针的裸下标 / 切片——元素宽度静态未知，与 A 后端同判据拒绝
+ * （A 侧判 psym->type->kind == TYPE_VOID）。两条例外：
+ *   ① 空下标 `p[]` 是「省略类型解引用」（§5.1.1），合法；
+ *   ② PB-68 的 VM_PTRARR（`void[N] = malloc(void[N])` 退化形态）ve[] 为 0 但可下标。
+ * 调用时 cur_tok 必须是 `[`。 */
+static void ir_check_void_subscript(CompilerState *cs, int vi)
+{
+    if (vptr[vi] && ve[vi] == 0 && vmode[vi] != VM_PTRARR &&
+        ir_peek_ahead(cs, 1) != TOK_RBRACKET) {
+        nihao_error(cs, "ir: cannot subscript the generic 'void' pointer '%s'; "
+                        "write %s.(T)[i] to fix the element type first",
+                    vn[vi], vn[vi]);
+    }
+}
+
 static int ir_chain_needs_new_off(CompilerState *cs, int vi, int off)
 {
     if (vmode[vi] == VM_PTRARR) return 1;
@@ -1777,8 +1804,16 @@ static int ir_primary(CompilerState *cs)
                 next_tok(cs);           /* ( */
                 long long vlen = 0;
                 if (cur_tok(cs) == TOK_IDENTIFIER) {
-                    int vi2 = var_find(cs->parser.lex->tok_str);
-                    if (vi2 >= 0) vlen = ve[vi2];
+                    const char *lname = cs->parser.lex->tok_str;
+                    int vi2 = var_find(lname);
+                    /* PB-72：与 A 后端同判据（Symbol.len_known）——标量与长度未登记的
+                     * 变量都必须即时报错，此前一律静默给 0（台账 E-c 桶）。 */
+                    if (vi2 < 0 || !vlen_known[vi2]) {
+                        nihao_error(cs, "ir: len: logical length of '%s' is not statically known",
+                                    lname);
+                    } else {
+                        vlen = ve[vi2];
+                    }
                     next_tok(cs);
                 }
                 expect(cs, TOK_RPAREN);
@@ -2030,6 +2065,7 @@ static int ir_primary(CompilerState *cs)
         }
         if (cur_tok(cs) == TOK_LBRACKET) {
             /* 数组下标 arr[idx] -> LOAD(&arr[0] + idx*8)；切片 arr[lo..hi] -> 地址 */
+            ir_check_void_subscript(cs, vi);   /* PB-72 */
             next_tok(cs);
             if (cur_tok(cs) == TOK_RANGE) {
                 /* arr[..hi]：省略起始的切片 → &arr[0] */
@@ -3110,14 +3146,22 @@ static void ir_stmt_impl(CompilerState *cs)
         ir_emit(F, IR_JZ, -1, c, -1, 0);
         F->ins[F->ins_count - 1].label = l_end;
         int save_is = is_val_vreg;
+        int save_matched = is_matched_vreg;
         /* PB-27.1：do 循环不设置 is_val_vreg（do 不支持 is 模式匹配，
          * 对齐 2026-09-01 is 规范：is 仅配合 while）。
          * 若 do 体内出现 is，会触发 is_val_vreg<0 报错（下方 §"ir: do loop does not support 'is' pattern"）。 */
         if (!is_do) {
             is_val_vreg = c;            /* 仅 while 设置条件值 */
+            /* PB-71：每轮迭代重置首匹配标记（与 A 侧 `__is_matched = 0;` 同位置：
+             * 条件检查之后、body 之前）。槽只分配一次，重置在循环体内。 */
+            is_matched_vreg = ir_new_vreg(F);
+            int zero = ir_new_vreg(F);
+            ir_emit(F, IR_CONST, zero, -1, -1, 0);
+            ir_emit(F, IR_MOV, is_matched_vreg, zero, -1, 0);
         }
         ir_block(cs);
         is_val_vreg = save_is;
+        is_matched_vreg = save_matched;
         ir_emit(F, IR_JMP, -1, -1, -1, 0);
         F->ins[F->ins_count - 1].label = l_loop;
         ir_emit(F, IR_LABEL, -1, -1, -1, 0);
@@ -3242,6 +3286,11 @@ static void ir_stmt_impl(CompilerState *cs)
             return;
         }
         int l_done = ir_new_label(F);
+        /* PB-71：本轮已有子句匹配过 ⇒ 整条跳过（A 侧守卫的 `!__is_matched &&` 部分） */
+        if (is_matched_vreg >= 0) {
+            ir_emit(F, IR_JNZ, -1, is_matched_vreg, -1, 0);
+            F->ins[F->ins_count - 1].label = l_done;
+        }
         TokenType pt = cur_tok(cs);
         if (pt == TOK_IDENTIFIER && strcmp(cs->parser.lex->tok_str, "_") == 0) {
             /* PB-27.5：通配符 `_`：匹配任意 is_val（恒真），不 emit 条件跳转 */
@@ -3336,6 +3385,14 @@ static void ir_stmt_impl(CompilerState *cs)
             next_tok(cs);
             skip_newlines(cs);
             return;
+        }
+        /* PB-71：模式已匹配 ⇒ 进块前置位，使本轮后续子句全部跳过
+         * （A 侧把置位放在守卫条件里 `&& (__is_matched = 1)`，IR 无短路表达式，
+         * 改为在条件跳转之后、块体之前发一条 MOV，等价）。 */
+        if (is_matched_vreg >= 0) {
+            int one = ir_new_vreg(F);
+            ir_emit(F, IR_CONST, one, -1, -1, 1);
+            ir_emit(F, IR_MOV, is_matched_vreg, one, -1, 0);
         }
         if (cur_tok(cs) == TOK_LBRACE) {
             ir_block(cs);
@@ -3491,14 +3548,18 @@ static void ir_stmt_impl(CompilerState *cs)
                             int addr;
                             if (open_lo) {
                                 /* arr[..hi] → &arr[0]，长度 = hi */
-                                if (vreg_const(F, hi, &hiv))
+                                if (vreg_const(F, hi, &hiv)) {
                                     ve[vi] = (int)hiv;
+                                    vlen_known[vi] = 1;   /* PB-72 */
+                                }
                                 addr = ir_new_vreg(F);
                                 ir_emit(F, IR_ADDR, addr, vt[avi], -1, 0);
                             } else {
                                 long long lov;
-                                if (vreg_const(F, lo, &lov) && vreg_const(F, hi, &hiv))
+                                if (vreg_const(F, lo, &lov) && vreg_const(F, hi, &hiv)) {
                                     ve[vi] = (int)(hiv - lov);
+                                    vlen_known[vi] = 1;   /* PB-72 */
+                                }
                                 addr = ir_elem_addr(cs, vt[avi], lo,
                                                         ir_elem_width(vetyp[avi]),
                                                         vetyp[avi] == 8);
@@ -3553,6 +3614,7 @@ static void ir_stmt_impl(CompilerState *cs)
                 /* s = "abc"（类型由字面量推断）：逻辑长度 = 字面量长（len() 用），
                  * 槽值 = 池地址，vetyp=8 标记 byte 寻址（与 char[] 同语义） */
                 ve[vi] = (int)strlen(cs->parser.lex->tok_str);
+                vlen_known[vi] = 1;   /* PB-72 */
                 if (fresh) vetyp[vi] = 8;
             }
             int vr = ir_expr(cs);
@@ -4155,6 +4217,7 @@ static void ir_stmt_impl(CompilerState *cs)
             } else if (vetyp[vi] == 8 && cur_tok(cs) == TOK_STRING_LITERAL) {
                 /* 动态字符串 char[] = "lit"：记录逻辑长度（len() 用），存池地址 */
                 ve[vi] = (int)strlen(cs->parser.lex->tok_str);
+                vlen_known[vi] = 1;   /* PB-72 */
                 int vr = ir_expr(cs);
                 ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             } else if (nt == TOK_STRING && cur_tok(cs) == TOK_STRING_LITERAL) {
@@ -4163,6 +4226,7 @@ static void ir_stmt_impl(CompilerState *cs)
                  * ve[] 一直是 0 ⇒ len(s) 静默给 0（能编能跑但答案是错的）。
                  * 只登记长度，不改 vetyp/寻址宽度——string 的字节布局仍属待裁第 23 条。 */
                 ve[vi] = (int)strlen(cs->parser.lex->tok_str);
+                vlen_known[vi] = 1;   /* PB-72 */
                 int vr = ir_expr(cs);
                 ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             } else {
@@ -4270,6 +4334,7 @@ static void ir_stmt_impl(CompilerState *cs)
                 ir_chain_assign(cs, vi);
                 return;
             }
+            ir_check_void_subscript(cs, vi);   /* PB-72 */
             next_tok(cs);           /* [ */
             int idx = ir_expr(cs);   /* lo 或单下标 */
             if (cur_tok(cs) == TOK_RANGE) {

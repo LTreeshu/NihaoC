@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 2.0 线 P2 第八簇（PB-71 / PB-72：IR 补首匹配即止 `__is_matched`，并收掉 E-c 桶最后两份诊断——`len()` 静态可知性与通用 `void` 裸下标；三份入名单，**E-c 桶清空**，2026-11-12）
+
+- **三项都是追平 A 的既有语义，无新设计**。上一轮把 G1 语法桶清空后，台账里只剩两项独立可做（其余 10 份挂待裁第 23 条），本轮把其中一项加上 E-c 的两份诊断一起收掉。
+- **① 首匹配即止（`is_no_fallthrough`）**：A 侧 `__is_matched`（PA-16 / P4）在 while 每轮重置、每条 `is` 守卫写成 `!__is_matched && (…) && (__is_matched = 1)`；IR 侧 `__is_matched` **0 命中**，重叠子句全部执行 ⇒ 同一份源码 IR 打 **14 行**而 A 打 7 行。落地新增 `is_matched_vreg`：while 每轮在**条件检查之后、body 之前**重置 0，子句开头 `IR_JNZ` 整条跳过、模式匹配后**进块前** `MOV 1`。**A 把置位放在守卫条件里，IR 没有短路表达式，故改形为「条件跳转 → MOV → 块体」，语义等价**（能走到 MOV 就说明模式已匹配）——这是移植时唯一需要改形的地方。改后四档与 `.expect` 七行逐字节相同，**riscv64 / loongarch64 两档实跑也相同**。
+- **② `len()` 的静态可知性（`err/len_unknown`）**：此前 `len(标量)` **静默给 0 并产出可执行文件**。新增 `vlen_known` 表，与 A 侧 `Symbol.len_known` 同判据。**不能用 `ve > 0` 判**——`ve[]` 的 0 既表示「标量」也表示「空动态字符串」，那样会把后者误判成不可知（用假阳性换覆盖，台账早就点明过这个坑）。只在真正确定长度处登记：数组声明（`elems > 0`）、字符串字面量初值三处、**常量边界**切片两处（边界非常量则不登记）。
+- **③ 通用 `void` 指针的裸下标（`err/void_subscript`）**：此前 `arryptr void = &arry` 后 `arryptr[0] = 0` 被**静默接受并产出可执行文件**。新增 `ir_check_void_subscript`，与 A 侧同判据同文案。**两条例外必须留**：空下标 `p[]` 是「省略类型解引用」（§5.1.1，合法）；PB-68 的 `VM_PTRARR`（`void[N] = malloc(void[N])` 退化形态，`ve[]` 为 0 但可下标）——漏掉任一例就会误伤 `deref_slice` 与 `void_slot_infer`。
+- **E-c 桶清空**：PB-61 的排期结论把「编译器不报错」排在「编译器不支持」之前，理由是前者会**往外漏错程序**。六份（PB-62 四份 + 本轮两份）现在全部「有专属诊断 + 无产物」，这一类风险在 IR 线上归零。
+- **名单与计数**：`is_no_fallthrough` 入 `IR_SUBSET`（**58 条**）、`len_unknown` / `void_subscript` 入 `IR_ERR_COVERED`（**24 条**）⇒ Windows ir-c / ir-native **46 → 49 PASS**、SKIP **23 → 20**、0 FAIL，c / native **68P/0F/3S** 与比对档 **36 格**不变；Linux c / native 68P/0F/4S、ir **49P/0F/21S**、0 FAIL、比对档 35 格。三方对账：名单 ∩ 文件 58 / 3 / 24 无悬空，补集 pos **11** / err **9**。**不新增 IR 操作码，两档发射器与 `ir_to_c.c` 一行未改，A 线一行未改。**
+- **零回归**：`is` 族四份（`ir_is` / `pattern` / `is_vis_patterns` / `is_pattern_forms`）全部仍 PASS、三份 `is` 系 err 诊断未变；void 族 `deref_slice` 四档仍 PASS、`ir_ptr` / `ir_ptr2` 比对档仍 4 后端一致。**交叉与 PB-70 基线逐条不变**（`comm` 对账新增 **0** 行、消失 **0** 行；ir-c 参照 62、两档各 60 链接、58 AGREE / 2 既有 CRASH）。
+- **剩余与下一步**：pos **11** = G3 布局 7 + G2 4，其中 **10 份挂待裁第 23 条**；err **9** = E-a 3（文案不同源，待裁第 26 条）+ E-b 6（依赖 pos 的 G3）+ **E-c 0**。**唯一独立可做的是 `use_mod`**——它需要 IR 侧的模块加载：A 侧 `module_import` 用「保存 lexer / 上下文 → 为模块源码建新 lexer → 递归 `parse_module` → 还原」把模块函数内联进同一份产物，而 `ir_parse_file` **每次调用都新建 `P`**，是真正的单文件模型。**`module_import` 内部调的是 A 的 `parse_module`，IR 不能直接复用**；路径解析要么在 `irparse.c` 自带一份、要么动共享的 `module.c` —— 这一步取舍另立一轮。台账新增 **§8**。
+
 ### 2.0 线 P2 第七簇（PB-70：IR 前端补齐语法形态七处——`is` 带符号模式与区间、`;` / `#` 终止符、`return;`、一元 `+` 字面量前缀、布尔字面量、括号类型、声明型 `string` 的 `len()`；三份用例入名单，**G1 语法缺失桶清空**，2026-11-12）
 
 - **先复测再动手，结果推翻了台账的分类**。台账把 8 份 pos 缺口挂在 G1「语法缺失」，逐份取第一手诊断后**只有 3 份真是纯语法**；另 5 份（`ownerof` / `void_slot_infer` / `designator_init` / `slice_str_infer` / `type_forms`）的根因都是**聚合体真实布局**，已改归 G3。最典型的是 `ownerof`——台账记的是「`.()` 后缀链形态」，实测真卡点是 `structof` / `holdof` / `unionof` / `bitoffsetof` 四个从属查询内置加 `&聚合体.成员`，全要成员真实偏移（PB-33 的 P2 当年就明确让 IR 保持拒绝），与后缀链毫无关系。
