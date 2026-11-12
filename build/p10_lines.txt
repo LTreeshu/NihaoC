@@ -1,0 +1,52 @@
+===== L49
+| 整变量重绑定的作用域界定 | `lhs_bare_ident` 区分「改变量本身」与「改所指对象」，只有前者重登记存储来源 | 置位 parser.c:3183（`parse_postfix` 尾，`lhs_bare_ident = !chained`）、解引用侧另置 `lhs_was_deref`（parser.c:3008），两者都在表达式解析结束时统一复位（parser.c:3484–3488）；消费 parser.c:3366（撤销 `len` 记录）、3317–3320（撤销所指记录）、3391–3396（重登记 `no_auto_free`） | ✅ 已实现（PB-33 P4；P5b 把解引用链的单独清零并入统一复位） |
+===== L64
+| `is <int-literal>` / `is -<int>` / `is +<int>` | `== v` / `== -v` / `== +v`（前导 `+` 折叠进值，C 侧不再发 `+`） | 带符号前缀 parser.c:1716–1721，`-` 后非整数即报 `invalid 'is' pattern: '-' must be followed by an integer`（1700–1702）；取值 1704–1705、公式 `== lo` 在 1727 | ✅ 已实现（PB-33 P7 按 `PA` 的 PA-57 重写为带符号档；用例 `pos/is_pattern_forms`） |
+===== L65
+| `is lo..hi` 闭区间，两端各可带符号 | `>= lo && __is_val <= hi` | parser.c:1729–1747（比较式在 1724；上界非整数报 `invalid 'is' range: expected an integer upper bound`，1714–1715） | ✅ 已实现（P7 补上界符号与前缀校验） |
+===== L67
+| `is <enum-variant>` / 已知常量 | `TOK_IDENTIFIER` 分支按值比较 `== pat` | parser.c:1751–1759（兜底 `else cgen_raw(" == %s", pat)` 在 1736） | ✅ 已实现 |
+===== L68
+| `is _` 通配符恒匹配 | 恒真分支 `(1)`（IR 侧不发比较与 JZ） | parser.c:1702–1711（恒真式在 1683）、irparse.c:2036–2039 | ✅ 已实现（v1.0.2 补全） |
+===== L100
+| 多变量声明带数组类型 `var {aa = "aa", …} char[3]` | 改前该分支只发 `c_type_name` + 变量名，数组后缀被静默丢弃（生成 `char aa = "aa";`）；改后与单变量分支同口径：定长数组保留数组存储并登记声明容量，动态 `char[]` 仍退化为 `char*` 并登记字面量长度；三条诊断（初值不是字符串字面量 / 元素非 `char` / 超容量），后两条与单变量共用文案 | parser.c:1134（`arr_cap` 求值）、1132–1149（三条诊断）、1150–1152（接 `c_type_suffix`）、1167–1175（登记 `len_known`） | ✅ 已实现（PB-33 P5 移植 `PA` 的 PA-34，c/native）。**IR 前端不支持该声明形态**，用例不入白名单 |
+===== L101
+| `len(x)` 逻辑长度 | 编译期常量：定长数组=各维元素个数乘积，动态字符串 `char[]` / 推断字符串=字面量长度；长度在声明处登记到符号表，整变量重新赋值（LHS 为裸标识符）即撤销记录，让后续 `len()` 保守报错而非返回过期值；实参非标识符、或静态不可知时即时报错（`len expects an identifier` / `len: logical length of 'n' is not statically known`，后者另出 `0` 兜底以免产物 C 空表达式）。**切片变量 `hi-lo` 一档随 P5b 落地**：切片读两侧同为字面量时把 `hi-lo` 记进 `slice_len`（parser.c:3100–3103、3130–3131），声明处据此登记（parser.c:1588–1590） | 求值与报错 parser.c:2700–2720（`parse_primary` 的标识符内置函数表，置于 `sizeof` 之前）、登记 parser.c:1587–1600（单变量）/ 1167–1175（多变量）、撤销 parser.c:3364–3367（`parse_assign`）、字段 ncc.h:150–153（`len_known` / `logical_len`）与 262–268（ParserState 的 `slice_len_known` / `slice_len`） | ✅ 已实现（PB-33 P5 移植 `PA` 的 PA-27 的标识符与数组/字符串部分 + P5b 补切片档，c/native）。**IR 前端 `len()` 走 `ve[]` 表**，静态不可知时返回 0 而非报错，故 `err/len_unknown` 刻意不入 `IR_ERR_COVERED`（IR 侧 SKIP） |
+===== L112
+| `.(T)` 可处于后缀链任意位置，其后继续下标 / 成员 / 切片 | 通用 postfix 循环：每个算子把「已生成的前缀 C 文本」整体包成 `(*(<T>*)(prefix))` 再续链；前缀经 `cgen_mark` / `cgen_slice` / `cgen_truncate` 回取，缩进按 `%*s` 重发 | parser.c:2942–2954（`cgen_take_prefix`）、2921–2946（`deref_prefix`）、2949–2975（`deref_step`）、2978–3128（`parse_postfix`）；回退后须按残留文本重算行首缩进状态（cgen.c:124–130） | ✅ 已实现（P5b 移植 `PA` 的 PA-25 ①–⑥，`parse_deref_chain` 已删除）。**IR 前端无对应路径**，属 2.0 |
+===== L116
+| 通用 `void` 槽的静态还原（`PA-55`） | 声明处由 `malloc(T)` / `&x` 定下所指类型，省略类型的裸 `.()` / `p[]` / `q->m` 据此还原成 `(*(T*)(p))`；所指类型推不出时 `->m` 与带索引下标各给专属报错，裸 `.()` 才退回 `void**` 读回指针值 | 来源登记 parser.c:1478–1482（`&x` 前瞻：`peek_ahead_ident` parser.c:129 + `ctype_persist` parser.c:140）、965–972、2737–2779（`malloc(T)` 的字节数与元素类型）；还原 parser.c:2991–2997（`deref_prefix` 的 `void` 分支）、3091–3113（`->` 分支）；字段 ncc.h:147–149 | ✅ 已实现（P5b；用例 `pos/void_slot_infer`、`err/void_member_unknown`；带索引下标 `p[i]` / 切片 `p[a..b]` 在 `void` 槽上仍拒绝，口径见「数组与字符串初值口径」表末行） |
+===== L117
+| 切片读 `p[a..b]` | 生成「指向第 a 号元素的指针」`&p[a]`，长度不进入值本身（C 无切片类型）；上下界同为字面量时另记录 `hi-lo` 供 `len(切片变量)` 取用；`[..b]` 省略起点等价 `[0..b]`，长度记为 `b` | parser.c:3088–3103（`[..b]`）、3053–3075（`[a..b]`）、3044–3047 与 3074–3075（`rhs_was_slice` / `slice_lmark` / `slice_len_known` 登记） | ✅ 已实现（PA-25 / PA-27；用例 `pos/deref_slice`、`pos/len_builtin`） |
+===== L118
+| 切片读赋给固定数组 `T[n] x = p[a..b]` | 按**声明容量**逐元素复制（`memcpy`），非别名 | parser.c:1604–1610（复制分支）、1518–1524（先解析右值并回取其文本） | ✅ 已实现（PA-25） |
+===== L119
+| 切片写 `p[a..b] = {v0, v1, …}` 与 `p[a..b] = "abc"` | 值列表逐元素写回（逗号表达式，一条 C 语句）；字符串右值按**字节**整段 `memcpy`（含结尾 `\0`），闭区间右界 `b` 即最后一个可写字节，`strlen > b-a` 时报 `string needs N bytes with terminator, slice holds M`；其余右值形态专属报错 | parser.c:3378–3428（3328–3346 为字符串分支；3322 的 `slice_lmark == lmark` 门控保证只有「赋值左侧整体就是这次切片读」才走写回） | ✅ 已实现（PA-25 / PA-26；用例 `err/slice_str_overflow`）。字符串右值的转义归一随 **P7** 落地：该分支现改用 `cgen_string_lit()` 输出（parser.c:3396），口径见下文「语句终止符与语法形态合规」一节 |
+===== L120
+| `T[n] x = malloc(T[n])` 声明退化为指针 | 生成 `T (*x)…`（仅省略最前维度：`void[4][5]` → `void* (*x)[5]`），`malloc` 字节数按元素个数乘算 | parser.c:820–834（`c_decay_suffix`）、1549–1554（退化声明头）、2737–2779（字节数乘算） | ✅ 已实现（PA-25） |
+===== L121
+| 切片变量 `s = a[lo..hi]`（类型推断声明） | 声明后退化为**元素指针** `E *s = &a[lo]`（视图，不复制），`s.()` 取首元素，`len(s)` 取 `hi-lo` | parser.c:1565–1570（推断切片头）、1566–1568（长度登记）、2931–2934（数组槽裸 `.()` 按最深元素解引用） | ✅ 已实现（PA-27） |
+===== L136
+| `for` 头带类型声明 `for i i32 = 0; …`（§6，`<for-init> ::= "<identifier>" "=" "<expr>` | `<var-decl>`） | init 新增声明档：`cgen_mark()` → `parse_declaration` → `cgen_take_prefix` 回取文本、去掉收尾 `;` 与空白，再拼 `for (` ——因此 `cgen_raw("for (")` 从公共前置下放到各分支内。推断档 `for i = 0` 同时改为按 `PA` 用 `infer_init_type` 输出声明 | parser.c:1855–1912（`case TOK_FOR`；推断档 1845–1858、声明档 1859–1872） | ✅ 已实现（P7；用例 `pos/for_init_forms`）。推断档里的常量可见性仍保留**本分支的 `VIS_VAR` 口径**：`Visibility` 枚举两侧不兼容，不随本轮收敛 |
+===== L139
+| 顶层 `use` / `link` / 终止符可任意交错，且 `use a.b.c` 点号多段（§10，`<use-decl> ::= "use" "<identifier>` { "." "<identifier>" } | 两段顺序循环（先 `use` 后 `link`）合成一个交错循环，含 `;` / `#` 分支与点号累加（诊断 `expected module name after '.' in 'use'`）；模块名保持点号形式供符号查找，查文件时另按目录层级试 `std/io.nc`（点号原样拼出的 `stdlib/a.b.nc` 保留一次尝试，兼容单段命名） | parser.c:500–568（交错循环；点号档 502–519）、553–556（顶层声明循环的终止符分支）；module.c:81–99（候选路径，新增把点号换成 `/` 的 `slashed` 形式） | ✅ 已实现（P7；用例 `pos/module_top_forms`，无 `func main` → 门禁按 `(module)` 档编译，不进一致性档） |
+===== L155
+| 默认值只在**该类型的变量声明处**生效，不进聚合体 | 声明无初值时调 `default_init_text()`，返回正数即出 ` = { .x = 7, .y = 8 }`；有初值时改由初始化列表按层补未覆盖成员 | parser.c:1626–1631（`parse_declaration` 的无初值分支）、757–791（`default_init_text`） | ✅ P8（**实测表 F1 结案**） |
+===== L156
+| 逐成员成形 `.a = 7, .b = 9` | `member_default_text()` 遍历成员链，跳过 `def_init == NULL` 与被用户位置初值覆盖的前 `skip` 个，逐项 `snprintf` 追加 | parser.c:955–958（口径注释）、937–961（942 非聚合守卫、947–948 遍历与 skip、955–957 拼接） | ✅ P8 |
+===== L157
+| `union` 各成员共享槽位 | 只取首个带默认值的成员（已拼一个即停），且用户一给位置初值就以用户为准（`skip > 0` 直接返回空） | parser.c:958（口径注释）、944、954 | ✅ P8 |
+===== L158
+| 聚合类型**数组**变量的成员默认值逐项展开（PA-56） | `default_init_text()` 遇数组把元素默认文本重复声明容量次（容量静态不可知即不展开、返回 0）；初始化列表的尾数补全只在「每项都是 `{…}`」时按元素个数乘积补齐 | parser.c:783–804（763 处 `cap <= 0`）、730–745（730 `all_braced` 守卫、731 `type_array_count`）、630–641、643–647、682 | ✅ P8 |
+===== L159
+| 展开撑破缓冲上限时**即时报错**，绝不产出被截断的初始化器 | 四处余量检查（数组循环 / 元素拼接 / 聚合包裹）共用一个 `default_init_too_big()`，文案带 `DEFAULT_INIT_BUF` 的实际字节数；声明点收到 `-1` 只是不再出初始化器，错误已报 | parser.c:685–690、760–763、792–795、799–802、808–811；ncc.h:44（`DEFAULT_INIT_BUF 8192`） | ✅ P8（用例 `err/default_init_overflow`） |
+===== L160
+| 指定式初值 `.[名] = 表达式`（§5 `<designator>`） | 三项前瞻（`.` / 标识符 / `=`）确认后原样透传成 C 的 `.名 = `，值表达式照常解析 | parser.c:714–723（698 输出成员名）、949–953（点名过滤） | ✅ P8（用例 `pos/designator_init`） |
+===== L162
+| 位置初值与指定式**混写**（`C c = { 5, .ttl = 7 }`，§5.1.1） | 有指定式时改为「完全不按位置跳过」（727 传 `has_d ? 0 : k`），指定式项也使 `all_braced` 归零、数组尾数不再补 | parser.c:704、723、727、749–751 | ⚠️ **两线共同上游缺陷**，见下方遗留说明 |
+===== L356
+| `is` 各模式行号 | 见「`is` 模式匹配」表（本分支锚点） | 本分支 `parse_is_stmt` parser.c:1692–1779（P4 改的是子句守卫与 while 脚手架，P7 改的是整段整数模式与收尾文案）：`_` 通配符 1680–1689、共用守卫头 1691、带符号前缀 1694–1702、区间与空区间校验 1707–1725、标识符/枚举档 1729–1745、`invalid 'is' pattern` 1747、`expected '{' after 'is' pattern` 1755；`PA` 同函数在其 parser.c:1647 起。`is` 块由 irparse.c:2241 起的 `_` 分支处理 |
+===== L365
+| `alignof(T)` 类型对齐（§2.3，BNF `<builtin-call>`） | `PA` 侧同文件该节标 ✅ 已实现（v1.0.2 / PA-24：编译期自算后只输出整数字面量）；**本文件此前无该节** | **2026-09-26 随 PB-33 的 P3 落到本分支 A 后端**：新增 `type_align()`（type.c:71–102，原型 ncc.h:428——旧值 389 为既有失准锚点，P5 轮按实测改正），编译期递归求对齐——数组/别名经 `ref` 取元素对齐、`struct`/`union` 取最宽**非位域**成员（递归深度上限 16）、`void` 按 §5.1 通用指针计 8、其余取 `CType.align` 为 0 时回落 `type_default_align(kind)`；`parser.c` 两处分派由 `cgen_raw("_Alignof(%s)", …)` 改为 `cgen_raw("%u", type_align(&tmp))`（parser.c:2198 关键字路径、2683 标识符路径——此前记为 2357，属既有失准锚点，2357 一直是 `vis_check_usable()` 那处，P7 按新行号改正；后者按 `PB-6` 已记录的既有事实**实际不可达**——`alignof` 是关键字 token，改它只为与 `PA` 同源，不新增覆盖主张）。改前实测：`c` / `native` 链接期 `tcc: error: undefined symbol '_Alignof'`，`ir-c` 因固定返 8 而九项断言全错。**IR 前端未改**（`irparse.c:909` 仍按槽模型固定返回 8，与 `PA` 的 IR 现态一致）。用例 `pos/alignof_builtin.nc` 自 `PA` 原样带来（含其注释里的 PA-24 溯源，可与 PB-33 表 P3 行对号），**未列入** `IR_SUBSET` |
+===== L370
+| 产物 C 的字符串字面量转义（实测表 **F2** / `PA` 的 PA-50）| F2 行记的是「生成的 C 含真实 0x0A 字节，tcc 容忍而 gcc/clang/MSVC 拒绝」，并注明「当前门禁全在 tcc 下跑，故未暴露」 | **P7 已在本分支落地**（原计划留 P9，`pos/literal_forms` 复测不过逼出）：新增 `cgen_string_lit()`（cgen.c:136–174，原型 ncc.h:377），`parse_primary` 的字面量出口（parser.c:2669）与切片写的字符串出口（3340）改走它；改后**门禁全部 57 份产物 C 过 `clang -fsyntax-only`**，即 F2 在本分支结案。P9 只剩把该抽查接进 `xmake.lua`。**2026-10-02 随 P9 结案**：该抽查已接进门禁 c 档并对 58 份产物全绿，F2 从此由每轮人工体检转为门禁自动拦截 |

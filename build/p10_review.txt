@@ -1,0 +1,214 @@
+===== L49 (4 entries) =====
+| 整变量重绑定的作用域界定 | `lhs_bare_ident` 区分「改变量本身」与「改所指对象」，只有前者重登记存储来源 | 置位 parser.c:3127（`parse_postfix` 尾，`lhs_bare_ident = !chained`）、解引用侧另置 `lhs_was_deref`（parser.c:2952），两者都在表达式解析结束时统一复位（parser.c:3428–3432）；消费 parser.c:3310（撤销 `len` 记录）、3317–3320（撤销所指记录）、3391–3396（重登记 `no_auto_free`） | ✅ 已实现（PB-33 P4；P5b 把解引用链的单独清零并入统一复位） |
+   FLAG L49 old=3317 now=3317 want=3373 
+   FLAG L49 old=3320 now=3320 want=3376 
+   FLAG L49 old=3391 now=3391 want=3447 
+   FLAG L49 old=3396 now=3396 want=3452 
+===== L64 (5 entries) =====
+| `is <int-literal>` / `is -<int>` / `is +<int>` | `== v` / `== -v` / `== +v`（前导 `+` 折叠进值，C 侧不再发 `+`） | 带符号前缀 parser.c:1694–1699，`-` 后非整数即报 `invalid 'is' pattern: '-' must be followed by an integer`（1700–1702）；取值 1704–1705、公式 `== lo` 在 1727 | ✅ 已实现（PB-33 P7 按 `PA` 的 PA-57 重写为带符号档；用例 `pos/is_pattern_forms`） |
+   FLAG L64 old=1700 now=1700 want=1722 
+   FLAG L64 old=1702 now=1702 want=1724 
+   FLAG L64 old=1704 now=1704 want=1726 
+   FLAG L64 old=1705 now=1705 want=1727 
+   FLAG L64 old=1727 now=1727 want=1749 
+===== L65 (3 entries) =====
+| `is lo..hi` 闭区间，两端各可带符号 | `>= lo && __is_val <= hi` | parser.c:1707–1725（比较式在 1724；上界非整数报 `invalid 'is' range: expected an integer upper bound`，1714–1715） | ✅ 已实现（P7 补上界符号与前缀校验） |
+   FLAG L65 old=1724 now=1724 want=1746 
+   FLAG L65 old=1714 now=1714 want=1736 
+   FLAG L65 old=1715 now=1715 want=1737 
+===== L67 (1 entries) =====
+| `is <enum-variant>` / 已知常量 | `TOK_IDENTIFIER` 分支按值比较 `== pat` | parser.c:1729–1737（兜底 `else cgen_raw(" == %s", pat)` 在 1736） | ✅ 已实现 |
+   FLAG L67 old=1736 now=1736 want=1758 
+===== L68 (1 entries) =====
+| `is _` 通配符恒匹配 | 恒真分支 `(1)`（IR 侧不发比较与 JZ） | parser.c:1680–1689（恒真式在 1683）、irparse.c:2036–2039 | ✅ 已实现（v1.0.2 补全） |
+   FLAG L68 old=1683 now=1683 want=1705 
+===== L100 (6 entries) =====
+| 多变量声明带数组类型 `var {aa = "aa", …} char[3]` | 改前该分支只发 `c_type_name` + 变量名，数组后缀被静默丢弃（生成 `char aa = "aa";`）；改后与单变量分支同口径：定长数组保留数组存储并登记声明容量，动态 `char[]` 仍退化为 `char*` 并登记字面量长度；三条诊断（初值不是字符串字面量 / 元素非 `char` / 超容量），后两条与单变量共用文案 | parser.c:1112（`arr_cap` 求值）、1132–1149（三条诊断）、1150–1152（接 `c_type_suffix`）、1167–1175（登记 `len_known`） | ✅ 已实现（PB-33 P5 移植 `PA` 的 PA-34，c/native）。**IR 前端不支持该声明形态**，用例不入白名单 |
+   FLAG L100 old=1132 now=1132 want=1154 
+   FLAG L100 old=1149 now=1149 want=1171 
+   FLAG L100 old=1150 now=1150 want=1172 
+   FLAG L100 old=1152 now=1152 want=1174 
+   FLAG L100 old=1167 now=1167 want=1189 
+   FLAG L100 old=1175 now=1175 want=1197 
+===== L101 (2 entries) =====
+| `len(x)` 逻辑长度 | 编译期常量：定长数组=各维元素个数乘积，动态字符串 `char[]` / 推断字符串=字面量长度；长度在声明处登记到符号表，整变量重新赋值（LHS 为裸标识符）即撤销记录，让后续 `len()` 保守报错而非返回过期值；实参非标识符、或静态不可知时即时报错（`len expects an identifier` / `len: logical length of 'n' is not statically known`，后者另出 `0` 兜底以免产物 C 空表达式）。**切片变量 `hi-lo` 一档随 P5b 落地**：切片读两侧同为字面量时把 `hi-lo` 记进 `slice_len`（parser.c:3044–3047、3074–3075），声明处据此登记（parser.c:1566–1568） | 求值与报错 parser.c:2644–2664（`parse_primary` 的标识符内置函数表，置于 `sizeof` 之前）、登记 parser.c:1565–1578（单变量）/ 1167–1175（多变量）、撤销 parser.c:3308–3311（`parse_assign`）、字段 ncc.h:150–153（`len_known` / `logical_len`）与 262–268（ParserState 的 `slice_len_known` / `slice_len`） | ✅ 已实现（PB-33 P5 移植 `PA` 的 PA-27 的标识符与数组/字符串部分 + P5b 补切片档，c/native）。**IR 前端 `len()` 走 `ve[]` 表**，静态不可知时返回 0 而非报错，故 `err/len_unknown` 刻意不入 `IR_ERR_COVERED`（IR 侧 SKIP） |
+   FLAG L101 old=1167 now=1167 want=1189 
+   FLAG L101 old=1175 now=1175 want=1197 
+===== L112 (6 entries) =====
+| `.(T)` 可处于后缀链任意位置，其后继续下标 / 成员 / 切片 | 通用 postfix 循环：每个算子把「已生成的前缀 C 文本」整体包成 `(*(<T>*)(prefix))` 再续链；前缀经 `cgen_mark` / `cgen_slice` / `cgen_truncate` 回取，缩进按 `%*s` 重发 | parser.c:2886–2898（`cgen_take_prefix`）、2921–2946（`deref_prefix`）、2949–2975（`deref_step`）、2978–3128（`parse_postfix`）；回退后须按残留文本重算行首缩进状态（cgen.c:124–130） | ✅ 已实现（P5b 移植 `PA` 的 PA-25 ①–⑥，`parse_deref_chain` 已删除）。**IR 前端无对应路径**，属 2.0 |
+   FLAG L112 old=2921 now=2921 want=2977 
+   FLAG L112 old=2946 now=2946 want=3002 
+   FLAG L112 old=2949 now=2949 want=3005 
+   FLAG L112 old=2975 now=2975 want=3031 
+   FLAG L112 old=2978 now=2978 want=3034 
+   FLAG L112 old=3128 now=3128 want=3184 
+===== L116 (6 entries) =====
+| 通用 `void` 槽的静态还原（`PA-55`） | 声明处由 `malloc(T)` / `&x` 定下所指类型，省略类型的裸 `.()` / `p[]` / `q->m` 据此还原成 `(*(T*)(p))`；所指类型推不出时 `->m` 与带索引下标各给专属报错，裸 `.()` 才退回 `void**` 读回指针值 | 来源登记 parser.c:1456–1460（`&x` 前瞻：`peek_ahead_ident` parser.c:129 + `ctype_persist` parser.c:140）、965–972、2737–2779（`malloc(T)` 的字节数与元素类型）；还原 parser.c:2935–2941（`deref_prefix` 的 `void` 分支）、3091–3113（`->` 分支）；字段 ncc.h:147–149 | ✅ 已实现（P5b；用例 `pos/void_slot_infer`、`err/void_member_unknown`；带索引下标 `p[i]` / 切片 `p[a..b]` 在 `void` 槽上仍拒绝，口径见「数组与字符串初值口径」表末行） |
+   FLAG L116 old=965 now=965 want=987 
+   FLAG L116 old=972 now=972 want=994 
+   FLAG L116 old=2737 now=2737 want=2793 
+   FLAG L116 old=2779 now=2779 want=2835 
+   FLAG L116 old=3091 now=3091 want=3147 
+   FLAG L116 old=3113 now=3113 want=3169 
+===== L117 (6 entries) =====
+| 切片读 `p[a..b]` | 生成「指向第 a 号元素的指针」`&p[a]`，长度不进入值本身（C 无切片类型）；上下界同为字面量时另记录 `hi-lo` 供 `len(切片变量)` 取用；`[..b]` 省略起点等价 `[0..b]`，长度记为 `b` | parser.c:3032–3047（`[..b]`）、3053–3075（`[a..b]`）、3044–3047 与 3074–3075（`rhs_was_slice` / `slice_lmark` / `slice_len_known` 登记） | ✅ 已实现（PA-25 / PA-27；用例 `pos/deref_slice`、`pos/len_builtin`） |
+   FLAG L117 old=3053 now=3053 want=3109 
+   FLAG L117 old=3075 now=3075 want=3131 
+   FLAG L117 old=3044 now=3044 want=3100 
+   FLAG L117 old=3047 now=3047 want=3103 
+   FLAG L117 old=3074 now=3074 want=3130 
+   FLAG L117 old=3075 now=3075 want=3131 
+===== L118 (2 entries) =====
+| 切片读赋给固定数组 `T[n] x = p[a..b]` | 按**声明容量**逐元素复制（`memcpy`），非别名 | parser.c:1582–1588（复制分支）、1518–1524（先解析右值并回取其文本） | ✅ 已实现（PA-25） |
+   FLAG L118 old=1518 now=1518 want=1540 
+   FLAG L118 old=1524 now=1524 want=1546 
+===== L119 (3 entries) =====
+| 切片写 `p[a..b] = {v0, v1, …}` 与 `p[a..b] = "abc"` | 值列表逐元素写回（逗号表达式，一条 C 语句）；字符串右值按**字节**整段 `memcpy`（含结尾 `\0`），闭区间右界 `b` 即最后一个可写字节，`strlen > b-a` 时报 `string needs N bytes with terminator, slice holds M`；其余右值形态专属报错 | parser.c:3322–3372（3328–3346 为字符串分支；3322 的 `slice_lmark == lmark` 门控保证只有「赋值左侧整体就是这次切片读」才走写回） | ✅ 已实现（PA-25 / PA-26；用例 `err/slice_str_overflow`）。字符串右值的转义归一随 **P7** 落地：该分支现改用 `cgen_string_lit()` 输出（parser.c:3340），口径见下文「语句终止符与语法形态合规」一节 |
+   FLAG L119 old=3328 now=3328 want=3384 
+   FLAG L119 old=3346 now=3346 want=3402 
+   FLAG L119 old=3322 now=3322 want=3378 
+===== L120 (4 entries) =====
+| `T[n] x = malloc(T[n])` 声明退化为指针 | 生成 `T (*x)…`（仅省略最前维度：`void[4][5]` → `void* (*x)[5]`），`malloc` 字节数按元素个数乘算 | parser.c:798–812（`c_decay_suffix`）、1549–1554（退化声明头）、2737–2779（字节数乘算） | ✅ 已实现（PA-25） |
+   FLAG L120 old=1549 now=1549 want=1571 
+   FLAG L120 old=1554 now=1554 want=1576 
+   FLAG L120 old=2737 now=2737 want=2793 
+   FLAG L120 old=2779 now=2779 want=2835 
+===== L121 (4 entries) =====
+| 切片变量 `s = a[lo..hi]`（类型推断声明） | 声明后退化为**元素指针** `E *s = &a[lo]`（视图，不复制），`s.()` 取首元素，`len(s)` 取 `hi-lo` | parser.c:1543–1548（推断切片头）、1566–1568（长度登记）、2931–2934（数组槽裸 `.()` 按最深元素解引用） | ✅ 已实现（PA-27） |
+   FLAG L121 old=1566 now=1566 want=1588 
+   FLAG L121 old=1568 now=1568 want=1590 
+   FLAG L121 old=2931 now=2931 want=2987 
+   FLAG L121 old=2934 now=2934 want=2990 
+===== L134 (1 entries) =====
+| 语句终止符 `;` / `#`（§1.4；`#` 为兼容写法，单独出现即空语句） | 改成**包装层**处理：`parse_statement()` 进门先吃掉连续终止符（空语句），出口再吃掉尾随的 `;` / `#`，于是每条语句分支不再各自处理；原先的一次性大函数改名 `parse_statement_impl` | parser.c:11–14（`eat_stmt_terminator`）、16–25（包装层）、1759（`parse_statement_impl`） | ✅ 已实现（P7；用例 `pos/stmt_terminators`） |
+   FLAG L134 old=1759 now=1759 want=1781 
+===== L135 (7 entries) =====
+| 括号类型 `(T)`（§3，`<type-name> ::= "(" "<type-name>` ")"，括号只分组，其后 `[N]` 仍由后缀循环接住） | `parse_type` 新增 `TOK_LPAREN` 档；为避免 `f(GREEN)`、`add(i32 a, b)` 这类调用被误读成「括号类型声明」，新增有限前瞻 `peek_ahead`（词法状态快照，整份源码常驻且 token 字符串新分配，故可安全还原）与 `is_paren_type_ahead`（`(` 后只认基本类型 token 且紧跟 `)`），四处「像调用还是声明」的分派公用它 | parser.c:396–405（`parse_type`）、106–116（`peek_ahead`）、121–125（`is_paren_type_ahead`）；调用点 1267（函数 vs 变量）、1406–1407（声明的类型档）、1859–1861（`for` 头 init）、2076–2077（语句内 `name Type` 分派） | ✅ 已实现（P7；用例 `pos/type_forms`） |
+   FLAG L135 old=1267 now=1267 want=1289 
+   FLAG L135 old=1406 now=1406 want=1428 
+   FLAG L135 old=1407 now=1407 want=1429 
+   FLAG L135 old=1859 now=1859 want=1881 
+   FLAG L135 old=1861 now=1861 want=1883 
+   FLAG L135 old=2076 now=2076 want=2098 
+   FLAG L135 old=2077 now=2077 want=2099 
+===== L136 (4 entries) =====
+| `for` 头带类型声明 `for i i32 = 0; …`（§6，`<for-init> ::= "<identifier>" "=" "<expr>` | `<var-decl>`） | init 新增声明档：`cgen_mark()` → `parse_declaration` → `cgen_take_prefix` 回取文本、去掉收尾 `;` 与空白，再拼 `for (` ——因此 `cgen_raw("for (")` 从公共前置下放到各分支内。推断档 `for i = 0` 同时改为按 `PA` 用 `infer_init_type` 输出声明 | parser.c:1833–1890（`case TOK_FOR`；推断档 1845–1858、声明档 1859–1872） | ✅ 已实现（P7；用例 `pos/for_init_forms`）。推断档里的常量可见性仍保留**本分支的 `VIS_VAR` 口径**：`Visibility` 枚举两侧不兼容，不随本轮收敛 |
+   FLAG L136 old=1845 now=1845 want=1867 
+   FLAG L136 old=1858 now=1858 want=1880 
+   FLAG L136 old=1859 now=1859 want=1881 
+   FLAG L136 old=1872 now=1872 want=1894 
+===== L139 (4 entries) =====
+| 顶层 `use` / `link` / 终止符可任意交错，且 `use a.b.c` 点号多段（§10，`<use-decl> ::= "use" "<identifier>` { "." "<identifier>" } | 两段顺序循环（先 `use` 后 `link`）合成一个交错循环，含 `;` / `#` 分支与点号累加（诊断 `expected module name after '.' in 'use'`）；模块名保持点号形式供符号查找，查文件时另按目录层级试 `std/io.nc`（点号原样拼出的 `stdlib/a.b.nc` 保留一次尝试，兼容单段命名） | parser.c:487–549（交错循环；点号档 502–519）、553–556（顶层声明循环的终止符分支）；module.c:81–99（候选路径，新增把点号换成 `/` 的 `slashed` 形式） | ✅ 已实现（P7；用例 `pos/module_top_forms`，无 `func main` → 门禁按 `(module)` 档编译，不进一致性档） |
+   FLAG L139 old=502 now=502 want=521 
+   FLAG L139 old=519 now=519 want=538 
+   FLAG L139 old=553 now=553 want=572 
+   FLAG L139 old=556 now=556 want=575 
+===== L141 (5 entries) =====
+| 复测为「本分支早已具备」的三项 | 四档数组容量写法与 `len()`（P5 的核对项）、`void` 的 `Symbol.pointee_type`（P5b）、`[[export "…"]]` 的字符串字面量写法（属性循环直接吞掉字符串参数，对 C 输出无效，不报错） | parser.c:416–455（容量）、965–972（`record_init_pointee`）、991–1006（属性列表，1001 处吞字符串参数） | ✅ 无需移植（口径同 **PA-51** 的「每轮动手前先在 PB 复测」教训） |
+   FLAG L141 old=965 now=965 want=987 
+   FLAG L141 old=972 now=972 want=994 
+   FLAG L141 old=991 now=991 want=1013 
+   FLAG L141 old=1006 now=1006 want=1028 
+   FLAG L141 old=1001 now=1001 want=1023 
+===== L155 (2 entries) =====
+| 默认值只在**该类型的变量声明处**生效，不进聚合体 | 声明无初值时调 `default_init_text()`，返回正数即出 ` = { .x = 7, .y = 8 }`；有初值时改由初始化列表按层补未覆盖成员 | parser.c:1604–1609（`parse_declaration` 的无初值分支）、757–791（`default_init_text`） | ✅ P8（**实测表 F1 结案**） |
+   FLAG L155 old=757 now=757 want=779 
+   FLAG L155 old=791 now=791 want=813 
+===== L156 (7 entries) =====
+| 逐成员成形 `.a = 7, .b = 9` | `member_default_text()` 遍历成员链，跳过 `def_init == NULL` 与被用户位置初值覆盖的前 `skip` 个，逐项 `snprintf` 追加 | parser.c:933–936（口径注释）、937–961（942 非聚合守卫、947–948 遍历与 skip、955–957 拼接） | ✅ P8 |
+   FLAG L156 old=937 now=937 want=959 
+   FLAG L156 old=961 now=961 want=983 
+   FLAG L156 old=942 now=942 want=964 
+   FLAG L156 old=947 now=947 want=969 
+   FLAG L156 old=948 now=948 want=970 
+   FLAG L156 old=955 now=955 want=977 
+   FLAG L156 old=957 now=957 want=979 
+===== L157 (2 entries) =====
+| `union` 各成员共享槽位 | 只取首个带默认值的成员（已拼一个即停），且用户一给位置初值就以用户为准（`skip > 0` 直接返回空） | parser.c:936（口径注释）、944、954 | ✅ P8 |
+   FLAG L157 old=944 now=944 want=966 
+   FLAG L157 old=954 now=954 want=976 
+===== L158 (10 entries) =====
+| 聚合类型**数组**变量的成员默认值逐项展开（PA-56） | `default_init_text()` 遇数组把元素默认文本重复声明容量次（容量静态不可知即不展开、返回 0）；初始化列表的尾数补全只在「每项都是 `{…}`」时按元素个数乘积补齐 | parser.c:761–782（763 处 `cap <= 0`）、730–745（730 `all_braced` 守卫、731 `type_array_count`）、630–641、643–647、682 | ✅ P8 |
+   FLAG L158 old=763 now=763 want=785 
+   FLAG L158 old=730 now=730 want=752 
+   FLAG L158 old=745 now=745 want=767 
+   FLAG L158 old=730 now=730 want=752 
+   FLAG L158 old=731 now=731 want=753 
+   FLAG L158 old=630 now=630 want=652 
+   FLAG L158 old=641 now=641 want=663 
+   FLAG L158 old=643 now=643 want=665 
+   FLAG L158 old=647 now=647 want=669 
+   FLAG L158 old=682 now=682 want=704 
+===== L160 (3 entries) =====
+| 指定式初值 `.[名] = 表达式`（§5 `<designator>`） | 三项前瞻（`.` / 标识符 / `=`）确认后原样透传成 C 的 `.名 = `，值表达式照常解析 | parser.c:692–701（698 输出成员名）、949–953（点名过滤） | ✅ P8（用例 `pos/designator_init`） |
+   FLAG L160 old=698 now=698 want=720 
+   FLAG L160 old=949 now=949 want=971 
+   FLAG L160 old=953 now=953 want=975 
+===== L349 (23 entries) =====
+以下为 PB 与上表（1.0 现态）不同的条目，行号基于 PB `8079ad0`，**每轮移植后逐个复核**（P1 / P2 / P3 于 2026-09-26、P4 于 2026-09-27、P5 于 2026-09-28、P5b / P6 / P7 于 2026-10-01、P8 于 2026-10-02 逐个复核重基）（`parser.c` 在 1603 行以后因插入 `agg_member_sym` 与两段内置函数体整体后移：`vis_check_call_arg` 调用点 2125→2253、`?.` 拒绝块 2169→2297、`?=` 拒绝 case 2513→2641；`irparse.c` 在 1195 行以后整体 +7；P3 对 `parser.c` 只是**行内**替换（1640、2109 两处分派的右侧表达式），行号未动，`type.c` 在 65 行以后插入 37 行、`ncc.h` 在 389 行加一条原型；**PB-34**（IR 机器码后端裁剪）对 `parser.c` / `type.c` / `irparse.c` 本节所引锚点**零位移**——它只碰 `irparse.c` 尾部（3408 行起新函数与 `ir_compile` 的发码尾段）、`ncc.c` 的 CLI 分派、`ir_backend.{c,h}` / `ir.h` 注册表与两个整文件删除；**P4**（2026-09-27）对 `parser.c` 的位移从 1088 行起算：`no_auto_free` 登记 +9，`parse_is_stmt` +3（只有注释增长，三处子句守卫是行内替换），`parse_statement` 入口 +3、while 脚手架 +5、`do` 体清零 +4、`TOK_IS` 守卫 +7，`parse_postfix` 的 `lhs_bare_ident` +3，`parse_assign` 的重登记 +9（净增 50 行）——即 1173 行以后的锚点按位置逐行重算，位移自 +9 起、文件末尾达 +50。`vis.c` 的 `vis_check_usable()` 内插 4 行转移豁免（其后锚点整体 +4：`vis_check_writable()` 139→143、`vis_check_assign()` 起点 154→158），`vis_check_assign()` 内再插冻结源拒绝与 `moved_src` / `ownership_transferred` 两段共 16 行（该函数终点 198→218，其后累计 +20）；`irparse.c` **零改动**故其锚点全部不变；**P5**（2026-09-28）对 `parser.c` 是**分段位移**（净增 130 行，分段值见文首更新日期一行），本表与正文各表的 `parser.c` 锚点已按新行号整体重算并逐条 grep 复核；`ncc.h` 在 133 行以后 +4（`moved_src` 228→232、`while_depth` 296→300），另改正一处既有失准锚点（`type_align` 原型 389→401）；`cgen.c` 只改 `c_type_suffix()` 一个函数（244–263），`vis.c` / `type.c` / `irparse.c` 本轮零改动；**P6**（2026-10-01）只碰构建配置与版本宏——`xmake.lua` 顶部加 4 行、`ncc.c` 一处**行内**替换（行号未动），`ncc.h` 在第 25 行处以 10 行替 2 行故其后**整体 +8**，本文件五处 `ncc.h` 锚点相应更正（`no_auto_free` 127→135、`len_known` 注释块 133–136→141–144、`moved_src` 232→240、`while_depth` 300→308、`type_align` 原型 401→409）；**P5b**（2026-10-01）对 `parser.c` 净增 **288 行**（2874→3162），且位移**非单调**——`parse_deref_chain` 整段删除与 `parse_postfix` / 四个解引用助手整段重写使中段（约 2429–2611）先加后减，声明体「先右值后声明头」重排又让 1116–1162 段净减 32 行再分段回升，故本轮不列位移表而把本文件的 `parser.c` 锚点全部按新行号逐个 grep 复核，顺带改正三处**既有失准锚点**（「`is` 模式匹配」的 `is lo..hi` 行与「存储期属性」的 `is_const`/`is_static` 行、§12.2 的 pv 解析行——自 1.0 冻结线后从未随 P1~P5 重算）。`ncc.h` 在 140 行后加 5 行（`pointee_bytes` 142、`pointee_type` 145，`len_known` / `logical_len` 141–144→148–149）、在 250 行后加 7 行（ParserState 的 `malloc_bytes` … `slice_len`，256–262），`moved_src` 240→245、`while_depth` 308→320、`type_align` 原型 409→421；`cgen.c` 只把 `cgen_truncate()` 由一行截断改为按残留文本重算 `at_line_start`（124→124–130，其后 `c_type_suffix` 244–263→253–269）；**P7**（2026-10-01）对 `parser.c` 净增 **130 行**（3162→3292），位移同样**非单调**——`parse_is_stmt` 的整数模式整段替换（1472–1521 段重写）与 `parse_module` 的两段顺序循环合成一段（430–445 段）使得中段先减后增，故本轮不列位移表，本文件的 `parser.c` 锚点再次全部按新行号逐个 grep 复核，顺带改正一处**既有失准锚点**（`alignof` 标识符路径旧记 2357，实为现 2541）。`cgen.c` 在 `cgen_truncate()` 之后插入 `cgen_string_lit()`（136–174，故其后 `c_type_suffix` 253–269→296–312，`cgen_truncate` 自身 124–130 未动）；`ncc.h` 在 371 行加一条原型，故其后 `type_align` 421→422，其余 `ncc.h` 锚点不动；`lexer.c`（261–266）与 `module.c`（81–99）是本轮新引的两处锚点，此前本文件无其行号；`vis.c` / `type.c` / `irparse.c` 本轮零改动：
+   FLAG L349 old=1603 now=1603 want=1625 
+   FLAG L349 old=2125 now=2125 want=2147 
+   FLAG L349 old=2253 now=2253 want=2275 
+   FLAG L349 old=2169 now=2169 want=2191 
+   FLAG L349 old=2297 now=2297 want=2319 
+   FLAG L349 old=2513 now=2513 want=2535 
+   FLAG L349 old=2641 now=2641 want=2697 
+   FLAG L349 old=1640 now=1640 want=1662 
+   FLAG L349 old=2109 now=2109 want=2131 
+   FLAG L349 old=1088 now=1088 want=1110 
+   FLAG L349 old=1173 now=1173 want=1195 
+   FLAG L349 old=2874 now=2874 want=2930 
+   FLAG L349 old=3162 now=3162 want=3218 
+   FLAG L349 old=2429 now=2429 want=2451 
+   FLAG L349 old=2611 now=2611 want=2667 
+   FLAG L349 old=1116 now=1116 want=1138 
+   FLAG L349 old=1162 now=1162 want=1184 
+   FLAG L349 old=3162 now=3162 want=3218 
+   FLAG L349 old=3292 now=3292 want=3348 
+   FLAG L349 old=1472 now=1472 want=1494 
+   FLAG L349 old=1521 now=1521 want=1543 
+   FLAG L349 old=2357 now=2357 want=2379 
+   FLAG L349 old=2541 now=2541 want=2581 
+===== L356 (11 entries) =====
+| `is` 各模式行号 | 见「`is` 模式匹配」表（本分支锚点） | 本分支 `parse_is_stmt` parser.c:1670–1757（P4 改的是子句守卫与 while 脚手架，P7 改的是整段整数模式与收尾文案）：`_` 通配符 1680–1689、共用守卫头 1691、带符号前缀 1694–1702、区间与空区间校验 1707–1725、标识符/枚举档 1729–1745、`invalid 'is' pattern` 1747、`expected '{' after 'is' pattern` 1755；`PA` 同函数在其 parser.c:1625 起。`is` 块由 irparse.c:2241 起的 `_` 分支处理 |
+   FLAG L356 old=1680 now=1680 want=1702 
+   FLAG L356 old=1689 now=1689 want=1711 
+   FLAG L356 old=1691 now=1691 want=1713 
+   FLAG L356 old=1694 now=1694 want=1716 
+   FLAG L356 old=1702 now=1702 want=1724 
+   FLAG L356 old=1707 now=1707 want=1729 
+   FLAG L356 old=1725 now=1725 want=1747 
+   FLAG L356 old=1729 now=1729 want=1751 
+   FLAG L356 old=1745 now=1745 want=1767 
+   FLAG L356 old=1747 now=1747 want=1769 
+   FLAG L356 old=1755 now=1755 want=1777 
+===== L365 (3 entries) =====
+| `alignof(T)` 类型对齐（§2.3，BNF `<builtin-call>`） | `PA` 侧同文件该节标 ✅ 已实现（v1.0.2 / PA-24：编译期自算后只输出整数字面量）；**本文件此前无该节** | **2026-09-26 随 PB-33 的 P3 落到本分支 A 后端**：新增 `type_align()`（type.c:71–102，原型 ncc.h:428——旧值 389 为既有失准锚点，P5 轮按实测改正），编译期递归求对齐——数组/别名经 `ref` 取元素对齐、`struct`/`union` 取最宽**非位域**成员（递归深度上限 16）、`void` 按 §5.1 通用指针计 8、其余取 `CType.align` 为 0 时回落 `type_default_align(kind)`；`parser.c` 两处分派由 `cgen_raw("_Alignof(%s)", …)` 改为 `cgen_raw("%u", type_align(&tmp))`（parser.c:2176 关键字路径、2683 标识符路径——此前记为 2357，属既有失准锚点，2357 一直是 `vis_check_usable()` 那处，P7 按新行号改正；后者按 `PB-6` 已记录的既有事实**实际不可达**——`alignof` 是关键字 token，改它只为与 `PA` 同源，不新增覆盖主张）。改前实测：`c` / `native` 链接期 `tcc: error: undefined symbol '_Alignof'`，`ir-c` 因固定返 8 而九项断言全错。**IR 前端未改**（`irparse.c:909` 仍按槽模型固定返回 8，与 `PA` 的 IR 现态一致）。用例 `pos/alignof_builtin.nc` 自 `PA` 原样带来（含其注释里的 PA-24 溯源，可与 PB-33 表 P3 行对号），**未列入** `IR_SUBSET` |
+   FLAG L365 old=2683 now=2683 want=2739 
+   FLAG L365 old=2357 now=2357 want=2379 
+   FLAG L365 old=2357 now=2357 want=2379 
+===== L369 (16 entries) =====
+| 语句终止符 / 括号类型 / `for` 声明式 init / 一元 `+` / `use` 点号多段（`PA` 的 **PA-57** 剩余项）| 本文件正文各表此前只按「换行即语句边界」书写，无 `;` / `#` 的语法地位、无 `(T)` 括号类型、`for` 头只有推断与表达式两档 | **P7（2026-10-01）已回灌**：`eat_stmt_terminator`（parser.c:11–14）+ `parse_statement` 包装层（16–25，旧的一次性大函数改名 `parse_statement_impl`，1759）；`(T)` 括号类型（`parse_type` 396–405 + `peek_ahead` 106–116 + `is_paren_type_ahead` 121–125）与四处分派 1267 / 1406–1407 / 1859–1861 / 2076–2077；`for` 头带类型声明 1833–1890；一元 `+` 2571–2582；`use` 点号多段与顶层交错 487–549、553–556，配合 `module.c:81–99` 的点号→目录层级候选路径。**IR 前端零改动**，六份 pos 用例一律不入 `IR_SUBSET`。**designator 初始化（PA-57⑥）本分支连基础形态都没有**（`Symbol.def_init` / `member_default_text()` / `default_init_text()` / `MAX_INIT_DESIGATORS` 全零命中），整条留 **P8**（**2026-10-02 随 P8 回灌落地**，见「聚合成员默认值与指定式初值」一节）；`linkas` 也不随本轮，留 **P10** |
+   FLAG L369 old=1759 now=1759 want=1781 
+   FLAG L369 old=1267 now=1267 want=1289 
+   FLAG L369 old=1406 now=1406 want=1428 
+   FLAG L369 old=1407 now=1407 want=1429 
+   FLAG L369 old=1859 now=1859 want=1881 
+   FLAG L369 old=1861 now=1861 want=1883 
+   FLAG L369 old=2076 now=2076 want=2098 
+   FLAG L369 old=2077 now=2077 want=2099 
+   FLAG L369 old=1833 now=1833 want=1855 
+   FLAG L369 old=1890 now=1890 want=1912 
+   FLAG L369 old=2571 now=2571 want=2627 
+   FLAG L369 old=2582 now=2582 want=2638 
+   FLAG L369 old=487 now=487 want=500 
+   FLAG L369 old=549 now=549 want=568 
+   FLAG L369 old=553 now=553 want=572 
+   FLAG L369 old=556 now=556 want=575 
+===== L370 (1 entries) =====
+| 产物 C 的字符串字面量转义（实测表 **F2** / `PA` 的 PA-50）| F2 行记的是「生成的 C 含真实 0x0A 字节，tcc 容忍而 gcc/clang/MSVC 拒绝」，并注明「当前门禁全在 tcc 下跑，故未暴露」 | **P7 已在本分支落地**（原计划留 P9，`pos/literal_forms` 复测不过逼出）：新增 `cgen_string_lit()`（cgen.c:136–174，原型 ncc.h:377），`parse_primary` 的字面量出口（parser.c:2613）与切片写的字符串出口（3340）改走它；改后**门禁全部 57 份产物 C 过 `clang -fsyntax-only`**，即 F2 在本分支结案。P9 只剩把该抽查接进 `xmake.lua`。**2026-10-02 随 P9 结案**：该抽查已接进门禁 c 档并对 58 份产物全绿，F2 从此由每轮人工体检转为门禁自动拦截 |
+   FLAG L370 old=3340 now=3340 want=3396 
+===== L373 (2 entries) =====
+| 聚合成员默认值与指定式初值（BNF §3.1 / §5 `<designator>`，`PA` 的 **PA-49 / PA-56 / PA-57⑥**） | `PA` 侧该主题自 v1.0.2 起占独立一节；**本分支此前整条机制缺失**（P7 的 F1 探针确认零命中） | **2026-10-02 随 PB-33 的 P8 回灌**：`Symbol.def_init`（ncc.h:173–174，`sym_add_member` 已 memset 故默认 NULL）+ `member_default_text()`（parser.c:937–961）+ `default_init_text()`（parser.c:757–791）+ `parse_init_list()` 改返回本层项数并按层记账 designator（parser.c:676–751，`MAX_INIT_DESIGATORS` 见 ncc.h:41）+ 声明处无初值分支改走展开（parser.c:1604–1609）。`parser.c` 3292 → 3434 行、`ncc.h` 451 → 457 行；四份用例逐字取自 `PA`，`xmake.lua` 零改动；三份 pos 用例的产物 C 与 `PA` **逐字节相同**。见「聚合成员默认值与指定式初值」一节 |
+   FLAG L373 old=3292 now=3292 want=3348 
+   FLAG L373 old=3434 now=3434 want=3490 

@@ -82,6 +82,14 @@ typedef enum {
 } Visibility;
 
 
+/* ============================================================
+ * 以下 CType / Symbol / SymKind / TokenSym / Module / LinkLib 及
+ * ParserState、CompilerState 中引用它们字段，均为 2026-11-12 已物理删除的
+ * A 线的遗留类型（IR 线不再使用）。extern 函数声明与 -run 字段已清理；
+ * 这些类型定义因与两大状态结构体互相引用、删除需连带重写结构体，风险大于
+ * 收益，暂保留并在此标注为 dead-code 遗留，待后续专项清理。
+ * ============================================================ */
+
 /* Forward declarations */
 typedef struct CType CType;
 typedef struct Symbol Symbol;
@@ -303,10 +311,7 @@ struct CompilerState {
     int debug_mode;
     int test_mode;              /* -lexertest: dump token stream only */
     int output_type;            /* 0=exec, 1=object, 2=shared, 3=static */
-    int backend;                /* 0=c (default, external tcc), 1=native (libtcc in-process) */
-    int run_mode;               /* -run: with native backend, compile to memory and execute */
-    int run_argc;               /* -run 透传的程序参数 */
-    char **run_argv;
+    int backend;                /* 2=ir-c (default) 3=ir-native 4=ir-riscv64 5=ir-loongarch64 */
     char *output_file;
     char *input_file;
     int argc;
@@ -371,86 +376,14 @@ int is_keyword(const char *str, int len);
 int is_type_token(TokenType tok);
 int is_visibility_token(TokenType tok);
 
-/* cgen.c - C backend */
-void cgen_init(void);
-void cgen_raw(const char *fmt, ...);
-void cgen_string_lit(const char *s);   /* 字面量按 C 转义序列重新编码后输出 */
-void cgen_line(const char *fmt, ...);
-void cgen_blank(void);
-void cgen_indent(void);
-void cgen_dedent(void);
-const char *cgen_result(void);
-int cgen_mark(void);                /* 分段缓冲：mark/slice/truncate */
-const char *cgen_slice(int mark);
-void cgen_truncate(int mark);
-const char *c_type_name(CType *t);
-const char *c_type_suffix(CType *t);
-void c_type_params(const CType *t, char *out, int sz);   /* 函数指针参数列表 */
-void cgen_header(void);
-
-/* native.c - libtcc machine-code backend (-backend=native) */
-int native_backend_available(void);
-int native_memory_available(void);
-int native_compile_string(const char *csrc, const char *outfile, int verbose, int debug);
-int native_run_string(const char *csrc, int argc, char **argv, int verbose, int debug);
-
-/* parser.c */
-void parser_init(CompilerState *cs);
+/* token 访问器（实现在 lexer.c——原在 parser.c，2026-11-12 A 线删除后移来） */
 TokenType cur_tok(CompilerState *cs);
 void next_tok(CompilerState *cs);
 void expect(CompilerState *cs, TokenType tok);
 void skip_newlines(CompilerState *cs);
-void parse_type(CompilerState *cs, CType *type);
-void parse_module(CompilerState *cs);
-void parse_declaration(CompilerState *cs);
-void parse_function(CompilerState *cs, Symbol *func_sym);
-void parse_statement(CompilerState *cs);
-void parse_expression(CompilerState *cs);
 
 /* irparse.c / ir.c / ir_to_c.c / ir_backend.c + ir_<arch>.c - IR middle layer (backend=ir-*) */
 int ir_compile(CompilerState *cs, const char *filename, int backend, int verbose);
-
-/* linker.c */
-void linker_init(CompilerState *cs);
-void link_add_library(CompilerState *cs, char *path, char *alias, char *lib_path);
-
-/* sym.c */
-Symbol *sym_find(CompilerState *cs, const char *tok_str);
-Symbol *sym_push(CompilerState *cs, SymKind kind, const char *tok_str, CType *type);
-Symbol *sym_add_member(CompilerState *cs, Symbol *sym, const char *name, CType *type);
-Symbol *sym_push_local(CompilerState *cs, Symbol *func_sym, const char *name, CType *type);
-Symbol *sym_pop_locals(CompilerState *cs, Symbol *func_sym);
-Symbol *sym_register_builtins(CompilerState *cs);
-
-/* type.c */
-CType *type_new(CompilerState *cs, TypeKind kind);
-CType *type_array(CompilerState *cs, void *elem_type, int size);
-unsigned int type_align(CType *t);
-
-/* vis.c */
-void visibility_init(CompilerState *cs);
-void vis_scope_enter(CompilerState *cs);
-void vis_scope_exit(CompilerState *cs);
-int vis_is_pointer_type(CType *t);
-int vis_check_transfer(Visibility src, Visibility dst);
-void vis_update_source(Visibility src, Visibility dst, Symbol *src_sym);
-int vis_check_usable(CompilerState *cs, Symbol *s);
-int vis_check_writable(CompilerState *cs, Symbol *s);
-void vis_check_assign(CompilerState *cs, Visibility dst_vis, Symbol *src_sym,
-                      Symbol *dst_sym, const char *dst_name);
-int vis_check_call_arg(CompilerState *cs, Visibility dst_vis, Symbol *src_sym,
-                       const char *dst_name);
-void vis_unfreeze(Symbol *s);
-void vis_unfreeze_borrows(Symbol *borrow_head, Symbol *scope_start);
-
-/* module.c */
-Module *module_add(CompilerState *cs, const char *tok_str, char *input_file);
-Module *module_import(CompilerState *cs, const char *name);
-
-/* stdlib.c */
-void stdlib_register_all(CompilerState *cs);
-void stdlib_resolve_link_libraries(CompilerState *cs);
-void stdlib_generate_runtime_stubs(CompilerState *cs);
 
 extern CompilerState *g_cs;
 

@@ -152,6 +152,8 @@ for _, src in ipairs(os.files("tests/pos/*.nc")) do
 end
 
 -- IR 子集白名单（与 tests 用例同步维护）
+-- 2026-11-12 A 线退役：下列注释块里的「A 后端 / 全量 parser / 四后端」是逐轮追加的历史记录，
+-- 原样保留；自 A 线删除起只有 IR 双后端（ir-c / ir-native），名单语义简化为「IR 是否可编」。
 -- IR_SUBSET: IR 双后端（ir-c/ir-native）可编译运行的通用用例（全量后端也可跑）
 -- IR_ONLY  : IR 专属用例——子集语法（如无类型指针声明），全量 parser 无法编译
 -- P11（2026-10-03）把 ir_cook 从 IR_ONLY 移进 IR_SUBSET：A 后端现已支持 <ct-func-def>，

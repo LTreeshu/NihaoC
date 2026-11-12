@@ -1,0 +1,125 @@
+total=108 unverified=12
+
+--- ALL ---
+docline=35 old=1286 new=1308 sym=None | | `flow` 参数接收所有权 | 参数前缀被忽略 | 
+docline=36 old=1286 new=1308 sym=None | | `var` 参数冻结实参 | 参数前缀被忽略 | 
+docline=37 old=1286 new=1308 sym=None | | `const` 参数冻结实参 | 参数前缀被忽略 | 
+docline=47 old=1495 new=1517 sym=vis_check_assign |  裸标识符赋值检查 | 完整实现 | `vis_check_assign()`（vis.c:158–218）的两处调用：
+docline=47 old=3376 new=3432 sym=parser | eck_assign()`（vis.c:158–218）的两处调用：parser.c:1495–1499（声明初始化）、
+docline=48 old=2630 new=2686 sym=vis_check_usable | | 表达式级检查 | 仅检查裸标识符 | 读侧：`vis_check_usable()` 只在 
+docline=48 old=3376 new=3432 sym=is_expr_continuer | 不再重复这一调用（可读性检查归主元解析）；写侧：赋值右值须先过 `is_expr_continuer` 的裸标识符判定（
+docline=49 old=3127 new=3183 sym=lhs_bare_ident | 作用域界定 | `lhs_bare_ident` 区分「改变量本身」与「改所指对象」，只有前者重登记存储来源 | 置位 
+docline=49 old=2952 new=3008 sym=lhs_was_deref | tfix` 尾，`lhs_bare_ident = !chained`）、解引用侧另置 `lhs_was_deref`（
+docline=49 old=3428 new=3484 sym=parser | ed`）、解引用侧另置 `lhs_was_deref`（parser.c:2952），两者都在表达式解析结束时统一复位（
+docline=49 old=3310 new=3366 sym=parser | ref`（parser.c:2952），两者都在表达式解析结束时统一复位（parser.c:3428–3432）；消费 
+docline=54 old=1764 new=1786 sym=parse_statement | e()` vis.c:127–140 的提前返回），下一条语句进入 `parse_statement()` 开头即清除（
+docline=62 old=1670 new=1692 sym=parse_is_stmt | epth`（ncc.h:326）为 0 时 `TOK_IS` 分支先拒绝再按块展开 | `parse_is_stmt` 
+docline=62 old=1955 new=1977 sym=TOK_IS | 分支先拒绝再按块展开 | `parse_is_stmt` parser.c:1670–1757；`TOK_IS` 守卫 
+docline=62 old=1811 new=1833 sym=while_depth | c:1670–1757；`TOK_IS` 守卫 parser.c:1955–1964；`while_depth` 增减 
+docline=63 old=1827 new=1849 sym=while_depth | O` 走 `parse_statement` 通用体，进体前把 `while_depth` 存零、出体恢复（P4） | 
+docline=64 old=1694 new=1716 sym=None |  `== v` / `== -v` / `== +v`（前导 `+` 折叠进值，C 侧不再发 `+`） | 带符号前缀 
+docline=65 old=1707 new=1729 sym=__is_val | | `is lo..hi` 闭区间，两端各可带符号 | `>= lo && __is_val <= hi` | 
+docline=66 old=1738 new=1760 sym=None | | `is <visibility-enum>` | 比较 `NH_*` 常量 | 关键字 token 分支 
+docline=66 old=1729 new=1751 sym=parser | NH_*` 常量 | 关键字 token 分支 parser.c:1738–1745；`_flow` 等标识符写法分支 
+docline=67 old=1729 new=1751 sym=TOK_IDENTIFIER | <enum-variant>` / 已知常量 | `TOK_IDENTIFIER` 分支按值比较 `== pat` | 
+docline=68 old=1680 new=1702 sym=None | | `is _` 通配符恒匹配 | 恒真分支 `(1)`（IR 侧不发比较与 JZ） | 
+docline=69 old=1729 new=1751 sym=__is_val | 比较（BNF v2.11 定案，绑定/解构留 2.0） | 生成 `__is_val == pat`，不引入新绑定 | 
+docline=70 old=1683 new=1705 sym=__is_matched | 体输出，无法在其 `{` 后插语句）；`__is_matched` 在 while 脚手架声明并每轮迭代重置 | 守卫 
+docline=70 old=1800 new=1822 sym=parser | d` 在 while 脚手架声明并每轮迭代重置 | 守卫 parser.c:1683 / 1691 / 1750，声明 
+docline=70 old=1810 new=1832 sym=None | 迭代重置 | 守卫 parser.c:1683 / 1691 / 1750，声明 parser.c:1800，每轮重置 
+docline=71 old=1752 new=1774 sym=None | is <pat> => <stmt>` 单语句 | 已移除（BNF v2.2 / PA-13），双前端仅接受块形式 | 
+docline=72 old=1720 new=1742 sym=None | ty 'is' range %lld..%lld: lo must be <= hi`，不再静默生成永不匹配的分支 | 
+docline=81 old=1402 new=1424 sym=None | | `const` 模块级静态 / 块级自动 | C 后端自然实现 | 
+docline=82 old=1636 new=1658 sym=None | | `flow` 动态分配 + 自动释放 | 函数退出与块退出两处 free 循环 | 
+docline=82 old=2033 new=2055 sym=locals |  自动释放 | 函数退出与块退出两处 free 循环 | parser.c:1636–1643（函数级 locals）、
+docline=83 old=1446 new=1468 sym=uto_free | 39）：右值首 token 是字符串字面量 / `&x` / `{` 时不登记堆所有权，退出时不 free | 声明点 
+docline=83 old=3389 new=3445 sym=parser | x` / `{` 时不登记堆所有权，退出时不 free | 声明点 parser.c:1446–1450、整变量重绑定 
+docline=84 old=1929 new=1951 sym=ownership_transferred | | `flow` 返回值所有权转移 | `ownership_transferred` 标志 | 
+docline=97 old=1556 new=1578 sym=None | ist {v0, v1, ...}`，两条诊断都在消费 `'='` 之后、输出 ` = ` 之前发出 | 数组存储声明 
+docline=97 old=1462 new=1484 sym=str_lit_len | 556–1558（声明头的普通分支，即既有 `c_type_suffix` 调用点）、`str_lit_len` 采集 
+docline=97 old=1508 new=1530 sym=parser | _type_suffix` 调用点）、`str_lit_len` 采集 parser.c:1462–1463、两条诊断 
+docline=98 old=416 new=416 sym=None |  前端一致（省略容量取默认容量 8），P5 只做**量测复核**、代码零改动；`len()` 取声明容量 | 容量解析 
+docline=99 old=630 new=652 sym=None | .3 报各维乘积 6，两者不一致即是错码而非错诊断 | cgen.c:296–312（`c_type_suffix`）、
+docline=100 old=1112 new=1134 sym=None |  并登记字面量长度；三条诊断（初值不是字符串字面量 / 元素非 `char` / 超容量），后两条与单变量共用文案 | 
+docline=101 old=3044 new=3100 sym=slice_len | 变量 `hi-lo` 一档随 P5b 落地**：切片读两侧同为字面量时把 `hi-lo` 记进 `slice_len`（
+docline=101 old=1566 new=1588 sym=parser | hi-lo` 记进 `slice_len`（parser.c:3044–3047、3074–3075），声明处据此登记（
+docline=101 old=2644 new=2700 sym=parser | .c:3044–3047、3074–3075），声明处据此登记（parser.c:1566–1568） | 求值与报错 
+docline=101 old=1565 new=1587 sym=sizeof | er.c:2644–2664（`parse_primary` 的标识符内置函数表，置于 `sizeof` 之前）、登记 
+docline=101 old=3308 new=3364 sym=parser |  `sizeof` 之前）、登记 parser.c:1565–1578（单变量）/ 1167–1175（多变量）、撤销 
+docline=102 old=2984 new=3040 sym=base_sym | ite p.(T)[i] to fix the element type first` | `base_sym` 采集 
+docline=102 old=3025 new=3081 sym=parser | e element type first` | `base_sym` 采集 parser.c:2984–2988、拒绝 
+docline=112 old=2886 new=2942 sym=cgen_truncate | en_mark` / `cgen_slice` / `cgen_truncate` 回取，缩进按 `%*s` 重发 | 
+docline=113 old=2903 new=2959 sym=NihaoC | 步长推进；NihaoC 的 `void` 槽位实为指针，故元素类型 `void` 在 C 里渲染成 `void*` | 
+docline=114 old=2961 new=3017 sym=target | olds only M bytes`；前缀不是裸标识符（链式 / 下标之后）时字节数不可静态得知，保守不检查 | 检查 
+docline=114 old=965 new=987 sym=pointee_bytes | 检查 | 检查 parser.c:2961–2973、字段 ncc.h:146（`pointee_bytes`）、记录 
+docline=114 old=3315 new=3371 sym=parser | intee_bytes`）、记录 parser.c:965–972（`record_init_pointee`）、撤销 
+docline=115 old=3020 new=3076 sym=deref_prefix | 用） | `[` 紧跟 `]` 时走 `deref_prefix`；多级链由此统一写作 `p[][].(i32)` | 
+docline=116 old=1456 new=1478 sym=None | 类型推不出时 `->m` 与带索引下标各给专属报错，裸 `.()` 才退回 `void**` 读回指针值 | 来源登记 
+docline=116 old=129 new=129 sym=peek_ahead_ident |  读回指针值 | 来源登记 parser.c:1456–1460（`&x` 前瞻：`peek_ahead_ident` 
+docline=116 old=140 new=140 sym=ctype_persist | 0（`&x` 前瞻：`peek_ahead_ident` parser.c:129 + `ctype_persist` 
+docline=116 old=2935 new=2991 sym=malloc | ` parser.c:140）、965–972、2737–2779（`malloc(T)` 的字节数与元素类型）；还原 
+docline=117 old=3032 new=3088 sym=None | `hi-lo` 供 `len(切片变量)` 取用；`[..b]` 省略起点等价 `[0..b]`，长度记为 `b` | 
+docline=118 old=1582 new=1604 sym=memcpy | 读赋给固定数组 `T[n] x = p[a..b]` | 按**声明容量**逐元素复制（`memcpy`），非别名 | 
+docline=119 old=3322 new=3378 sym=terminator |  needs N bytes with terminator, slice holds M`；其余右值形态专属报错 | 
+docline=119 old=3340 new=3396 sym=cgen_string_lit | rflow`）。字符串右值的转义归一随 **P7** 落地：该分支现改用 `cgen_string_lit()` 输出（
+docline=120 old=798 new=820 sym=None | 略最前维度：`void[4][5]` → `void* (*x)[5]`），`malloc` 字节数按元素个数乘算 | 
+docline=121 old=1543 new=1565 sym=None | ** `E *s = &a[lo]`（视图，不复制），`s.()` 取首元素，`len(s)` 取 `hi-lo` | 
+docline=122 old=848 new=870 sym=None |  `T*`）、为调用时取被调（或函数指针）的返回类型；聚合体变量本身作右值时保留标签符号，避免把变量名当类型名输出 | 
+docline=122 old=815 new=837 sym=agg_member_sym | t_type` 的 `TOK_IDENTIFIER` 分支）、成员查询助手 `agg_member_sym` 前向声明 
+docline=124 old=3032 new=3088 sym=None | 第 a 号元素的指针」，`b` 只在与 `lo` 同为字面量时被记录下来供 `len(切片变量)` 求 `hi-lo`（
+docline=134 old=11 new=11 sym=parse_statement_impl | ` / `#`，于是每条语句分支不再各自处理；原先的一次性大函数改名 `parse_statement_impl` | 
+docline=135 old=396 new=396 sym=None | _type_ahead`（`(` 后只认基本类型 token 且紧跟 `)`），四处「像调用还是声明」的分派公用它 | 
+docline=136 old=1833 new=1855 sym=infer_init_type | 到各分支内。推断档 `for i = 0` 同时改为按 `PA` 用 `infer_init_type` 输出声明 | 
+docline=137 old=2571 new=2627 sym=parse_primary | 元加） | `parse_primary` 头部：只有 `+` 后紧跟整/浮字面量时才消费并递归（C 侧不发正号） | 
+docline=139 old=487 new=500 sym=None | 按目录层级试 `std/io.nc`（点号原样拼出的 `stdlib/a.b.nc` 保留一次尝试，兼容单段命名） | 
+docline=140 old=2613 new=2669 sym=cgen_string_lit | 符串出口两处改走它 | cgen.c:136–174（`cgen_string_lit`）、ncc.h:377（原型）、
+docline=141 old=416 new=416 sym=None | b）、`[[export "…"]]` 的字符串字面量写法（属性循环直接吞掉字符串参数，对 C 输出无效，不报错） | 
+docline=142 old=185 new=185 sym=None | S`，因此也没有「成员默认值被当类型名前缀输出」的 **F1** 缺陷修复 | 见下一节「聚合成员默认值与指定式初值」（
+docline=154 old=185 new=185 sym=cgen_take_prefix | x()` 回取表达式文本并从聚合体输出里**截掉**（C 无字段初值语法，本后端又边解析边输出），文本挂到成员符号 | 
+docline=155 old=1604 new=1626 sym=default_init_text | ext()`，返回正数即出 ` = { .x = 7, .y = 8 }`；有初值时改由初始化列表按层补未覆盖成员 | 
+docline=156 old=933 new=955 sym=snprintf | `def_init == NULL` 与被用户位置初值覆盖的前 `skip` 个，逐项 `snprintf` 追加 | 
+docline=157 old=936 new=958 sym=None | 位 | 只取首个带默认值的成员（已拼一个即停），且用户一给位置初值就以用户为准（`skip > 0` 直接返回空） | 
+docline=158 old=761 new=783 sym=None | 明容量次（容量静态不可知即不展开、返回 0）；初始化列表的尾数补全只在「每项都是 `{…}`」时按元素个数乘积补齐 | 
+docline=159 old=663 new=685 sym=DEFAULT_INIT_BUF | `，文案带 `DEFAULT_INIT_BUF` 的实际字节数；声明点收到 `-1` 只是不再出初始化器，错误已报 | 
+docline=160 old=692 new=714 sym=designator | r>`） | 三项前瞻（`.` / 标识符 / `=`）确认后原样透传成 C 的 `.名 = `，值表达式照常解析 | 
+docline=161 old=683 new=705 sym=parse_init_list | t` 的局部数组，嵌套递归每层各建一份；若挂到 `ParserState` 上会被内层覆写，外层就漏补或重补默认值 | 
+docline=162 old=682 new=704 sym=all_braced | 跳过」（727 传 `has_d ? 0 : k`），指定式项也使 `all_braced` 归零、数组尾数不再补 | 
+docline=343 old=416 new=416 sym=None | ymbol> PB -- ncc`）：① `PA` 侧 **PA-51** 的四档数组容量写法本分支**早已实现**（`
+docline=353 old=1286 new=1308 sym=None | | §12.2 `flow`/`var`/`const` 参数前缀 | 前缀被忽略，统一 `VIS_DEFAULT`（
+docline=353 old=1301 new=1323 sym=parser | `（parser.c:1286–1290、1301） | **已实现**：`param->vis = pv` 记录前缀（
+docline=353 old=2850 new=2906 sym=vis_check_call_arg | pv` 记录前缀（parser.c:1301），调用点 `vis_check_call_arg()` 执行 M2 检查（
+docline=354 old=1476 new=1498 sym=ret_vis | | 返回值可见性前缀（§12.3 后半） | 无 | **已实现**：`ret_vis` 调用点检查（
+docline=356 old=1670 new=1692 sym=parse_is_stmt | | `is` 各模式行号 | 见「`is` 模式匹配」表（本分支锚点） | 本分支 `parse_is_stmt` 
+docline=356 old=1625 new=1647 sym=None | ern` 1747、`expected '{' after 'is' pattern` 1755；`PA` 同函数在其 
+docline=358 old=1720 new=1742 sym=None | | 反向范围 `lo > hi` 校验 | ⚠️ 未实现 | **两侧都已实现**：A 后端自 P7（
+docline=360 old=1955 new=1977 sym=None | | 循环体外使用 `is` | A 后端按 `if` 展开，不报错 | **两侧都拒绝**（P4 起）：A 后端 
+docline=360 old=1827 new=1849 sym=None | hile loop body`，IR 前端同句带 `ir: ` 前缀（PB-27.1）。`do` 体亦拒绝——A 后端 
+docline=363 old=3300 new=3356 sym=None | 留 token | **2026-09-26 起与本分支设计层归一（PB-33 的 P1）**：语法层拒绝——A 后端 
+docline=363 old=2998 new=3054 sym=parser | 绝——A 后端 parser.c:3300–3305（`'?='`，诊断后 fall through 到普通 `=`）、
+docline=363 old=591 new=613 sym=is_expr_continuer | 后补吞 `(` 按 `.()` 展开，顺带删去失效的 `(void)op;`）、is_expr_continuer 的 
+docline=364 old=2221 new=2243 sym=member |  ptr)` → `((void*)((char*)(ptr) - offsetof(Type, member)))`（
+docline=364 old=2261 new=2283 sym=member | / 缺第三参各有专属诊断）与 `bitoffsetof(Type, member)` → 按声明序折成编译期常量表达式（
+docline=364 old=2139 new=2161 sym=agg_member_sym | 元起点，目标非位域、基类型宽度未知、同组存储类型不一致均报错）；成员查询助手 `agg_member_sym()` 在 
+docline=364 old=2585 new=2641 sym=parse_primary | gg_member_sym()` 在 parser.c:2139，`parse_primary` 的分派 case 在 
+docline=365 old=2176 new=2198 sym=type_align | w("_Alignof(%s)", …)` 改为 `cgen_raw("%u", type_align(&tmp))`（
+docline=368 old=416 new=416 sym=None | 来、`[...]` 无默认容量 8、`i32[...] = {…}` 生成非法 C | **该缺陷在本分支不成立**：`
+docline=369 old=11 new=11 sym=eat_stmt_terminator | ` 头只有推断与表达式两档 | **P7（2026-10-01）已回灌**：`eat_stmt_terminator`（
+docline=370 old=2613 new=2669 sym=cgen_string_lit | _lit()`（cgen.c:136–174，原型 ncc.h:377），`parse_primary` 的字面量出口（
+docline=373 old=937 new=959 sym=member_default_text | sym_add_member` 已 memset 故默认 NULL）+ `member_default_text()`（
+docline=373 old=757 new=779 sym=default_init_text | er_default_text()`（parser.c:937–961）+ `default_init_text()`（
+docline=373 old=676 new=698 sym=designator | ser.c:757–791）+ `parse_init_list()` 改返回本层项数并按层记账 designator（
+docline=373 old=1604 new=1626 sym=parser | r.c:676–751，`MAX_INIT_DESIGATORS` 见 ncc.h:41）+ 声明处无初值分支改走展开（
+
+--- UNVERIFIED ---
+docline=66 old=1738 new=1760 | | `is <visibility-enum>` | 比较 `NH_*` 常量 | 关键字 token 分支 
+docline=70 old=1810 new=1832 | e 脚手架声明并每轮迭代重置 | 守卫 parser.c:1683 / 1691 / 1750，声明 parser.c:1800，每轮重置 
+docline=99 old=630 new=652 | n(m)` 按 §2.3 报各维乘积 6，两者不一致即是错码而非错诊断 | cgen.c:296–312（`c_type_suffix`）、
+docline=120 old=798 new=820 |  (*x)…`（仅省略最前维度：`void[4][5]` → `void* (*x)[5]`），`malloc` 字节数按元素个数乘算 | 
+docline=135 old=396 new=396 |  `is_paren_type_ahead`（`(` 后只认基本类型 token 且紧跟 `)`），四处「像调用还是声明」的分派公用它 | 
+docline=139 old=487 new=500 | 符号查找，查文件时另按目录层级试 `std/io.nc`（点号原样拼出的 `stdlib/a.b.nc` 保留一次尝试，兼容单段命名） | 
+docline=141 old=416 new=416 | e_type`（P5b）、`[[export "…"]]` 的字符串字面量写法（属性循环直接吞掉字符串参数，对 C 输出无效，不报错） | 
+docline=142 old=185 new=185 | _DESIGATORS`，因此也没有「成员默认值被当类型名前缀输出」的 **F1** 缺陷修复 | 见下一节「聚合成员默认值与指定式初值」（
+docline=343 old=416 new=416 | it grep <symbol> PB -- ncc`）：① `PA` 侧 **PA-51** 的四档数组容量写法本分支**早已实现**（`
+docline=353 old=1286 new=1308 | | §12.2 `flow`/`var`/`const` 参数前缀 | 前缀被忽略，统一 `VIS_DEFAULT`（
+docline=356 old=1625 new=1647 |  'is' pattern` 1747、`expected '{' after 'is' pattern` 1755；`PA` 同函数在其 
+docline=360 old=1827 new=1849 | d inside while loop body`，IR 前端同句带 `ir: ` 前缀（PB-27.1）。`do` 体亦拒绝——A 后端 
