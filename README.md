@@ -68,9 +68,7 @@ func main()
 }
 ```
 
-> 说明：上例为**当前全量（A 方案）后端可编译**的语法（2026-10-27 复测：`c` / `native` 均编译运行，输出
-> `Program starting` / `array ok` / `MaxLen is _const`；同一份源在 `ir-c` / `ir-native` 上会报
-> `ir: unsupported top-level token 'const'`——IR 前端目前没有顶层变量声明，属在册缺口，不是本例写错）。更多特性示例见
+> 说明：上例为 IR 前端（2.0）可编译的语法（顶层 `const` 声明为 2.0 能力）。更多特性示例见
 > [`docs/Chinese.md`](./docs/Chinese.md)：多返回值（命名 struct 返回）、编译期
 > cooking/static_assert、指针 `.()` 解引用、`flow/static/const` 存储期与所有权、
 > 函数指针等（部分为 BNF 规划特性，实现进度见 [`TODO.md`](./TODO.md)）。
@@ -91,16 +89,13 @@ winget install xmake
 curl -fsSL https://xmake.io/shget.text | bash
 ```
 
-### 2. 安装 tcc（编译器后端依赖）
+### 2. 安装 tcc（`ir-c` / `ir-native` 产物编译依赖）
 
-NihaoC 1.0 的 `c` / `native` 后端依赖 [TinyCC](https://bellard.org/tcc/)（tcc 负责把生成的 C 编译为机器码）：
+NihaoC 的 `ir-c` 后端（以及宿主上回退 IR → C 的 `ir-native`）依赖 [TinyCC](https://bellard.org/tcc/)
+把生成的 C 编译为机器码：
 
 - **Windows**：将 tcc 解压到任意目录（如 `C:\dev\tcc`），设置环境变量 `NIHAO_TCC_DIR=C:\dev\tcc`；未设置时从 `PATH` 探测。MSYS 路径（`/d/devtools/tcc`）会自动归一化
-- **Linux**：`sudo apt install tcc`（或 `pacman -S tcc`）即可满足 `c` 后端；`-backend=native` 还要求**进程内 libtcc**：
-  需要 `/usr/local/lib/libtcc.so` 在位（apt 只给静态 `libtcc.a` 时会与 `ncc` 自身的 `expect` / `sym_find` / `sym_push`
-  符号撞成 multiple definition），且 `native.c` 把安装前缀**硬编码**成 `/usr/local/lib/tcc`，故 `tcc -vv` 输出的
-  `install:` 行必须与之一致——这三条前置是 2026-10-11 在 WSL Ubuntu-24.04 上复跑门禁时实测的（见 `docs/TODO-PB.md` 的 PB-37）。
-  `-run` 内存执行与 `libtcc.so` 均可用
+- **Linux**：`sudo apt install tcc`（或 `pacman -S tcc`）即可满足 `ir-c` 后端
 - 验证：`tcc -v` 能看到版本号即可
 
 ## 构建与运行 | Build & Run
@@ -110,9 +105,9 @@ NihaoC 1.0 的 `c` / `native` 后端依赖 [TinyCC](https://bellard.org/tcc/)（
 ```bash
 cd ncc
 xmake                          # 构建 nihao 可执行文件
-xmake test                     # 默认 c 后端回归测试
-xmake test -b native           # native 后端回归测试
-xmake test --all               # 四后端全矩阵（c / native / ir-c / ir-native）
+xmake test                     # 默认 ir-c 后端回归测试
+xmake test -b ir-native        # ir-native 后端回归测试
+xmake test --all               # IR 双后端矩阵（ir-c / ir-native）
 ```
 
 ### CLI 命令 | Commands
@@ -130,21 +125,23 @@ nihao <command> [options]
 | `test` | 运行回归测试套件（`tests/`） |
 | `lex <file>` | 打印源文件的 token 流 |
 
-常用选项：`-o <file>` 输出名 · `-backend c|native|ir-c|ir-native|ir-riscv64|ir-loongarch64` 选择后端（写错会给候选表；`ir-x86_64` / `ir-arm64` 已随 2026-09-26 的 PB-34 删除，点名时报「backend ... was removed」并提示改用 `ir-native`） · `-run`（Linux only）内存执行 · `-g` 调试信息 · `-I/-L/-l` 头文件/库路径与链接 · `--link <lib> as <alias>` 链接别名。
+常用选项：`-o <file>` 输出名 · `-backend ir-c|ir-native|ir-riscv64|ir-loongarch64` 选择后端（默认 `ir-c`；`c` / `native` / `ir-x86_64` / `ir-arm64` 已随 2026-11-12 的 A 线退役与 2026-09-26 的 PB-34 删除，点名时报「backend ... was removed」） · `-g` 调试信息 · `-I/-L/-l` 头文件/库路径与链接 · `--link <lib> as <alias>` 链接别名。
 
 ### 后端 | Backends
 
-| 后端 | 范围 | 说明 |
-| ---- | ---- | ---- |
-| `c`（默认） | **1.0 正式支持** | 生成 C 文本，调用外部 tcc 编译为可执行文件 |
-| `native` | **1.0 正式支持** | libtcc 进程内编译生成的 C 为机器码（无需外部 tcc） |
-| `ir-c` | 2.0 预览 | IR 中间层 → C 文本，交外部 tcc |
-| `ir-native` | 2.0 预览 | 按宿主分派：riscv64 / loongarch64 宿主出本机汇编再汇编链接，其余宿主（含 x86-64 / arm64）**回退 IR → C → 宿主 cc** |
-| `ir-riscv64` | 2.0 预览 | IR → RISC-V 64 汇编（RV64I + D 浮点扩展，交叉 `.s` only；产物经外部汇编器与链接器验证，本机不执行） |
-| `ir-loongarch64` | 2.0 预览 | IR → LoongArch64 汇编（LA64 基础指令集，交叉 `.s` only；产物经外部汇编器与链接器验证，本机不执行） |
+NihaoC 2.0 只保留 IR 管线（2026-11-12 A 线退役）：
+
+| 后端 | 说明 |
+| ---- | ---- |
+| `ir-c`（默认） | IR 中间层 → C 文本，交外部 tcc 编译为可执行文件 |
+| `ir-native` | 按宿主分派：riscv64 / loongarch64 宿主出本机汇编再汇编链接，其余宿主（含 x86-64 / arm64）**回退 IR → C → 宿主 cc** |
+| `ir-riscv64` | IR → RISC-V 64 汇编（交叉 `.s` only；产物经外部汇编器与链接器验证，本机不执行） |
+| `ir-loongarch64` | IR → LoongArch64 汇编（交叉 `.s` only；产物经外部汇编器与链接器验证，本机不执行） |
 
 
-> **1.0 范围**：`c` / `native` 两后端为对外可用产品线（路线图 A 方案），v1.0.2 门禁实测：全量语法回归每后端 **38 PASS / 0 FAIL / 5 SKIP**，examples **6/7** ——
+> **1.0 范围（历史快照，2026-11-12 A 线退役后仅作记录）**：`c` / `native` 两后端曾是对外产品线（路线图 A 方案），
+> v1.0.2 门禁实测全量语法回归每后端 **38 PASS / 0 FAIL / 5 SKIP**、examples **6/7**；该两后端已于 2026-11-12
+> 物理删除，本节以下文字是 1.0 时代的历史记录，不再描述当前产品能力。
 > `06_cooking.nc` 当时失败于 `cooking` 块内的编译期函数形态，仅 `ir-c` / `ir-native` 可通过；该形态已于本分支 2026-10-03 的 PB-33 **P11** 回灌轮落入全量 parser（`PA` 侧为 2026-09-25），examples 现为 **7/7**（2026-10-04 复跑，四后端均可编译运行）。
 > 计数随版本变化，权威口径以 [`CHANGELOG.md`](./CHANGELOG.md) 当前版本段与 [`docs/IMPLEMENTATION_STATUS.md`](./docs/IMPLEMENTATION_STATUS.md) 为准。
 > **`examples/` 不在门禁里（2026-10-27 PB-51 实测）**：`xmake test --all` 里没有任何 `examples` 判据（`xmake.lua` 中该词出现 0 次），

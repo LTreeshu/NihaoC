@@ -34,13 +34,16 @@ NiHao 是一种新型静态编译语言，专为系统级编程和高性能应�
 - `visof(var)` 可见性判断 返回可见属性
 
 > `sizeof` / `typeof` / `alignof` / `offsetof` / `bitoffsetof` / `structof` / `unionof` / `holdof` / `visof` 是关键字，
-> `len` / `malloc` / `print` / `puts` / `static_assert` 是**内置名**——两类都不参与用户作用域解析，用户声明同名符号不能遮蔽它们。
+> `len` / `malloc` / `static_assert` 是**内置名**——它们不参与用户作用域解析，用户声明同名符号不能遮蔽它们。
+> `print` / `puts` 不是内置名：由 **stdio 标准库**（`use stdio`）提供，是普通函数。
 > 从属查询内置函数（`structof` / `unionof` / `holdof`）统一为三参 `(type, member, ptr)`：只有"类型 + 成员名"无法给出偏移，
 > 必须由成员地址反推首地址；`structof` 仅接受 `struct`、`unionof` 仅接受 `union`、`holdof` 两者通用。
 > `len(x)` 的三类取值均为编译期常量；实参的逻辑长度静态不可知（标量、非字面量边界的切片等）时为前端错误。
 > 各后端对这些内置的落地情况见 `docs/IMPLEMENTATION_STATUS.md`。
 
-#### 2.3.1 输出内建（`print` / `puts`）
+#### 2.3.1 输出（`print` / `puts`，stdio 标准库）
+
+`print` / `puts` 由 stdio 标准库模块提供，须经 `use stdio` 引入；它们是普通函数，不是编译器内置。
 
 - `puts(s)` 输出以 `\0` 结尾的字符串并自动换行；实参**必须是字符串指针**（`char*` / `char[]`）。
   它不是"打印任意值"——把整型（如 `p.(i32)`）传给 `puts` 会被按地址解引用，运行期崩溃或输出乱码。

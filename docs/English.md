@@ -40,8 +40,10 @@ NiHao is a new statically compiled language designed for system-level programmin
   constants; returns a compile-time value)
 
 > `sizeof` / `typeof` / `alignof` / `offsetof` / `bitoffsetof` / `structof` / `unionof` / `holdof` / `visof` are
-> keywords; `len` / `malloc` / `print` / `puts` / `static_assert` are **built-in names** — neither kind takes part
+> keywords; `len` / `malloc` / `static_assert` are **built-in names** — they take no part
 > in user scope resolution, so a user declaration cannot shadow them.
+> `print` / `puts` are not built-in names: they are ordinary functions provided by the **stdio
+> standard library** (`use stdio`).
 > The ownership built-ins (`structof` / `unionof` / `holdof`) take three arguments `(type, member, ptr)`: a type
 > plus member name alone yields no offset, so the owner's base address is recovered from the member address;
 > `structof` accepts only `struct`, `unionof` only `union`, `holdof` both.
@@ -49,7 +51,10 @@ NiHao is a new statically compiled language designed for system-level programmin
 > known (a scalar, a slice with non-literal bounds, …) it is a front-end error.
 > Which backend provides what is tracked in `docs/IMPLEMENTATION_STATUS.md`.
 
-#### 2.3.1 Output Built-ins (`print` / `puts`)
+#### 2.3.1 Output (`print` / `puts`, provided by the stdio standard library)
+
+`print` / `puts` are provided by the stdio standard-library module and must be brought in via
+`use stdio`; they are ordinary functions, not compiler built-ins.
 
 - `puts(s)` — prints a NUL-terminated string and appends a newline; the argument **must be a string
   pointer** (`char*` / `char[]`). It is not "print any value": handing an integer (e.g. `p.(i32)`)

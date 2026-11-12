@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 2.0 设计改变：`print` / `puts` 不再内置，改为 stdio 标准库提供（2026-11-12）
+
+- **规范层**（`docs/Chinese.md` / `docs/English.md`）：`print` / `puts` 从「内置名」名单移到「由 **stdio 标准库**（`use stdio`）提供」——它们是普通函数、参与作用域解析，不再是编译器特判的内置。§2.3.1 标题由「输出内建」改为「输出（stdio 标准库）」。内置名只剩 `len` / `malloc` / `static_assert`。
+- **实现侧（待办，记入 TODO-PB）**：`irparse.c` 里 `print` 的内置下降（PB-64 落地：格式串透传 `printf`、否则前置 `"%lld\n"`、浮点先 DTOI）应移除，`print` 改为像 `puts` 一样直发外部符号；stdio 标准库模块提供 `print` / `puts` 实现。这不等同于「退回 PB-64 之前」——那时 `print` 是裸外部符号、链接期才报 undefined，现在是**有 stdio 模块提供**。
+
 ### 2.0 里程碑：A 线退役，仓库收敛为 IR-only 单一管线（2026-11-12）
 
 - **物理删除 A 线**（ltree 裁「物理删除」）：`parser.c` / `cgen.c` / `native.c` 及符号表 / 类型 / 可见性 / 模块 / 链接 / 内建运行时七个子系统共 **9 个源文件删除（-5495 行）**。NihaoC 现在是单一 IR 管线：`irparse.c`（前端）→ `ir.c`（中间层）→ `ir_to_c.c` / `ir_backend.c` / `ir_riscv64.c` / `ir_loongarch64.c`（出码）。
