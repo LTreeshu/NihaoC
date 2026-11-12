@@ -20,6 +20,29 @@
 - **PB-68（2026-11-12）后这行再改为「IR 能编 52 份」= `IR_SUBSET` 49 + `IR_ONLY` 3**（指针类型后缀档的
   `deref_slice` 放行入名单），pos 侧缺口由 21 份收到 **20** 份；门禁 ir-c / ir-native 的 PASS 数同步
   42 → **43**、SKIP 27 → **26**，c / native **68P/0F/3S** 不变、四档 0 FAIL。
+- **2026-11-12（PB-69）计数更正：上面三行的 `IR_SUBSET` 数与 pos 缺口数都错了，门禁数一直是对的。**
+  上面 PB-66 / PB-67 / PB-68 三行**原文保留不改**（历史条目），以本条为准：
+
+  | 轮次 | 原记 `IR_SUBSET` | 实测 | 原记 IR 能编 | 实测 | 原记 pos 缺口 | 实测 |
+  |---|---|---|---|---|---|---|
+  | PB-66 后 | 46 | **51** | 49 | **54** | 23 | **18** |
+  | PB-67 后 | 48 | **53** | 51 | **56** | 21 | **16** |
+  | PB-68 后 | 49 | **54** | 52 | **57** | 20 | **15** |
+
+  **根因是单一的、恒定偏 5**：PB-66 那轮把**改前**的 46 当成**改后**写进台账（该轮放行 5 份，46 + 5 = 51），
+  PB-67 / PB-68 再逐轮 +2 / +1，错基址一路沿用；pos 缺口 = 72 − (`IR_SUBSET` + 3)，所以也跟着恒偏 5。
+  这三轮**没有增删任何用例文件**（`git diff --name-status HEAD~2 HEAD -- ncc/tests/` 为空），故分母恒为 pos 72 / err 33。
+  **判据（可复算，不靠名单自述）**：三份名单的条目**与 `tests/pos/` `tests/err/` 里真实存在的 `.nc` 求交集**再取补集。
+  实测 `IR_SUBSET` **54** 条、`IR_ONLY` **3** 条（`ir_builtin` / `ir_slice` / `ir_sparam`）、`IR_ERR_COVERED` **22** 条，
+  **全部有对应文件，无悬空条目**。⇒ **pos：IR 能编 57 / 72，缺口 15**；**err：IR 覆盖 22 / 33，缺口 11**。
+  **与门禁对账（这才是发现错误的入口）**：`xmake test -b ir-c` 实跑 **21 条 `[PASS] pos/` + 22 条 `[PASS] err/` = 43 PASS**、
+  **15 条 `[SKIP] pos/` + 11 条 `[SKIP] err/` = 26 SKIP**，与 tally 逐项吻合。那 21 条 pos PASS 里有 **2 条是无 `.expect`
+  的模块型用例**（`mathmod` / `module_top_forms`，`has_main` 判假、只出 `.c` 产物即计 PASS），所以「pos 带 `.expect`
+  且在名单内 = 19」加这 2 条才是 21——**这一条也解释了为什么光看 PASS 数推不出名单大小**。
+  **另有一处与计数无关的行错误**：§2 表里 `borrow` 行早已过期（PB-64 就放行了），而真正还在缺口的 `literal_forms`
+  **从未进表**；两者一出一入，使表的行数（15）恰好等于真缺口数却**成员错一个**，光数行数发现不了。已在本轮改正。
+  **教训（第五次同族）**：白名单 / 台账里的数字要**拿名单 ∩ 实际文件、再与门禁 tally 三方对账**，不能只在上一轮
+  的数字上加本轮增量——PB-54 / PB-56 立的那条「理由要复测」同样适用于**计数**。
 
 ## 1. 四桶定义
 
@@ -30,7 +53,9 @@
 | **G3 布局缺失** | 根因是「聚合体没有真实内存布局」（待裁第 23 条） | 需 ltree 先裁槽宽与布局口径 |
 | **G4 名单与用例** | 缺口在测试资产或名单本身：可提升、文案不同源、用例写法越界 | 改名单 / 改用例，不动编译器 |
 
-## 2. pos 缺口 20 份（72 份总数中，只有 A 线能编或能编但语义不同的那些）
+## 2. pos 缺口 15 份（72 份总数中，只有 A 线能编或能编但语义不同的那些）
+
+> **2026-11-12（PB-69）更正**：本节标题原写「20 份」，实测 **15** 份（判据与根因见 §0 末条）。表内同时改正两处成员错误：`borrow` 行划掉（PB-64 已放行）、补入从未进表的 `literal_forms`。
 
 | 用例 | IR 侧第一手结果 | 桶 | 要补的动作 |
 |---|---|---|---|
@@ -40,7 +65,8 @@
 | `str_array_init` | IR 出码：`assignment makes integer from pointer` | G2 | 字符串数组初始化按整型槽发，指针没落位 |
 | `use_mod` | IR 出码：`implicit declaration of function 'add'` | G2 | 跨模块符号未接（路线图阶段 2「link/use 跨文件」） |
 | ~~`flow` / `flow_move` / `flow_no_free` / `malloc_demo`~~ | **PB-63 已解**：真正卡点只有 `p.(T)` 一处（`malloc(类型)` 一直没问题——实测 `p void = malloc(i32)` 在 IR 能编能跑） | G1→放行 1 | `malloc_demo` 四档一致已入 `IR_SUBSET`；`flow` / `flow_move` / `flow_no_free` / `borrow` 过前端后改卡 **IR 不下降 `print`**（待裁第 7 条；IR-only 名单下已属必须做） |
-| `borrow` | 同 `flow` 族 | G1→卡 print | `print` 下降（A 侧口径见 §4 第 2 条） |
+| ~~`borrow`~~ | ~~同 `flow` 族~~ | ~~G1→卡 print~~ | **PB-64 已放行**（`print` 下降后四档一致，已在 `IR_SUBSET`）。**2026-11-12 PB-69 划掉**：本行自 PB-64 起就是过期行，却一直留在缺口表里充数 |
+| `literal_forms` | `ir: unexpected token '+' in expression`（12:14 `p i32 = +23`、14:15 `bn i32 = +0b10000`、24:15 `f4 f64 = +1.5e-2`）+ `ir: unexpected token 'true' in expression`（44:18 `t bool = true`），共 4 条；A 档能编能跑 | G1 | **2026-11-12 PB-69 补入**（此前从未进表）。两处缺口：**一元 `+` 作字面量前缀**（A 侧 P7 / PA-57 已落，IR 侧没有）与**布尔字面量 `true` / `false`**（路线图 §5.3 的 P2 清单里点名过「布尔字面量」，但一直没进缺口表） |
 | ~~`len_builtin` / `array_capacity_tiers`~~ | **PB-67 已解**：多维数组声明、切片读入声明数组、开区间切片 rhs、字面量推断字符串的 `len()` 四处补齐后四档输出逐字相同，已入 `IR_SUBSET` | G1→放行 2 | — |
 | ~~`deref_slice`~~ | **PB-68 已解**：后缀链求值器落地后四档实跑输出逐字相同、与 `.expect` 逐字节相同（八行 ok），已入 `IR_SUBSET`。原快照留档：`ir: array dimension 1 must have a positive length`（`void[][]`）/ `expected ']', got '['`（`p3[][].(i32)`）——**PB-61 快照**；2026-11-11 PB-67 复测实况是 `array dimension 1 ...` + `array dimension 2 ...` / `ir: unexpected token ']' in expression` | G1→放行 1 | 真因确为「指针类型后缀档」而非容量档（PB-67 的改记成立）。**两条边界未解、登记不修**：① `char[9]` 在 IR 仍是 9 个 8 字节槽（A 侧 9 字节紧凑），`.(char[9])[k]` 按槽宽 8 寻址才与 IR 自己的 `arry[k]` 自洽 ⇒ 归待裁第 23 条；② 两交叉档新暴露的**帧生长方向分歧**（见 §5） |
 | `array_member_default` | `ir: unexpected token '[' in expression` | G3 | 数组元素默认值展开，需成员级真实偏移 |
@@ -63,8 +89,17 @@
 **改记到「指针类型后缀档」一簇**（本轮第一手复测的结论，见下）。
 **PB-68（2026-11-12）追加**：G1 由 14 收到 **13**——`deref_slice` 放行（指针类型后缀档整簇收完），
 pos 侧合计 **20** 份 = G1 13 + G2 5 + G3 2。
+**2026-11-12（PB-69）更正——以上两段的数都作废，按本段读**：pos 侧合计 **15** 份 = **G1 8 + G2 5 + G3 2**。
+逐份点名（与 §0 的名单 ∩ 文件判据一致）：
+- **G1 语法缺失 8 份**：`designator_init`、`is_pattern_forms`、`literal_forms`、`ownerof`、`slice_str_infer`、`stmt_terminators`、`type_forms`、`void_slot_infer`
+- **G2 语义缺失 5 份**：`alignof_builtin`、`is_no_fallthrough`、`multi_arr_decl`、`str_array_init`、`use_mod`
+- **G3 布局缺失 2 份**：`array_member_default`、`struct_member_default`
 
-## 3. err 缺口 15 份（IR 侧不参与或参与了但判据不同源）
+G4 在 pos 侧仍为 0（`alignof_builtin` 与 `is_no_fallthrough` 四档输出不同，**不可提升**，PB-56 的结论继续成立）。
+
+## 3. err 缺口 11 份（IR 侧不参与或参与了但判据不同源）
+
+> **2026-11-12（PB-69）更正**：本节标题原写「15 份」，那是 **PB-62 之前**的值；PB-62 收掉 4 份 E-c 后应为 **11**，标题当时漏改，于是与它自己的子类计数（3 + 6 + 2 = 11）自相矛盾了两天。实测 `IR_ERR_COVERED` 22 条 / err 33 份 ⇒ 缺口 **11**，与门禁 ir-c 的 11 条 `[SKIP] err/` 吻合。逐份：`cooking_bare_var`、`is_dangling_range`、`is_empty_range`（E-a 3）；`deref_bounds`、`flow_move_frozen`、`structof_bad_member`、`void_member_unknown`、`slice_str_overflow`、`default_init_overflow`（E-b 6）；`len_unknown`、`void_subscript`（E-c 2）。
 
 | 子类 | 份数 | 用例 | 说明 |
 |---|---|---|---|
@@ -79,7 +114,7 @@ pos 侧合计 **20** 份 = G1 13 + G2 5 + G3 2。
 
 1. **单点最大的是「真实布局」**：PB-61 时 G3 的 2 份 + E-c 的 6 份 + G2 的 3 份（多维读写、字符串数组、`alignof`）
    共 **11 份**挂在同一条欠账上（待裁第 23 条）；PB-62 收掉 4 份 E-c 后为 **7 份**。它不解，IR 线永远补不到 A 线的 68 份。
-2. **G1 的 13 份聚成 2 簇**，不是 13 件事：**`p.(T)` 类型解引用（PB-63 已做：1 份当场放行、4 份改卡 `print`）**、
+2. **G1 的 13 份聚成 2 簇**，不是 13 件事（**2026-11-12 PB-69 更正：G1 实为 8 份、聚成 3 簇，见 §6；本条原文保留**）：**`p.(T)` 类型解引用（PB-63 已做：1 份当场放行、4 份改卡 `print`）**、
    **`print` 下降（PB-64 已做，四份全放行）**、**顶层声明与 `alias`（PB-66 已做，5 份全放行）**、
    **数组 / 切片容量档（PB-67 已做：`len_builtin` / `array_capacity_tiers` 两份全放行）**、
    **指针类型后缀档（PB-68 已做：`deref_slice` 放行，整簇收完）**、表达式细节与模式（7 份）。按簇排，一簇一轮。
@@ -97,6 +132,10 @@ pos 侧合计 **20** 份 = G1 13 + G2 5 + G3 2。
    最小动作是先给专属诊断（形状同 PA-52 / PA-59 那两轮），真实布局到位后再换成精确检查。
 5. **台账更新方式**：每轮 P2 收一簇后重跑 `build/p61/promotable.sh` 与本节计数，把改完的行从表里删掉——本文件只存
    「还欠什么」，不存历史（历史归 `CHANGELOG.md` 与 `docs/IMPLEMENTATION_STATUS.md`）。
+   **2026-11-12（PB-69）把这条口径补硬**：收簇之后**必须做三方对账**——① 名单条目 ∩ `tests/` 真实文件；
+   ② 补集大小 vs 本文件标题与桶分布；③ `xmake test -b ir-c` 的 `[PASS]` / `[SKIP]` 逐类计数 vs 前两者。
+   三者对不上就是账错了，**不许只在上一轮数字上加增量**（PB-66 起的恒偏 5 就是这么攒出来的）。
+   同时**逐行核对成员**，不只数行数：`borrow` 过期行与 `literal_forms` 漏行一出一入，行数恰好对上而成员是错的。
 
 ## 5. PB-68 新暴露：帧生长方向在 IR 两条 lowering 上不一致（登记不修，待裁）
 
@@ -131,3 +170,22 @@ pos 侧合计 **20** 份 = G1 13 + G2 5 + G3 2。
 （各 2 份帧护栏拒），各 **54 份 AGREE**、**2 份 CRASH_139**（`ir_str` / `str_array_init`）。
 把这 2 份用 **HEAD 版 `irparse.c`**（PB-68 之前）重新出码、链接、实跑，**同样 CRASH_139**
 ⇒ 既有缺陷，非本轮引入。扫脚本与产物在 `ncc/build/p68x/`（gitignore）。
+
+## 6. 计数更正后的排期读数（2026-11-12，PB-69）
+
+§4 第 1 / 2 条的**结论不变、数字更新**：
+
+- **第 1 条（真实布局是单点最大）**：仍成立。今天挂在待裁第 23 条上的是 **G3 2 份 + E-c 2 份 + G2 3 份**
+  （`multi_arr_decl` / `str_array_init` / `alignof_builtin`）= **7 份**，与 PB-62 之后的读数一致。
+- **第 2 条（G1 聚簇）**：G1 由「13 份」更正为 **8 份**，且**已收的五簇不再计入**。剩下的 8 份聚成 **3 簇**：
+  **① 表达式细节 4 份**（`literal_forms` 一元 `+` 与布尔字面量、`type_forms` 类型出现在表达式位置、
+  `ownerof` 的 `.()` 后缀链形态、`void_slot_infer` 的 `void` 指针下标推断）——`ownerof` / `void_slot_infer`
+  与 PB-68 刚落地的后缀链求值器同族，**可能是最便宜的一簇，动手前先复测**；
+  **② 声明与终止符 2 份**（`designator_init` 指定式初值、`stmt_terminators` 顶层 `;` / `#`）；
+  **③ 模式与推断 2 份**（`is_pattern_forms` 带符号区间、`slice_str_infer` 切片 / 字符串指针推断）。
+- **err 侧**：E-b 那 6 份的修复依赖 G1，不是独立工作；E-a 3 份属待裁第 26 条的分批清单；E-c 2 份要 `len_known` 表
+  与指针指向类型跟踪。**err 缺口 11 份里没有一份可以靠改名单解决**。
+- **与路线图的对账**：`docs/VERSIONING_ROADMAP.md` §5.2 那张代价表是 **2026-11-09 的快照**（pos 44 能编 / 28 缺口、
+  err 7 覆盖 / 26 缺口），按「历史快照不改写」口径**原文保留**；今天的现值以本文件为准（pos 57 / 15、err 22 / 11）。
+  §5.3 里 P2 的退出判据「pos IR 可编 44 → 68」按现值读作 **57 → 69**（69 = 72 − 3 份 `IR_ONLY`，那 3 份是 A 后端
+  本就拒的非法用例，不该算进 IR 的追平目标）——**这条口径变更需要 ltree 确认，本轮只登记不擅改判据**。
