@@ -2,6 +2,7 @@
 
 本文档记录 NihaoC 语言规范（Chinese.md / English.md）中各项指针安全规则与编译器（ncc）实际实现的对应状态。
 
+> 更新日期：2026-11-12（**PB-70 IR 前端补齐语法形态七处，三份用例入名单；G1 语法缺失桶清空**）：`irparse.c` 落地 ① `is` 模式整数字面量可带前缀符号、闭区间两端都可带（`is +5` / `is -9..-5`，新助手 `ir_is_int`）；② 语句尾终止符 `;` / `#`（`ir_stmt` 拆包装层 + `ir_stmt_impl` + `ir_eat_stmt_terminator`）、空语句、顶层空声明；③ `return;` / `return #` 按无值返回；④ 一元 `+` 作字面量前缀（只在紧跟数字字面量时消费，与 A 后端 `parse_primary` 同口径）；⑤ 布尔字面量 `true` / `false`；⑥ 括号类型 `(T)` / `(T)[N]`（归一成内层类型 token 走同一条声明路径）；⑦ 声明型 `s string = "lit"` 的 `len()` 长度登记（PB-67 只覆盖字面量推断与 `char[]`，声明型一直静默给 0）。**不新增 IR 操作码，两档发射器与 `ir_to_c.c` 一行未改，A 线一行未改**。三份入 `IR_SUBSET`（`is_pattern_forms` / `stmt_terminators` / `literal_forms`，57 条），四档输出与 `.expect` 逐字节相同；Windows ir-c / ir-native **43→46 PASS**、SKIP **26→23**、0 FAIL，c / native 68P/3S 与比对档 36 格不变；Linux 68P/0F/4S + **46P/0F/24S**、0 FAIL、比对档 35 格。交叉 ir-c 参照 58→62、两档各链接 56→60、qemu 各 **54→58 AGREE**、2 CRASH 不变，`comm` 对账新增 8 行 AGREE / 消失 0 行 ⇒ **零回归**。**台账重大更正**：G1 原记 8 份，复测后只 3 份真是纯语法，另 5 份改归 G3 ⇒ **pos 缺口 15→12 = G1 0 + G2 5 + G3 7，G1 桶清空**；剩下 12 份里 10 份挂待裁第 23 条，只有 `is_no_fallthrough` 与 `use_mod` 独立可做。`type_forms` 括号类型已通但 `arrow typed` 仍 bad（聚合体第二成员越槽），**刻意不入名单**。详见下方 PB-70 实测表。
 > 更新日期：2026-11-12（**PB-69 簿记更正 + 名单档名统一为 CLI 实名**，零代码 / 零用例 / 零 `xmake.lua` 改动）：台账 `IR_SUBSET` 与 pos 缺口数**恒偏 5**，根因是 PB-66 把改前的 46 当成改后写账（该轮 +5 = 51），PB-67/68 逐轮 +2/+1 沿用错基址。**实测现值**：`IR_SUBSET` **54** / `IR_ONLY` **3** / `IR_ERR_COVERED` **22**，三份名单无悬空条目 ⇒ **pos IR 能编 57/72（缺口 15 = G1 8 + G2 5 + G3 2）、err IR 覆盖 22/33（缺口 11）**；与 `xmake test -b ir-c` 的 21 pos PASS + 22 err PASS = 43、15 pos SKIP + 11 err SKIP = 26 逐项吻合（那 21 里有 2 条是无 `.expect` 的模块型用例）。另改正缺口表两处成员错误：`borrow` 过期行划掉、从未进表的 `literal_forms` 补入并取第一手诊断（一元 `+` 前缀 + 布尔字面量 `true`，4 条）。**名单档名按 ltree 裁定统一为 CLI 实名**：`ir-rv64`→`ir-riscv64`、`ir-loongarch`→`ir-loongarch64`、`ir-rv32`→`ir-riscv32`，**代码仍不改名**（2026-11-10 裁定③有效），就地正名三处 + 新增 ROADMAP §5.8 续记，历史裁定原文不动。门禁复跑与 PB-68 后逐字相同。详见下方 PB-69 实测表。
 > 更新日期：2026-11-12（**PB-68 IR 前端补齐指针类型后缀档**）：`irparse.c` 新增后缀链走查器（`IrChain` + `ir_scan_postfix` / `ir_chain` / `ir_chain_assign`）与变量存储形态表 `vmode`（`VM_SLOT` / `VM_PTRARR`），把 `void[][]` 逐层解引用、`.(T[N])` 数组型后缀、指针数组、`malloc(void[N])` 退化统一成「逐层算地址 → 末层读 / 写」，全部复用既有 opcode ⇒ **不新增 IR 操作码，两档发射器与 `ir_to_c.c` 一行未改，A 线一行未改**。路由刻意做窄（仅 `VM_PTRARR` / 新形态 / 分组数 ≥ 2 三种情形改道），`arr[i][j]`、`s.a[0]`、单层 `p.(i32)` 走原路径与原诊断。`deref_slice` 入 `IR_SUBSET`（49 条）（2026-11-12 PB-69 更正：实为 54 条，原值保留），四档各 `[PASS]` 且 stdout 与 `.expect` 逐字节相同；Windows ir-c / ir-native 42→43 PASS、SKIP 27→26、0 FAIL，c / native 68P/3S 不变、比对档 36 格不变；Linux 68P/0F/4S + 43P/0F/27S、0 FAIL。**这一簇没有等真实布局**——指针数组槽里存的是堆地址而非帧基址，A 侧同形态即 `void*(*p) = malloc(N*sizeof(void*))`，故第 23 条未裁也能收簇。**新暴露一条方向分歧并登记不修**：`IR_ADDR` / `IR_ELEM_ADDR` 在两交叉档向下生长、在 `ir_to_c.c` 向上生长（静态证据：同一元素写落 `s0+56`、读落 `s0-72`，相距 128 字节），此前指针值寻址只落堆 / 字符串池所以看不见 ⇒ 待裁第 33 条。交叉整语料 54 AGREE / 2 CRASH，那 2 条用 HEAD 版 `irparse.c` 复跑同样 CRASH ⇒ **零回归**。台账 pos 缺口 21→20、G1 14→13，新增 §5。**（2026-11-12 PB-69 更正：缺口应为 16→15、G1 应为 9→8，原值保留；根因是 PB-66 起恒偏 5，见下方 PB-69 实测表。）**详见下方 PB-68 实测表。
 > 更新日期：2026-11-11（**PB-67 IR 前端补齐数组 / 切片容量档**）：`irparse.c` 补四件事——**多维数组声明**（`m i32[2][3]` 按行主序摊平成连续槽，新增维度表 `vdim` / `vndim` 与 `ir_flat_index` / `ir_array_init_list` 两个助手，**不新增 IR 操作码，两档发射器一行未改**）、**切片读入声明数组**（`cp i32[3] = arr[1..4]`，复制个数取**目标声明容量**，与 A 侧 `memcpy` 同口径）、**开区间切片 rhs**（`sw = arr[..5]`，指针取 `&arr[0]`、长度取 `hi`）、**字面量推断字符串的 `len()`**（`s = "abc"` → 3，此前静默给 0）。两份用例入 `IR_SUBSET`（`len_builtin` / `array_capacity_tiers`）；`deref_slice` **不入**——第一手复测证明它的真因是**指针类型后缀**（`void[][]` / `.(char[9])` / `void[2]` 指针数组 / `malloc(void[3])`），台账据此改记到新分出的「指针类型后缀档」一簇。门禁 ir-c / ir-native 40→42 PASS、SKIP 29→27、0 FAIL，c / native 不变；Linux 68P/0F/4S + 42P/0F/28S；交叉 riscv64 + loongarch64 四份产物**三套 oracle 零告警**、qemu 执行输出与 `.expect` 逐字相同。台账 pos 缺口 23→21、G1 16→14。详见下方 PB-67 实测表。
@@ -853,6 +854,43 @@
 | 交叉（两份 × 两架构） | — | riscv64 / loongarch64 各一份 `.s`：三套 oracle（msys2 GAS + zig LLVM + llvm-mc 18）**告警 0**，静态链接 0 告警，qemu 执行输出与 `.expect` **逐字相同**（4 份 diff 全空） |
 
 锚点：`irparse.c` 的维度表 `vdim` / `vndim`（`IR_MAX_DIMS` = 4）与建表 / 清零处、`ir_flat_index`（多维扁平下标）、`ir_array_init_list`（多维初始化列表递归填槽）、多维下标读路径（`ir_expr` 的 `TOK_LBRACKET` 分支收 `[j]…` 后转扁平）、赋值路径的切片块（开区间 `arr[..hi]` → `&arr[0]` + 长度 `hi`）、赋值路径的字面量长度登记（`ve[vi] = strlen(...)` + `vetyp[vi] = 8`）、声明路径的切片复制块（`cp T[K] = arr[lo..hi]` 按 K 复制）、维度解析与记录处（`dims[IR_MAX_DIMS]` → `vndim[vi]` / `vdim[vi][k]`）、初始化列表分派（`vndim[vi] >= 2` → `ir_array_init_list`）；名单在 `xmake.lua` 的 `IR_SUBSET`。
+
+**PB-70 实测：语法形态七处 + G1 桶清空（2026-11-12，探针与扫脚本在 `ncc/build/p70x/`，不入版本库）**
+
+| 形态 / 判据 | 改前（IR 侧第一手） | 改后 |
+|---|---|---|
+| `is +5`（带符号字面量） | `ir: bad 'is' pattern` | 通过；`is +x` 给专属诊断 `expected integer after '+'`，**一态一诊断**（A 侧同探针也是 1 条，文案不同源属 E-a） |
+| `is -9..-5`（两端带符号区间） | `bad 'is' pattern` + `unexpected token '..'` | 通过；`is 5..1` 仍报 `invalid range … lo > hi`，`is 5..` / `is 5..x` 仍报 `expected integer after '..'` |
+| `is_pattern_forms` 整份 | 3 条诊断 | **四档各 `[PASS]`**，与 `.expect` 七行逐字节相同。**首匹配即止不成问题**——每条 `is` 子句都带 `break`，故 IR 无 `__is_matched` 也对（与 `is_no_fallthrough` 的区别正在此） |
+| 语句尾 `;` / `#`、空语句、顶层空声明 | `stmt_terminators` 11 条诊断（顶层 4 + 语句级 7） | 0 条；`module main;` / `use stdio;` / `Cfg struct {…};` / `}#` / 单独 `;` / `#` 全通 |
+| `return;` / `return #` | `ir: unexpected token ';' in expression` | 按无值返回发 `IR_RET`（终止符不是表达式） |
+| `stmt_terminators` 整份 | 11 条诊断 | **四档各 `[PASS]`**，与 `.expect` 两行逐字节相同 |
+| 一元 `+` 作字面量前缀 | `ir: unexpected token '+' in expression`（`+23` / `+0b10000` / `+1.5e-2`） | 通过；**只在紧跟 INT_CONST / FLOAT_CONST 时消费**，其余位置的 `+` 仍是二元运算符（`neg + +7` 正确解析为 `neg + (+7)`） |
+| 布尔字面量 `true` / `false` | `ir: unexpected token 'true' in expression` | 按 1 / 0 整型常量落（槽模型） |
+| 声明型 `s string = "lit"` 的 `len()` | **静默给 0**（能编能跑但答案是错的；PB-67 只覆盖字面量推断与 `char[]`） | 逻辑长度（`"tab\there\nnl\\q\"w"` → **15**）；只登记 `ve[]`，**不改 `vetyp` / 寻址宽度** |
+| `literal_forms` 整份 | 4 条诊断 | **四档各 `[PASS]`**，与 `.expect` 五行逐字节相同 |
+| 括号类型 `(T)` / `(T)[N]` | `ir: unexpected token 'i32' in expression`（`v (i32) = 7` / `a (i32)[3]`） | 归一成内层类型 token 走同一条声明路径，数组后缀接在 `)` 之后；`paren type ok` |
+| `type_forms` 整份 | 多条诊断、编译不过 | **能编能跑**，四条断言里 3 条 ok、`arrow typed` 仍 **bad** ⇒ **刻意不入名单**（`r->y` / `pt.y` 是聚合体第二成员、越出 1 槽，属待裁第 23 条） |
+| 门禁 | Windows ir-c / ir-native 43P/26S | **46P / 23S**、0 FAIL；c / native **68P/0F/3S 不变**；Linux c / native 68P/0F/4S、ir **46P/0F/24S**、0 FAIL |
+| 比对档 | 4 后端 34 / 2 后端 2 | 不变（Windows 36 格；Linux 33 + 2 = 35 格） |
+| 交叉（全语料 72 份） | ir-c 参照 58 出码；两档各 56 链接、54 AGREE / 2 CRASH | ir-c 参照 **62**；两档各 **60 链接**（各 2 份帧护栏拒：`deref_slice` 3328、`ir_slice` 2208 > 2047）、**58 AGREE / 2 CRASH**；`comm` 对账**新增 8 行 AGREE、消失 0 行** ⇒ 零回归 |
+| 三方对账（PB-69 立的新口径） | — | 名单 ∩ 文件 = `IR_SUBSET` **57** / `IR_ONLY` 3 / `IR_ERR_COVERED` 22，**无悬空**；补集 pos **12** / err **11**；`xmake test -b ir-c` 实跑 **24 pos PASS + 22 err PASS = 46**、**12 pos SKIP + 11 err SKIP = 23**，三者吻合 |
+
+**台账分类被第一手复测推翻（本轮最重要的产出）**：G1 原记 8 份，实测只有 3 份是纯语法缺口，另 5 份改归 **G3**：
+
+| 用例 | 台账原记 | 第一手真因 | 改归 |
+|---|---|---|---|
+| `ownerof` | G1「`.()` 后缀链形态」 | `&boy.name` + `structof` / `holdof` / `unionof` / `bitoffsetof` 四个从属查询内置，全要成员真实偏移（P2 当年就明确让 IR 拒绝） | **G3** |
+| `void_slot_infer` | G1「`void` 指针下标推断」 | `'q' is not a pointer to aggregate` + `->`：`q void = &pt` 的聚合体指针跟踪，`q->y` 越槽 | **G3** |
+| `designator_init` | G1「指定式初值不解析」 | 解析缺口只是表象，落对必须知道成员偏移（A 侧靠 PA-49 / PA-56） | **G3** |
+| `slice_str_infer` | G1「切片 / 字符串指针推断」 | 首错就是 `member 'name' element 8 lies beyond the IR 8-byte slot`（PB-66 立的护栏） | **G3** |
+| `type_forms` | G1「类型出现在表达式位置」 | 括号类型等三处本轮已补，剩下唯一卡点是聚合体第二成员 | **G3** |
+
+⇒ **pos 缺口 15 → 12 = G1 0 + G2 5 + G3 7，G1 语法缺失桶清空**。剩下 12 份里 **10 份挂待裁第 23 条**（G3 7 + G2 里 `multi_arr_decl` / `str_array_init` / `alignof_builtin`），只有 `is_no_fallthrough`（`__is_matched`）与 `use_mod`（跨模块符号）**独立可做**。下一手要么等第 23 条裁定，要么先做这 2 份。
+
+**两条诚实边界**：① `stmt_terminators` 的 `Cfg struct { a i32 b i32 }` 在 IR 只占 1 槽，产物 C 里 `p.a = 1` 写 `&p`、**`p.b = 2` 写无关临时槽 `&t1`**，输出恰好为 3 只因 `t1` 未被复用——比 PB-48 记的「落在相邻槽」更尖锐（落点是任意临时槽）；进名单是因为四档输出相同，**不是布局已定案**，成员寻址代码本轮一行未改。② `type_forms` 在交叉档记 **AGREE 但输出是错的**（参照用 ir-c，同一前端两侧同错）——「AGREE 只代表输出相同」再次应验。
+
+锚点（逐个 grep 复核）：`irparse.c` 的 `ir_is_int`（**605**）、`is` 模式带符号分派（**3250**）、一元 `+` 字面量前缀（`ir_primary` 内 **1551**）、布尔字面量（**1561**）、`ir_stmt` / `ir_stmt_impl` 前向声明（**2514–2515**）、`ir_eat_stmt_terminator`（**2965**）、`ir_stmt` 包装层（**2972**）、`ir_stmt_impl` 与空语句入口（**2978 / 2981**）、`return;` 无值返回（**3355**）、括号类型归一（**3946**）、声明型 `string` 长度登记（**4161**）、顶层空声明分支（**4910**）。名单在 `xmake.lua:233`（`IR_SUBSET`）与其上的日期注文。文件行数：`irparse.c` 4921 → **4998**（净增 77）、`xmake.lua` 528 → **546**（净增 18，全在名单与注文）；`ir.h` / `ir.c` / `ir_to_c.c` / `ir_backend.c` / 两档发射器 / A 线**全部零改动**，故本文件其余各处锚点**不动**。
 
 **PB-69 实测：簿记计数更正 + 名单档名统一（2026-11-12，零代码 / 零用例 / 零名单改动）**
 

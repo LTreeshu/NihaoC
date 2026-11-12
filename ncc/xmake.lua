@@ -212,7 +212,25 @@ end
 -- 0 告警，但八组里有三组算错地址：IR_ADDR / IR_ELEM_ADDR 在两档发射器是**向下**生长、在 ir_to_c 是**向上**
 -- （C 数组），此前 is_ptr=1 的寻址只指向堆或字符串池（向上）故未暴露，本轮新形态第一次把帧地址装进指针值
 -- 再做下标运算才显形。该方向分歧带设计权重（改哪一侧要动整条交叉出码面），**登记不修**，见台账与待裁清单。
-local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true, fx_types = true, malloc_demo = true, flow = true, flow_no_free = true, borrow = true, flow_move = true, features = true, for_init_forms = true, transfer = true, mathmod = true, module_top_forms = true, len_builtin = true, array_capacity_tiers = true, deref_slice = true}
+-- PB-70（2026-11-12）新增 is_pattern_forms 与 stmt_terminators：两份都带 .expect，四档实跑输出与 .expect
+-- 逐字节相同 ⇒ 入 IR_SUBSET，IR 侧 PASS 43→45、SKIP 26→24。落地三处，全在 irparse.c：
+-- ① `is` 模式的整数字面量可带前缀符号、闭区间两端都可带（`is +5` / `is -9..-5`），新助手 ir_is_int；
+--    畸形形态仍是一态一诊断（`is +x` 只报 expected integer after '+'），三份既有 err 用例诊断逐字未变。
+-- ② 语句终止符 `;` / `#`：ir_stmt 拆成包装层 + ir_stmt_impl，尾部由 ir_eat_stmt_terminator 吃一个，
+--    空语句在 impl 入口处理，顶层另有空声明分支（`module main;` / `use stdio;` / `Cfg struct {…};` / `}#`）。
+-- ③ `return;` / `return #` 按无值返回处理（此前把终止符当表达式解析）。
+-- 边界照旧诚实：stmt_terminators 里 `Cfg struct { a i32 b i32 }` 在 IR 只占 1 个 8 字节槽，实测产物 C 里
+-- `p.a = 1` 写 &p、而 `p.b = 2` 写的是**无关临时槽 &t1**——输出恰好为 3 只因 t1 在被读回前没被复用。
+-- 这是待裁第 23 条（聚合体真实布局）家族的又一实例，比 PB-48 记的「落在相邻槽」更尖锐：落点是任意临时槽。
+-- 本份进名单是因为四档输出相同，**不是因为布局已定案**；成员寻址代码本轮一行未改。
+-- PB-70 同轮另新增 literal_forms：补齐三个零覆盖的 BNF 形态后四档输出与 .expect 逐字节相同 ⇒ PASS 45→46。
+-- ④ 一元 `+` 作字面量前缀（BNF §1.3，只在紧跟数字字面量时消费，其余位置的 '+' 仍是二元运算符，
+--    与 A 后端 parse_primary 同口径，不放宽成一元加）；⑤ 布尔字面量 true / false 按 1 / 0 整型常量落；
+-- ⑥ 声明型 `s string = "lit"` 的逻辑长度登记（PB-67 只覆盖了字面量推断与 char[] 两条路径，
+--    声明型 string 的 ve[] 一直是 0 ⇒ len(s) 静默给 0）——只登记长度，不改 vetyp/寻址宽度。
+-- 括号类型 `(T)` / `(T)[N]` 也同轮落地（归一成内层类型 token 走同一条声明路径），但 type_forms **不入名单**：
+-- 它四条断言里 `arrow typed` 仍打 bad——`r->y` 是聚合体第二成员、越出 IR 的 1 个 8 字节槽，属待裁第 23 条。
+local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true, fx_types = true, malloc_demo = true, flow = true, flow_no_free = true, borrow = true, flow_move = true, features = true, for_init_forms = true, transfer = true, mathmod = true, module_top_forms = true, len_builtin = true, array_capacity_tiers = true, deref_slice = true, is_pattern_forms = true, stmt_terminators = true, literal_forms = true}
 local IR_ONLY = {ir_builtin = true, ir_slice = true, ir_sparam = true}
 -- IR_ERR_COVERED: err 用例中 IR 前端已实现对应诊断的（未列出的非 m2 用例仍在 IR 侧跳过）
 -- cooking_bare_var 刻意不入：IR 前端对块内裸 <var-decl> 只给 `ir: undeclared variable 'K'`，

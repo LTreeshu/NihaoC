@@ -43,6 +43,11 @@
   **从未进表**；两者一出一入，使表的行数（15）恰好等于真缺口数却**成员错一个**，光数行数发现不了。已在本轮改正。
   **教训（第五次同族）**：白名单 / 台账里的数字要**拿名单 ∩ 实际文件、再与门禁 tally 三方对账**，不能只在上一轮
   的数字上加本轮增量——PB-54 / PB-56 立的那条「理由要复测」同样适用于**计数**。
+- **PB-70（2026-11-12）后现值**：`IR_SUBSET` **57** + `IR_ONLY` 3 ⇒ **pos IR 能编 60 / 72，缺口 12**；
+  `IR_ERR_COVERED` 22 不变 ⇒ **err 覆盖 22 / 33，缺口 11**。门禁 ir-c / ir-native **43 → 46 PASS**、
+  SKIP **26 → 23**（本轮共放行 3 份），c / native **68P/0F/3S** 不变、四档 0 FAIL。
+  三方对账已按 §4 第 5 条执行：名单 ∩ 文件 = 57 / 3 / 22 无悬空；补集 12 与本文件标题及桶分布一致；
+  `xmake test -b ir-c` 的 `[PASS]` / `[SKIP]` 逐类计数吻合。
 
 ## 1. 四桶定义
 
@@ -53,9 +58,10 @@
 | **G3 布局缺失** | 根因是「聚合体没有真实内存布局」（待裁第 23 条） | 需 ltree 先裁槽宽与布局口径 |
 | **G4 名单与用例** | 缺口在测试资产或名单本身：可提升、文案不同源、用例写法越界 | 改名单 / 改用例，不动编译器 |
 
-## 2. pos 缺口 15 份（72 份总数中，只有 A 线能编或能编但语义不同的那些）
+## 2. pos 缺口 12 份（72 份总数中，只有 A 线能编或能编但语义不同的那些）
 
 > **2026-11-12（PB-69）更正**：本节标题原写「20 份」，实测 **15** 份（判据与根因见 §0 末条）。表内同时改正两处成员错误：`borrow` 行划掉（PB-64 已放行）、补入从未进表的 `literal_forms`。
+> **2026-11-12（PB-70）**：15 → **12** 份（放行 3 份），另 5 份改归 G3；**G1 桶清空**，详见本节末的桶分布。
 
 | 用例 | IR 侧第一手结果 | 桶 | 要补的动作 |
 |---|---|---|---|
@@ -66,22 +72,22 @@
 | `use_mod` | IR 出码：`implicit declaration of function 'add'` | G2 | 跨模块符号未接（路线图阶段 2「link/use 跨文件」） |
 | ~~`flow` / `flow_move` / `flow_no_free` / `malloc_demo`~~ | **PB-63 已解**：真正卡点只有 `p.(T)` 一处（`malloc(类型)` 一直没问题——实测 `p void = malloc(i32)` 在 IR 能编能跑） | G1→放行 1 | `malloc_demo` 四档一致已入 `IR_SUBSET`；`flow` / `flow_move` / `flow_no_free` / `borrow` 过前端后改卡 **IR 不下降 `print`**（待裁第 7 条；IR-only 名单下已属必须做） |
 | ~~`borrow`~~ | ~~同 `flow` 族~~ | ~~G1→卡 print~~ | **PB-64 已放行**（`print` 下降后四档一致，已在 `IR_SUBSET`）。**2026-11-12 PB-69 划掉**：本行自 PB-64 起就是过期行，却一直留在缺口表里充数 |
-| `literal_forms` | `ir: unexpected token '+' in expression`（12:14 `p i32 = +23`、14:15 `bn i32 = +0b10000`、24:15 `f4 f64 = +1.5e-2`）+ `ir: unexpected token 'true' in expression`（44:18 `t bool = true`），共 4 条；A 档能编能跑 | G1 | **2026-11-12 PB-69 补入**（此前从未进表）。两处缺口：**一元 `+` 作字面量前缀**（A 侧 P7 / PA-57 已落，IR 侧没有）与**布尔字面量 `true` / `false`**（路线图 §5.3 的 P2 清单里点名过「布尔字面量」，但一直没进缺口表） |
+| ~~`literal_forms`~~ | ~~`ir: unexpected token '+' in expression`~~（12:14 `p i32 = +23`、14:15 `bn i32 = +0b10000`、24:15 `f4 f64 = +1.5e-2`）+ `ir: unexpected token 'true' in expression`（44:18 `t bool = true`），共 4 条；A 档能编能跑 | G1→放行 | **PB-69 补入、PB-70 同日解掉**：一元 `+` 作字面量前缀（A 侧 P7 / PA-57 已落，IR 侧没有）、布尔字面量 `true` / `false`、**以及第三处此前没看出来的卡点——声明型 `s string = "lit"` 的 `len(s)` 静默给 0**（PB-67 只覆盖了字面量推断与 `char[]` 两条路径）。三处补齐后四档输出与 `.expect` 逐字节相同，已入 `IR_SUBSET` |
 | ~~`len_builtin` / `array_capacity_tiers`~~ | **PB-67 已解**：多维数组声明、切片读入声明数组、开区间切片 rhs、字面量推断字符串的 `len()` 四处补齐后四档输出逐字相同，已入 `IR_SUBSET` | G1→放行 2 | — |
 | ~~`deref_slice`~~ | **PB-68 已解**：后缀链求值器落地后四档实跑输出逐字相同、与 `.expect` 逐字节相同（八行 ok），已入 `IR_SUBSET`。原快照留档：`ir: array dimension 1 must have a positive length`（`void[][]`）/ `expected ']', got '['`（`p3[][].(i32)`）——**PB-61 快照**；2026-11-11 PB-67 复测实况是 `array dimension 1 ...` + `array dimension 2 ...` / `ir: unexpected token ']' in expression` | G1→放行 1 | 真因确为「指针类型后缀档」而非容量档（PB-67 的改记成立）。**两条边界未解、登记不修**：① `char[9]` 在 IR 仍是 9 个 8 字节槽（A 侧 9 字节紧凑），`.(char[9])[k]` 按槽宽 8 寻址才与 IR 自己的 `arry[k]` 自洽 ⇒ 归待裁第 23 条；② 两交叉档新暴露的**帧生长方向分歧**（见 §5） |
 | `array_member_default` | `ir: unexpected token '[' in expression` | G3 | 数组元素默认值展开，需成员级真实偏移 |
 | `struct_member_default` | `ir: member default value: only simple constant supported` | G3 | 成员默认值只落了「简单常量」那一半，PA-49 / PA-56 家族未回灌完 |
-| `designator_init` | `ir: unexpected token '.' in expression` | G1 | `.field = v` 指定式初值不解析 |
+| `designator_init` | `ir: unexpected token '.' in expression`（198 条级联） | **G3**（PB-70 改归，原记 G1） | `.field = v` 指定式初值：**解析层缺口只是表象**，要落对必须知道成员真实偏移（A 侧靠 PA-49 / PA-56 的 C 指定初始化器），故根因是布局 |
 | ~~`features`~~ | ~~`ir: unsupported top-level token 'alias'`~~ | G1→放行 | **PB-66 已解**：顶层 `alias` + 顶层 `const` / `var` + `for` 声明式 init + `else if` 链 + struct 数组成员齐活，四档输出逐字相同，已入 `IR_SUBSET` |
 | ~~`mathmod` / `transfer`~~ | ~~`unsupported top-level token 'const'` / `'flow'`~~ | G1→放行 | **PB-66 已解**：顶层变量声明（含带可见性前缀的 `flow`）落成 `IrProg` 全局池，`transfer` 的 `flow create() void` 顶层函数声明一并放行 |
 | ~~`for_init_forms`~~ | ~~`ir: unexpected top-level identifier 'count'`~~ | G1→放行 | **PB-66 已解**：顶层变量 + `for` 的三种 init 形态（`i i32 = 0` / `i = 0` / `i (i32) = 0`）+ 任意表达式 step（`i++` / `i--` / `j = j - 1` / `tick()`）全部放行，step 改为 body 之后执行 |
 | ~~`module_top_forms`~~ | ~~bracket attributes 只对 `func` 生效（got `const`）~~ | G1→放行 | **PB-66 已解**：属性表落到 `const` 声明上（`[[export ".mydata"]]`），模块型用例四档都出 `.c` 产物 |
-| `is_pattern_forms` | `ir: bad 'is' pattern` | G1 | 带符号区间 `is -9..-5` 一类模式 |
-| `ownerof` | `ir: unexpected token '.' in expression` | G1 | `.()` 后缀链形态 |
-| `slice_str_infer` | `ir: expected member name` | G1 | 切片 / 字符串指针推断 |
-| `stmt_terminators` | `ir: unsupported top-level token ';'` | G1 | 顶层 `;` / `#` 终止符 |
-| `type_forms` | `ir: unexpected token 'i32' in expression` | G1 | 类型出现在表达式位置（C 风格转换形态） |
-| `void_slot_infer` | `ir: unexpected token ']' in expression` | G1 | `void` 指针下标推断 |
+| ~~`is_pattern_forms`~~ | ~~`ir: bad 'is' pattern`~~ | G1→放行 | **PB-70 已解**：`is` 模式的整数字面量可带前缀符号、闭区间两端都可带（`is +5` / `is -9..-5`），四档输出与 `.expect` 逐字节相同，已入 `IR_SUBSET`。**首匹配即止不成问题**——本份每条 `is` 子句都带 `break`，故 IR 无 `__is_matched` 也能给出正确结果（与 `is_no_fallthrough` 的区别正在此） |
+| `ownerof` | `ir: unexpected token '.' in expression`（`&boy.name`）+ `unexpected token 'structof'` / `expected '{', got '('` | **G3**（PB-70 改归，原记 G1「`.()` 后缀链形态」） | **原归类被第一手复测推翻**：真卡点是 `structof` / `holdof` / `unionof` / `bitoffsetof` 四个从属查询内置 + `&聚合体.成员`，全都要成员真实偏移（PB-33 的 P2 当年就明确让 IR 保持拒绝）。与后缀链无关 |
+| `slice_str_infer` | `ir: member 'name' element 8 lies beyond the IR 8-byte slot`（19:27）+ `slice assignment expects { v0, v1, ... }` + `'.()' dereference takes a scalar type or nothing, not 'Say'` | **G3**（PB-70 改归，原记 G1） | 首错就是**数组成员越首槽的专属诊断**（PB-66 立的那道护栏），另卡聚合体 `.(Say)`。不是推断语法缺口 |
+| ~~`stmt_terminators`~~ | ~~`ir: unsupported top-level token ';'`~~（11 条） | G1→放行 | **PB-70 已解**：语句尾终止符 + 空语句 + 顶层空声明 + `return;`，四档输出与 `.expect` 逐字节相同，已入 `IR_SUBSET`。**边界**：本份的 `Cfg struct { a i32 b i32 }` 在 IR 只占 1 槽，产物 C 里 `p.b = 2` 写的是**无关临时槽 `&t1`**，输出恰好为 3 只因 t1 未被复用 ⇒ 进名单是因为输出相同，不是布局已定案（第 23 条） |
+| `type_forms` | 改前 `ir: unexpected token 'i32' in expression`（括号类型）；**PB-70 后能编能跑**，四条断言里 `arrow typed` 仍打 `bad` | **G3**（PB-70 改归，原记 G1） | 括号类型 `(i32)` / `(i32)[3]`、一元 `+`、`q.()` 三处 PB-70 已补齐；**剩下的唯一卡点是 `r->y` / `pt.y`**——聚合体第二成员越出 IR 的 1 个 8 字节槽 ⇒ 第 23 条。**刻意不入名单**（入去就是当场红） |
+| `void_slot_infer` | `ir: 'q' is not a pointer to aggregate (assign &var first)` + `unexpected token '->'`（28:8 / 29:8） | **G3**（PB-70 改归，原记 G1） | 真卡点是 `q void = &pt`（pt 是聚合体）的**聚合体指针跟踪**与 `q->x` / `q->y`；`q->y` 是第二成员、越出 1 槽。裸 `.()` / 空下标 `[]` 那几组 PB-68 后已能过 |
 
 **桶分布**：G1 **14**、G2 **5**、G3 **2**（G4 在 pos 侧本轮为 0——两份「看似可提升」的 `alignof_builtin` 与
 `is_no_fallthrough` 实测四档输出不同，**不可提升**；这也复核了 PB-56 当时「可提升 0 份」的结论仍然成立）。
@@ -96,6 +102,17 @@ pos 侧合计 **20** 份 = G1 13 + G2 5 + G3 2。
 - **G3 布局缺失 2 份**：`array_member_default`、`struct_member_default`
 
 G4 在 pos 侧仍为 0（`alignof_builtin` 与 `is_no_fallthrough` 四档输出不同，**不可提升**，PB-56 的结论继续成立）。
+**2026-11-12（PB-70）再更正——pos 侧合计 12 份 = G1 **0** + G2 5 + G3 **7****：
+本轮放行 3 份（`is_pattern_forms` / `stmt_terminators` / `literal_forms`），另把 5 份**改归 G3**
+（`designator_init` / `ownerof` / `void_slot_infer` / `slice_str_infer` / `type_forms`——第一手复测证明
+它们的根因都是聚合体真实布局，原记 G1 有误，逐份证据见上表）。
+- **G1 语法缺失 0 份——纯语法缺口桶本轮清空**。这是 P2 的一个里程碑：`irparse.c` 能自决的那一类活干完了。
+- **G2 语义缺失 5 份**（不变）：`alignof_builtin`、`is_no_fallthrough`、`multi_arr_decl`、`str_array_init`、`use_mod`
+- **G3 布局缺失 7 份**：`array_member_default`、`struct_member_default`、`designator_init`、`ownerof`、`slice_str_infer`、`type_forms`、`void_slot_infer`
+**⇒ 剩下 12 份里没有一份能靠「补语法」解决**：7 份直接挂待裁第 23 条，另 5 份 G2 里 `multi_arr_decl` /
+`str_array_init` / `alignof_builtin` 三份也与第 23 条同源（合计 **10 份**），只有 `is_no_fallthrough`
+（`__is_matched` 首匹配即止）与 `use_mod`（跨模块符号）是独立可做的。**下一手要么等第 23 条裁定，
+要么先做这两份独立的 G2。**
 
 ## 3. err 缺口 11 份（IR 侧不参与或参与了但判据不同源）
 
@@ -189,3 +206,37 @@ G4 在 pos 侧仍为 0（`alignof_builtin` 与 `is_no_fallthrough` 四档输出�
   err 7 覆盖 / 26 缺口），按「历史快照不改写」口径**原文保留**；今天的现值以本文件为准（pos 57 / 15、err 22 / 11）。
   §5.3 里 P2 的退出判据「pos IR 可编 44 → 68」按现值读作 **57 → 69**（69 = 72 − 3 份 `IR_ONLY`，那 3 份是 A 后端
   本就拒的非法用例，不该算进 IR 的追平目标）——**这条口径变更需要 ltree 确认，本轮只登记不擅改判据**。
+
+## 7. PB-70 实测：G1 桶清空，剩下的活全在语义与布局（2026-11-12）
+
+**本轮放行 3 份**（`is_pattern_forms` / `stmt_terminators` / `literal_forms`），**改归 5 份到 G3**，
+落地七处形态（`is` 带符号模式与带符号区间、语句尾终止符与空语句与顶层空声明、`return;`、
+一元 `+` 字面量前缀、布尔字面量、括号类型 `(T)` / `(T)[N]`、声明型 `string` 的 `len()`）。
+
+**最有决策价值的一条：G1 语法缺失桶清空了。** 台账原把 8 份挂在 G1，第一手复测后只剩 3 份真是纯语法，
+另 5 份（`designator_init` / `ownerof` / `void_slot_infer` / `slice_str_infer` / `type_forms`）的根因
+都是**聚合体真实布局**。⇒ **`irparse.c` 能自决的那一类活干完了**，剩下 12 份里：
+
+| 类别 | 份数 | 用例 | 能不能自决 |
+|---|---|---|---|
+| 直接挂待裁第 23 条（布局） | 7 | `array_member_default` `struct_member_default` `designator_init` `ownerof` `slice_str_infer` `type_forms` `void_slot_infer` | **不能**，等裁定 |
+| G2 但与第 23 条同源 | 3 | `multi_arr_decl` `str_array_init` `alignof_builtin` | **不能**，等裁定 |
+| G2 独立可做 | 2 | `is_no_fallthrough`（`__is_matched` 首匹配即止）、`use_mod`（跨模块符号） | **能** |
+
+**⇒ 下一手只有两条路**：要么 ltree 先裁第 23 条（一次解开 10 份），要么先做那 2 份独立的 G2。
+err 侧 11 份不变，其中 E-b 6 份的修复依赖 pos 侧，E-a 3 份属第 26 条分批清单，E-c 2 份要 `len_known` 表
+与指针指向类型跟踪。
+
+**两条本轮量到的诚实边界**：
+1. **`stmt_terminators` 的聚合体成员写落在无关临时槽**：`Cfg struct { a i32 b i32 }` 在 IR 只占 1 个 8 字节槽，
+   产物 C 里 `p.a = 1` 写 `&p`、`p.b = 2` 写 **`&t1`**（一个临时 vreg 槽）。输出恰好为 3 只因 `t1` 在被读回前
+   没被复用。这比 PB-48 记的「落在相邻槽」更尖锐——**落点是任意临时槽**。本份进名单是因为四档输出相同，
+   不是因为布局已定案；成员寻址代码本轮一行未改。
+2. **`type_forms` 交叉档记 AGREE 但输出是错的**：它四条断言里 `arrow typed` 打 `bad`，而交叉参照用的是
+   **ir-c**（同一个 IR 前端），所以两侧同错 ⇒ AGREE。**「AGREE 只代表输出相同」在这里又一次应验**，
+   故本份刻意不入名单。
+
+**交叉零回归（与 PB-68 基线逐条对账）**：ir-c 参照出码 **58 → 62**，两档各链接成功 **56 → 60**
+（各 2 份仍被帧护栏拒：`deref_slice` 3328、`ir_slice` 2208 > 2047），qemu 实跑各 **54 → 58 AGREE**、
+**2 CRASH_139 不变**（`ir_str` / `str_array_init`，PB-68 已用 HEAD 版 `irparse.c` 证明是先存缺陷）。
+`comm` 对账：**新增 8 行 AGREE（4 份 × 2 档）、消失 0 行** ⇒ 零回归。扫脚本与产物在 `ncc/build/p70x/`（gitignore）。

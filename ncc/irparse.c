@@ -599,6 +599,28 @@ static int is_val_vreg = -1;
 
 /* PB-27.7：is 模式比较的类型感知——按 is_val_vreg 类型选 int (IR_CMP_*) 或
  * double (IR_FCMP) 指令；double 常量转位模式存 IR_CONST imm。 */
+/* `is` 模式的整数字面量，可带一个前缀符号（BNF §6 <pattern> 的带符号字面量）。
+ * 成功返回 1 并消费；失败返回 0，调用点按上下文给专属诊断。
+ * 失败时符号可能已被消费，与 A 后端 parse_is_stmt 同口径（一态一诊断）。 */
+static int ir_is_int(CompilerState *cs, long long *out)
+{
+    TokenType t = cur_tok(cs);
+    if (t == TOK_INT_CONST) {
+        *out = (long long)cs->parser.lex->tok_val.i;
+        next_tok(cs);
+        return 1;
+    }
+    if (t == TOK_MINUS || t == TOK_PLUS) {
+        next_tok(cs);
+        if (cur_tok(cs) != TOK_INT_CONST) return 0;
+        *out = (t == TOK_MINUS) ? -(long long)cs->parser.lex->tok_val.i
+                                :  (long long)cs->parser.lex->tok_val.i;
+        next_tok(cs);
+        return 1;
+    }
+    return 0;
+}
+
 static int emit_is_cmp_with_const(int is_val_vreg, IrOp int_cmp_op, long long const_val)
 {
     int k = ir_new_vreg(F);
@@ -1525,6 +1547,23 @@ static long long ir_malloc_size(CompilerState *cs)
 static int ir_primary(CompilerState *cs)
 {
     TokenType t = cur_tok(cs);
+    if (t == TOK_PLUS) {
+        /* PB-70：BNF §1.3 的 <int-literal> / <float-literal> 自带符号，正号是字面量的一部分。
+         * 只在紧跟数字字面量时消费，其余位置的 '+' 仍是二元运算符（与 A 后端 parse_primary 同口径，
+         * 不放宽成一元加）。 */
+        TokenType nt = ir_peek_ahead(cs, 1);
+        if (nt == TOK_INT_CONST || nt == TOK_FLOAT_CONST) {
+            next_tok(cs);             /* '+' */
+            return ir_primary(cs);
+        }
+    }
+    if (t == TOK_TRUE || t == TOK_FALSE) {
+        /* PB-70：布尔字面量（BNF <bool-literal>）——槽模型下按 1 / 0 的整型常量落 */
+        int vr = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, vr, -1, -1, (t == TOK_TRUE) ? 1 : 0);
+        next_tok(cs);
+        return vr;
+    }
     if (t == TOK_MINUS) {
         /* 一元负号：int → IR_NEG；double → 0.0 - a（FSUB，整数取反会毁位模式） */
         next_tok(cs);
@@ -2473,6 +2512,7 @@ static int ir_expr(CompilerState *cs)
 
 /* ---- 语句 ---- */
 static void ir_stmt(CompilerState *cs);
+static void ir_stmt_impl(CompilerState *cs);
 
 /* ============================================================
  * 编译期常量求值（PB-9：static_assert / cooking）
@@ -2920,9 +2960,30 @@ static void ir_if_stmt(CompilerState *cs)
     F->ins[F->ins_count - 1].label = l_end;
 }
 
+/* BNF §1.4 / §6 <empty-stmt> ::= ";" | "#"：语句尾的可选终止符。
+ * 与 A 后端 eat_stmt_terminator 同口径——只吃一个，连续的空语句由 ir_stmt_impl 入口处理。 */
+static void ir_eat_stmt_terminator(CompilerState *cs)
+{
+    if (cur_tok(cs) == TOK_SEMICOLON || cur_tok(cs) == TOK_POUND) next_tok(cs);
+    skip_newlines(cs);
+}
+
+/* PB-70：终止符包装层——语句本体与「尾随终止符」分开，避免在几十个出口各补一次。 */
 static void ir_stmt(CompilerState *cs)
 {
+    ir_stmt_impl(cs);
+    ir_eat_stmt_terminator(cs);
+}
+
+static void ir_stmt_impl(CompilerState *cs)
+{
     TokenType t = cur_tok(cs);
+    /* PB-70：空语句 `;` / `#` 可单独成句 */
+    if (t == TOK_SEMICOLON || t == TOK_POUND) {
+        next_tok(cs);
+        skip_newlines(cs);
+        return;
+    }
     /* 声明前缀：const/static/flow/var 记录可见性后继续解析声明 */
     int decl_vis = VIS_VAR;
     int has_prefix = 0;
@@ -3172,7 +3233,7 @@ static void ir_stmt(CompilerState *cs)
     } else if (t == TOK_IS) {
         /* is 模式匹配：is pat { ... }，匹配 while 循环条件值 is_val_vreg
          * （PB-27.1：do 不支持 is，仅 while 设 is_val_vreg）
-         * pat: <int> | -<int> | <int>..<int>（闭区间） | <ident> | _ 通配 | _vis 可见性枚举 */
+         * pat: <int> | ±<int> | <int>..<int>（闭区间，两端可带符号） | <ident> | _ 通配 | _vis 可见性枚举 */
         next_tok(cs);
         if (is_val_vreg < 0) {
             /* PB-27.1：is 仅配合 while（do 不设 is_val_vreg + 循环外也是此错误） */
@@ -3185,46 +3246,36 @@ static void ir_stmt(CompilerState *cs)
         if (pt == TOK_IDENTIFIER && strcmp(cs->parser.lex->tok_str, "_") == 0) {
             /* PB-27.5：通配符 `_`：匹配任意 is_val（恒真），不 emit 条件跳转 */
             next_tok(cs);
-        } else if (pt == TOK_MINUS) {
-            next_tok(cs);
-            if (cur_tok(cs) == TOK_INT_CONST) {
-                long long v = -(long long)cs->parser.lex->tok_val.i;
-                next_tok(cs);
-                int eq = emit_is_cmp_with_const(is_val_vreg, IR_CMP_EQ, v);
-                ir_emit(F, IR_JZ, -1, eq, -1, 0);
-                F->ins[F->ins_count - 1].label = l_done;
-            } else {
-                /* PB-27.2：畸形模式 `is -` 后必须跟 INT_CONST，否则报错 */
-                nihao_error(cs, "ir: bad 'is' pattern (expected integer after '-')");
+        } else if (pt == TOK_MINUS || pt == TOK_PLUS || pt == TOK_INT_CONST) {
+            /* PB-70：整数字面量可带前缀符号，区间两端都可带（`is +5` / `is -9..-5`） */
+            long long lo = 0;
+            if (!ir_is_int(cs, &lo)) {
+                nihao_error(cs, "ir: bad 'is' pattern (expected integer after '%c')",
+                            (pt == TOK_MINUS) ? '-' : '+');
                 skip_newlines(cs);
                 return;
             }
-        } else if (pt == TOK_INT_CONST) {
-            long long lo = (long long)cs->parser.lex->tok_val.i;
-            next_tok(cs);
             if (cur_tok(cs) == TOK_RANGE) {
                 next_tok(cs);
-                if (cur_tok(cs) == TOK_INT_CONST) {
-                    long long hi = (long long)cs->parser.lex->tok_val.i;
-                    /* PB-27.4：反向范围 `is 5..2` 编译期检查 lo<=hi，否则报错 */
-                    if (lo > hi) {
-                        nihao_error(cs, "ir: invalid range in 'is' pattern (%lld..%lld, lo > hi)", lo, hi);
-                        skip_newlines(cs);
-                        return;
-                    }
-                    next_tok(cs);
-                    int ge = emit_is_cmp_with_const(is_val_vreg, IR_CMP_GE, lo);
-                    ir_emit(F, IR_JZ, -1, ge, -1, 0);
-                    F->ins[F->ins_count - 1].label = l_done;
-                    int le = emit_is_cmp_with_const(is_val_vreg, IR_CMP_LE, hi);
-                    ir_emit(F, IR_JZ, -1, le, -1, 0);
-                    F->ins[F->ins_count - 1].label = l_done;
-                } else {
-                    /* PB-27.2：畸形模式 `is 5..` 后必须跟 INT_CONST，否则报错 */
+                long long hi = 0;
+                if (!ir_is_int(cs, &hi)) {
+                    /* PB-27.2：畸形模式 `is 5..` 后必须跟整数字面量，否则报错 */
                     nihao_error(cs, "ir: bad 'is' pattern (expected integer after '..')");
                     skip_newlines(cs);
                     return;
                 }
+                /* PB-27.4：反向范围 `is 5..2` 编译期检查 lo<=hi，否则报错 */
+                if (lo > hi) {
+                    nihao_error(cs, "ir: invalid range in 'is' pattern (%lld..%lld, lo > hi)", lo, hi);
+                    skip_newlines(cs);
+                    return;
+                }
+                int ge = emit_is_cmp_with_const(is_val_vreg, IR_CMP_GE, lo);
+                ir_emit(F, IR_JZ, -1, ge, -1, 0);
+                F->ins[F->ins_count - 1].label = l_done;
+                int le = emit_is_cmp_with_const(is_val_vreg, IR_CMP_LE, hi);
+                ir_emit(F, IR_JZ, -1, le, -1, 0);
+                F->ins[F->ins_count - 1].label = l_done;
             } else {
                 int eq = emit_is_cmp_with_const(is_val_vreg, IR_CMP_EQ, lo);
                 ir_emit(F, IR_JZ, -1, eq, -1, 0);
@@ -3299,7 +3350,9 @@ static void ir_stmt(CompilerState *cs)
         skip_newlines(cs);
     } else if (t == TOK_RETURN) {
         next_tok(cs);
-        if (cur_tok(cs) == TOK_NEWLINE || cur_tok(cs) == TOK_RBRACE) {
+        if (cur_tok(cs) == TOK_NEWLINE || cur_tok(cs) == TOK_RBRACE ||
+            cur_tok(cs) == TOK_SEMICOLON || cur_tok(cs) == TOK_POUND) {
+            /* PB-70：`return;` / `return #` 也是无值返回（终止符不是表达式） */
             ir_emit(F, IR_RET, -1, -1, -1, 0);
         } else if (cur_tok(cs) == TOK_LBRACE) {
             /* return {e0, e1, ...}：聚合返回 → STORE 到 *_mr_ret（sret） */
@@ -3886,8 +3939,14 @@ static void ir_stmt(CompilerState *cs)
             nihao_error(cs, "ir: unexpected '%s %s' in statement", name, tname);
             skip_newlines(cs);
             return;
-        } else if (is_type_token(nt)) {
-            /* 声明: name i32 [N] = expr | = {e0, e1, ...} | name 函数指针类型 = fn */
+        } else if (is_type_token(nt) ||
+                   (nt == TOK_LPAREN && is_type_token(ir_peek_ahead(cs, 2)) &&
+                    ir_peek_ahead(cs, 3) == TOK_RPAREN)) {
+            /* 声明: name i32 [N] = expr | = {e0, e1, ...} | name 函数指针类型 = fn
+             * PB-70：括号类型 `(T)`（BNF §3 <type-name> ::= … | "(" <type-name> ")"）
+             * 归一成内层类型 token 后走同一条声明路径，数组后缀照常接在 `)` 之后。 */
+            int paren_type = (nt == TOK_LPAREN);
+            if (paren_type) nt = ir_peek_ahead(cs, 2);
             int decl_float = (nt == TOK_F64 || nt == TOK_F32);
             /* PB-1 窄整数类型编码（0=i64 1=float 2=i8 3=i16 4=i32 5=u8 6=u16 7=u32）；
              * f32 严格宽度（2026-08-19）：F32 → 码 8（标记 f32，赋值时 FTRUNC）；
@@ -3899,7 +3958,13 @@ static void ir_stmt(CompilerState *cs)
                           (nt == TOK_U8)  ? 5 : (nt == TOK_U16) ? 6 :
                           (nt == TOK_U32) ? 7 : 0;
             next_tok(cs);           /* name */
-            next_tok(cs);           /* 类型 */
+            if (paren_type) {
+                next_tok(cs);       /* ( */
+                next_tok(cs);       /* 内层类型 */
+                next_tok(cs);       /* ) */
+            } else {
+                next_tok(cs);       /* 类型 */
+            }
             int elems = 0;
             int is_arr = 0;         /* 出现过 [..]（数组/字符串；标量 char 非数组） */
             int dims[IR_MAX_DIMS];  /* 各维长度（PB-67：多维数组） */
@@ -4089,6 +4154,14 @@ static void ir_stmt(CompilerState *cs)
                 }
             } else if (vetyp[vi] == 8 && cur_tok(cs) == TOK_STRING_LITERAL) {
                 /* 动态字符串 char[] = "lit"：记录逻辑长度（len() 用），存池地址 */
+                ve[vi] = (int)strlen(cs->parser.lex->tok_str);
+                int vr = ir_expr(cs);
+                ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
+            } else if (nt == TOK_STRING && cur_tok(cs) == TOK_STRING_LITERAL) {
+                /* PB-70：声明型 `s string = "lit"` 也要登记逻辑长度。
+                 * PB-67 只覆盖了「字面量推断」与 `char[]` 两条路径，声明型 string 的
+                 * ve[] 一直是 0 ⇒ len(s) 静默给 0（能编能跑但答案是错的）。
+                 * 只登记长度，不改 vetyp/寻址宽度——string 的字节布局仍属待裁第 23 条。 */
                 ve[vi] = (int)strlen(cs->parser.lex->tok_str);
                 int vr = ir_expr(cs);
                 ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
@@ -4833,6 +4906,10 @@ int ir_parse_file(CompilerState *cs, const char *filename)
         } else if (cur_tok(cs) == TOK_ALIGN) {
             /* 对齐块：IR 槽模型下跳过 */
             ir_align_block(cs);
+        } else if (cur_tok(cs) == TOK_SEMICOLON || cur_tok(cs) == TOK_POUND) {
+            /* PB-70：顶层终止符 / 空声明（`module main;`、`use stdio;`、`Cfg struct {…};`、`}#`） */
+            next_tok(cs);
+            skip_newlines(cs);
         } else {
             nihao_error(cs, "ir: unsupported top-level token '%s'",
                         token_name(cur_tok(cs)));
