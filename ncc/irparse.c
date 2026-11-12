@@ -367,6 +367,8 @@ static int ir_coerce(int vr, int vtype_code)
 static int var_declare(const char *name, int elems, int type_idx, int vis);
 static int ir_expr(CompilerState *cs);
 static int ir_scalar_code_of_token(TokenType tt);
+static int64_t ir_load_width_imm(int code);   /* PB-75(b) */
+static int ir_store_width(int code);           /* PB-75(b) */
 
 /* ---- struct/union/enum 类型表 ---- */
 #define IR_MAX_AGG 16
@@ -382,6 +384,7 @@ typedef struct {
     int marr_len[IR_MAX_MEMB];         /* 成员是数组时的元素数（0=非数组成员） */
     int marr_esize[IR_MAX_MEMB];       /* 数组成员的元素字节宽（1/2/4/8） */
     int msize[IR_MAX_MEMB];            /* 标量成员的字节宽（1/2/4/8；0=聚合成员）（PB-74 补） */
+    int mscode[IR_MAX_MEMB];           /* 标量成员类型码（0=i64 1=f64 2=i8 … 8=f32；-1=聚合成员）（PB-76 补） */
     int mcount;
     int mslots;                        /* 类型总槽数（递归；union=1 enum=1） */
 } IrAggType;
@@ -1323,7 +1326,12 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
                 ir_emit(F, IR_ADD, addr, base, ov, 0);
             }
             int v = ir_new_vreg(F);
-            ir_emit(F, IR_LOAD, v, addr, -1, 0);
+            /* PB-76(b)：标量成员按成员类型窄读（符号扩展）；位域保持 8 字节 + AND */
+            {
+                int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
+                          : agg_types[ti].mscode[last_fi];
+                ir_emit(F, IR_LOAD, v, addr, -1, ir_load_width_imm(mcode));
+            }
             if (agg_types[ti].mbits[last_fi] > 0) {
                 int mv = ir_bitmask(agg_types[ti].mbits[last_fi]);
                 int r2 = ir_new_vreg(F);
@@ -1384,7 +1392,12 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
             }
             int v = ir_new_vreg(F);
             if (esize == 1) ir_emit(F, IR_LOAD8, v, addr, -1, 0);
-            else ir_emit(F, IR_LOAD, v, addr, -1, 0);
+            else {
+                /* PB-76(b)：标量成员按成员类型窄读（符号扩展）；位域保持 8 字节 + AND */
+                int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
+                          : agg_types[ti].mscode[last_fi];
+                ir_emit(F, IR_LOAD, v, addr, -1, ir_load_width_imm(mcode));
+            }
             if (agg_types[ti].mbits[last_fi] > 0) {
                 int mv = ir_bitmask(agg_types[ti].mbits[last_fi]);
                 int r2 = ir_new_vreg(F);
@@ -2298,7 +2311,12 @@ static int ir_primary(CompilerState *cs)
                 ir_emit(F, IR_ADD, addr, base, ov, 0);
             }
             int vr = ir_new_vreg(F);
-            ir_emit(F, IR_LOAD, vr, addr, -1, 0);
+            /* PB-76(b)：标量成员按成员类型窄读（符号扩展）；位域成员保持 8 字节读 + AND */
+            {
+                int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
+                          : agg_types[ti].mscode[last_fi];
+                ir_emit(F, IR_LOAD, vr, addr, -1, ir_load_width_imm(mcode));
+            }
             /* 位域成员：AND 掩码取低 N 位 */
             if (agg_types[ti].mbits[last_fi] > 0) {
                 int mv = ir_bitmask(agg_types[ti].mbits[last_fi]);
@@ -2352,7 +2370,12 @@ static int ir_primary(CompilerState *cs)
             }
             int vr = ir_new_vreg(F);
             if (esize == 1) ir_emit(F, IR_LOAD8, vr, addr, -1, 0);
-            else ir_emit(F, IR_LOAD, vr, addr, -1, 0);
+            else {
+                /* PB-76(b)：标量成员按成员类型窄读（符号扩展）；位域保持 8 字节 + AND */
+                int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
+                          : agg_types[ti].mscode[last_fi];
+                ir_emit(F, IR_LOAD, vr, addr, -1, ir_load_width_imm(mcode));
+            }
             /* 位域成员：AND 掩码取低 N 位 */
             if (agg_types[ti].mbits[last_fi] > 0) {
                 int mv = ir_bitmask(agg_types[ti].mbits[last_fi]);
@@ -3971,7 +3994,8 @@ static void ir_stmt_impl(CompilerState *cs)
                             ir_emit(F, IR_ADD, caddr, base, ov, 0);
                         }
                         cur = ir_new_vreg(F);
-                        ir_emit(F, IR_LOAD, cur, caddr, -1, 0);
+                        ir_emit(F, IR_LOAD, cur, caddr, -1,
+                                ir_load_width_imm(agg_types[ti].mscode[fi]));   /* PB-76(b) */
                     }
                     nv = ir_new_vreg(F);
                     ir_emit(F, aop, nv, cur, b, 0);
@@ -3988,7 +4012,12 @@ static void ir_stmt_impl(CompilerState *cs)
                     addr = ir_new_vreg(F);
                     ir_emit(F, IR_ADD, addr, base, ov, 0);
                 }
-                ir_bf_store(addr, nv, bfbits);
+                if (bfbits > 0) {
+                    ir_bf_store(addr, nv, bfbits);
+                } else {
+                    /* PB-76(b)：非位域标量成员按成员宽窄写（位域仍走 RMW） */
+                    ir_emit(F, IR_STORE, -1, addr, nv, ir_store_width(agg_types[ti].mscode[fi]));
+                }
                 skip_newlines(cs);
             } else {
                 nihao_error(cs, "ir: expected '=' after '->' member access");
@@ -4932,6 +4961,7 @@ static void ir_type_decl(CompilerState *cs)
             a->marr_len[a->mcount] = 0;
             a->marr_esize[a->mcount] = 0;
             a->msize[a->mcount] = 0;
+            a->mscode[a->mcount] = -1;
             if (cur_tok(cs) == TOK_IDENTIFIER) {
                 int ti2 = agg_type_find(cs->parser.lex->tok_str);
                 if (ti2 >= 0) {
@@ -4940,6 +4970,7 @@ static void ir_type_decl(CompilerState *cs)
                 }
             } else if (is_type_token(cur_tok(cs))) {
                 int esize = (int)type_size_token(cur_tok(cs));
+                a->mscode[a->mcount] = ir_scalar_code_of_token(cur_tok(cs));   /* PB-76 */
                 next_tok(cs);
                 if (cur_tok(cs) == TOK_LBRACKET) {
                     /* 数组成员 name char[32]：记录元素数与元素宽。
