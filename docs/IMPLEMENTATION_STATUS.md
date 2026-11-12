@@ -2,6 +2,7 @@
 
 本文档记录 NihaoC 语言规范（Chinese.md / English.md）中各项指针安全规则与编译器（ncc）实际实现的对应状态。
 
+> 更新日期：2026-11-12（**PB-73 IR 侧模块加载，`use_mod` 放行；追平撞墙在待裁第 23 条**）：A 侧 `module_import` 用「保存 lexer / 上下文 → 为模块源码建新 lexer → 递归 parse → 还原」把模块函数内联进同一份产物，而 IR 的 `ir_parse_file` 每次调用都新建 `P`，是单文件模型。本轮把顶层声明循环抽成可重入的 `ir_parse_top_level`，`use` 由 `ir_use_decl` 触发 `ir_use_module`——按 cwd / 源目录 / stdlib 三层解析模块文件（点号名按目录层级），保存 / 还原 lexer 后把模块顶层声明内联进同一个 `IrProg`，循环 import 用 `ir_imported` 去重名单挡；**路径解析在 `irparse.c` 自带一份（约 40 行，不触碰共享的 `module.c`）**，因为 A 的 `module_import` 内部递归调的是 A 前端的 `parse_module`，IR 不能直接复用。`use_mod` 四档与 `.expect` 逐字节相同、两交叉档也相同，已入 `IR_SUBSET`（59 条）；Windows ir **49→50 PASS**、SKIP 20→19、0 FAIL，c/native 与比对档 36 格不变；Linux 68P/4S + **50P/20S**、0 FAIL；交叉与 PB-71/72 基线 `comm` 对账**新增 use_mod ×2 AGREE、消失 0 行**。**不新增 IR 操作码，发射器、`ir_to_c.c`、A 线一行未改**。⇒ pos 缺口 11→**10**、err 9 不变；**剩余 10 份 pos 全部挂待裁第 23 条，`irparse.c` 一块不需要裁定的活都不剩了**。详见下方 PB-73 实测表。
 > 更新日期：2026-11-12（**PB-71 / PB-72 首匹配即止 + E-c 桶清空**）：三项都是追平 A 的既有语义、无新设计。① **`is_no_fallthrough`**：按 A 侧 `__is_matched`（PA-16 / P4）移植——新增 `is_matched_vreg`，每轮 while 迭代在条件检查后 / body 前重置 0，每条 `is` 子句开头 `IR_JNZ` 跳过、匹配后进块前 `MOV` 置 1（A 侧把置位放在守卫条件里，IR 无短路表达式故改形，语义等价）；IR 由 14 行降到 **7 行**，四档与 `.expect` 逐字节相同，**两个交叉档也产出正确 7 行**。② **`len_unknown`**：新增 `vlen_known` 表（A 侧 `Symbol.len_known` 同判据）——**不能用 `ve>0` 判**，0 既是标量也是空动态字符串；只在数组声明 / 字符串字面量初值 / **常量边界**切片处登记。③ **`void_subscript`**：`ir_check_void_subscript` 与 A 同判据同文案，两条例外（空下标 `p[]` 合法、PB-68 的 `VM_PTRARR` 可下标）。②③ 由「静默接受非法程序并产出可执行文件」转为**有诊断 + 无产物** ⇒ **E-c 桶清空**（PB-61 排期结论里最该优先收的一桶）。三份入名单（`IR_SUBSET` 58 / `IR_ERR_COVERED` 24）；Windows ir **46→49 PASS**、SKIP 23→20、0 FAIL，c/native 与比对档 36 格不变；Linux 68P/4S + **49P/21S**、0 FAIL。交叉与 PB-70 基线**逐条不变**（`comm` 新增 0 / 消失 0）。**不新增 IR 操作码，发射器与 A 线一行未改**。⇒ pos 缺口 12→**11**、err 11→**9**；剩下 pos 里 **10 份挂待裁第 23 条**，只有 `use_mod` 独立可做（需 IR 侧模块加载，另立一轮）。详见下方 PB-71/72 实测表。
 > 更新日期：2026-11-12（**PB-70 IR 前端补齐语法形态七处，三份用例入名单；G1 语法缺失桶清空**）：`irparse.c` 落地 ① `is` 模式整数字面量可带前缀符号、闭区间两端都可带（`is +5` / `is -9..-5`，新助手 `ir_is_int`）；② 语句尾终止符 `;` / `#`（`ir_stmt` 拆包装层 + `ir_stmt_impl` + `ir_eat_stmt_terminator`）、空语句、顶层空声明；③ `return;` / `return #` 按无值返回；④ 一元 `+` 作字面量前缀（只在紧跟数字字面量时消费，与 A 后端 `parse_primary` 同口径）；⑤ 布尔字面量 `true` / `false`；⑥ 括号类型 `(T)` / `(T)[N]`（归一成内层类型 token 走同一条声明路径）；⑦ 声明型 `s string = "lit"` 的 `len()` 长度登记（PB-67 只覆盖字面量推断与 `char[]`，声明型一直静默给 0）。**不新增 IR 操作码，两档发射器与 `ir_to_c.c` 一行未改，A 线一行未改**。三份入 `IR_SUBSET`（`is_pattern_forms` / `stmt_terminators` / `literal_forms`，57 条），四档输出与 `.expect` 逐字节相同；Windows ir-c / ir-native **43→46 PASS**、SKIP **26→23**、0 FAIL，c / native 68P/3S 与比对档 36 格不变；Linux 68P/0F/4S + **46P/0F/24S**、0 FAIL、比对档 35 格。交叉 ir-c 参照 58→62、两档各链接 56→60、qemu 各 **54→58 AGREE**、2 CRASH 不变，`comm` 对账新增 8 行 AGREE / 消失 0 行 ⇒ **零回归**。**台账重大更正**：G1 原记 8 份，复测后只 3 份真是纯语法，另 5 份改归 G3 ⇒ **pos 缺口 15→12 = G1 0 + G2 5 + G3 7，G1 桶清空**；剩下 12 份里 10 份挂待裁第 23 条，只有 `is_no_fallthrough` 与 `use_mod` 独立可做。`type_forms` 括号类型已通但 `arrow typed` 仍 bad（聚合体第二成员越槽），**刻意不入名单**。详见下方 PB-70 实测表。
 > 更新日期：2026-11-12（**PB-69 簿记更正 + 名单档名统一为 CLI 实名**，零代码 / 零用例 / 零 `xmake.lua` 改动）：台账 `IR_SUBSET` 与 pos 缺口数**恒偏 5**，根因是 PB-66 把改前的 46 当成改后写账（该轮 +5 = 51），PB-67/68 逐轮 +2/+1 沿用错基址。**实测现值**：`IR_SUBSET` **54** / `IR_ONLY` **3** / `IR_ERR_COVERED` **22**，三份名单无悬空条目 ⇒ **pos IR 能编 57/72（缺口 15 = G1 8 + G2 5 + G3 2）、err IR 覆盖 22/33（缺口 11）**；与 `xmake test -b ir-c` 的 21 pos PASS + 22 err PASS = 43、15 pos SKIP + 11 err SKIP = 26 逐项吻合（那 21 里有 2 条是无 `.expect` 的模块型用例）。另改正缺口表两处成员错误：`borrow` 过期行划掉、从未进表的 `literal_forms` 补入并取第一手诊断（一元 `+` 前缀 + 布尔字面量 `true`，4 条）。**名单档名按 ltree 裁定统一为 CLI 实名**：`ir-rv64`→`ir-riscv64`、`ir-loongarch`→`ir-loongarch64`、`ir-rv32`→`ir-riscv32`，**代码仍不改名**（2026-11-10 裁定③有效），就地正名三处 + 新增 ROADMAP §5.8 续记，历史裁定原文不动。门禁复跑与 PB-68 后逐字相同。详见下方 PB-69 实测表。
@@ -855,6 +856,24 @@
 | 交叉（两份 × 两架构） | — | riscv64 / loongarch64 各一份 `.s`：三套 oracle（msys2 GAS + zig LLVM + llvm-mc 18）**告警 0**，静态链接 0 告警，qemu 执行输出与 `.expect` **逐字相同**（4 份 diff 全空） |
 
 锚点：`irparse.c` 的维度表 `vdim` / `vndim`（`IR_MAX_DIMS` = 4）与建表 / 清零处、`ir_flat_index`（多维扁平下标）、`ir_array_init_list`（多维初始化列表递归填槽）、多维下标读路径（`ir_expr` 的 `TOK_LBRACKET` 分支收 `[j]…` 后转扁平）、赋值路径的切片块（开区间 `arr[..hi]` → `&arr[0]` + 长度 `hi`）、赋值路径的字面量长度登记（`ve[vi] = strlen(...)` + `vetyp[vi] = 8`）、声明路径的切片复制块（`cp T[K] = arr[lo..hi]` 按 K 复制）、维度解析与记录处（`dims[IR_MAX_DIMS]` → `vndim[vi]` / `vdim[vi][k]`）、初始化列表分派（`vndim[vi] >= 2` → `ir_array_init_list`）；名单在 `xmake.lua` 的 `IR_SUBSET`。
+
+**PB-73 实测：IR 侧模块加载（2026-11-12，扫脚本在 `ncc/build/p73x/`，不入版本库）**
+
+| 判据 | 改前 | 改后 |
+|---|---|---|
+| `use_mod`（`use mathmod` → 调 `add(2,5)`） | `implicit declaration of function 'add'` + `tcc: undefined symbol 'add'` | 四档各 `[PASS]`，与 `.expect`（`7` + `use ok`）逐字节相同；**riscv64 / loongarch64 两档实跑也相同** |
+| 模块解析 | `ir_parse_file` 每次调用 `P = ir_prog_new()`，`use` 被解析后跳过 | 顶层声明循环抽成 `ir_parse_top_level`；`use` 触发 `ir_use_decl` → `ir_use_module`，把模块顶层声明内联进**同一个 IrProg** |
+| 文件解析 | — | cwd / 源文件目录 / stdlib 三层候选，点号名按目录层级（`a.b` → `a/b.nc`）；命中才内联，不命中 = 外建模块（如 `stdio`）静默跳过 |
+| 递归与循环 | — | 保存 / 还原 lexer（新 `LexerState` 带模块自己文件名 ⇒ 错误定位正确）；`ir_imported` 去重名单挡循环 import |
+| 共享面 | — | **路径解析在 `irparse.c` 自带一份，不触碰 `module.c`**（A 的 `module_import` 内部调 `parse_module`，IR 不能复用） |
+| 名单 | `IR_SUBSET` 58 | **59**（+`use_mod`），`IR_ERR_COVERED` 24 不变 |
+| 门禁 | Windows ir 49P/20S | **50P / 19S**、0 FAIL；c / native **68P/0F/3S** 与比对档 36 格不变；Linux c / native 68P/0F/4S、ir **50P/0F/20S**、0 FAIL |
+| 交叉 | ir-c 参照 62、两档各 60 链接、58 AGREE / 2 CRASH | ir-c 参照 **63**、两档各 **61 链接**、**59 AGREE / 2 CRASH**；`comm` 对账新增 `use_mod` ×2、消失 0 行 ⇒ 零回归 |
+| 三方对账 | — | 名单 ∩ 文件 = 59 / 3 / 24 无悬空；补集 pos **10** / err 9 |
+
+**⇒ 追平撞墙**：剩余 pos 缺口 **10 份全部挂待裁第 23 条**（槽宽 vs 真实布局）——G3 布局 7 份 + G2 同源 3 份（`multi_arr_decl` / `str_array_init` / `alignof_builtin`）。err 9 份里 E-a 3 属待裁第 26 条、E-b 6 依赖 pos 的 G3。**`irparse.c` 一块不需要裁定的活都不剩了**（G1 桶 PB-70 清空、E-c 桶 PB-72 清空、独立 G2 分别由 PB-71 / 73 收掉）。待裁第 23 / 33 / 34 三条在这条墙上会师。
+
+锚点（逐个 grep 复核）：`irparse.c` 的四条前向声明（**4878–4881**）、`ir_parse_file` 头部 `use` 循环（**4903**）、`ir_imported` 名单（**4911–4913**）、`ir_module_seen` / `ir_module_mark`（**4915–4929**）、`ir_module_resolve`（**4934**）、`ir_use_decl`（**4973**）、`ir_parse_module_source`（**4997**，保存 / 还原 lexer + 递归 `ir_parse_top_level`）、`ir_use_module`（**5022**）、`ir_parse_top_level`（**5034**，可重入）、顶层循环内 `use` 分支（**5087–5088**）。名单在 `xmake.lua` 的 `IR_SUBSET`。文件行数：`irparse.c` 5063 → **5187**（净增 124）、`xmake.lua` 557 → **561**（净增 4）；`ir.h` / `ir.c` / `ir_to_c.c` / `ir_backend.c` / 两档发射器 / A 线**全部零改动**，故本文件其余各处锚点**不动**。
 
 **PB-71 / PB-72 实测：首匹配即止 + E-c 桶清空（2026-11-12，扫脚本在 `ncc/build/p71x/`，不入版本库）**
 

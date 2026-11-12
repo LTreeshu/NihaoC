@@ -236,12 +236,16 @@ end
 --    body 之前重置为 0；每条 is 子句开头 IR_JNZ 跳过、模式匹配后在进块前 MOV 置 1。A 侧把置位放在守卫
 --    条件里（`&& (__is_matched = 1)`），IR 无短路表达式故改为条件跳转之后发一条 MOV，语义等价。
 --    is_no_fallthrough 改前 IR 打 14 行（多 wild/range）、改后 7 行与 .expect 逐字节相同。
+-- PB-73（2026-11-12）新增 use_mod：IR 侧模块加载落地（内联进同一个 IrProg，与 A 侧 module_import 同语义）。
+-- `ir_parse_file` 的顶层声明循环抽成可重入的 ir_parse_top_level；`use <name>` 由 ir_use_decl 累积点号多段名
+-- 后触发 ir_use_module——按 cwd / 源文件目录 / stdlib 三层解析模块文件（点号名按目录层级），保存/还原 lexer
+-- 后递归解析进当前 IrProg，错误定位落在模块自己的文件名与行号上；循环 import 由 ir_imported 名单挡。
 -- ② len() 的静态可知性：新增 vlen_known 表（A 侧 Symbol.len_known 同判据）。ve[] 的 0 既表示标量也表示
 --    空动态字符串，光看 ve>0 会把后者误判 ⇒ 单开标志表，只在数组声明 / 字符串字面量初值 / 常量边界切片
 --    这些真正确定长度处登记。此前 len(标量) 静默给 0 并产出可执行文件（台账 E-c 桶）。
 -- ③ 通用 void 指针的裸下标 / 切片：ir_check_void_subscript，与 A 侧同判据同文案。两条例外——空下标 `p[]`
 --    是省略类型解引用（合法）、PB-68 的 VM_PTRARR（ve[] 为 0 但可下标）。此前静默接受非法程序。
-local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true, fx_types = true, malloc_demo = true, flow = true, flow_no_free = true, borrow = true, flow_move = true, features = true, for_init_forms = true, transfer = true, mathmod = true, module_top_forms = true, len_builtin = true, array_capacity_tiers = true, deref_slice = true, is_pattern_forms = true, stmt_terminators = true, literal_forms = true, is_no_fallthrough = true}
+local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true, fx_types = true, malloc_demo = true, flow = true, flow_no_free = true, borrow = true, flow_move = true, features = true, for_init_forms = true, transfer = true, mathmod = true, module_top_forms = true, len_builtin = true, array_capacity_tiers = true, deref_slice = true, is_pattern_forms = true, stmt_terminators = true, literal_forms = true, is_no_fallthrough = true, use_mod = true}
 local IR_ONLY = {ir_builtin = true, ir_slice = true, ir_sparam = true}
 -- IR_ERR_COVERED: err 用例中 IR 前端已实现对应诊断的（未列出的非 m2 用例仍在 IR 侧跳过）
 -- cooking_bare_var 刻意不入：IR 前端对块内裸 <var-decl> 只给 `ir: undeclared variable 'K'`，

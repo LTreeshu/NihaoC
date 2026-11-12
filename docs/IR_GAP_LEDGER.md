@@ -52,6 +52,7 @@
   `IR_ERR_COVERED` **24** ⇒ **err 覆盖 24 / 33，缺口 9**。门禁 ir-c / ir-native **46 → 49 PASS**、
   SKIP **23 → 20**，c / native 68P/0F/3S 不变、四档 0 FAIL；Linux 68P/0F/4S + **49P/0F/21S**、0 FAIL。
   **E-c 桶（非法程序被静默接受）本轮清空**——这是台账里最该优先收的一桶（PB-61 的排期结论第 4 条）。
+- **PB-73（2026-11-12）后现值**：`IR_SUBSET` **59** + `IR_ONLY` 3 ⇒ **pos IR 能编 62 / 72，缺口 10**；err 覆盖 **24 / 33，缺口 9** 不变。门禁 ir-c / ir-native **49 → 50 PASS**、SKIP **20 → 19**，c / native 与比对档不变、四档 0 FAIL；Linux 68P/0F/4S + **50P/0F/20S**、0 FAIL。**⇒ 剩下的 pos 缺口 10 份全部挂待裁第 23 条（槽宽 vs 真实布局），`irparse.c` 一块能自决的活都不剩了；err 9 份里 E-a 3 属待裁第 26 条、E-b 6 依赖 pos 的 G3。**
 
 ## 1. 四桶定义
 
@@ -62,7 +63,7 @@
 | **G3 布局缺失** | 根因是「聚合体没有真实内存布局」（待裁第 23 条） | 需 ltree 先裁槽宽与布局口径 |
 | **G4 名单与用例** | 缺口在测试资产或名单本身：可提升、文案不同源、用例写法越界 | 改名单 / 改用例，不动编译器 |
 
-## 2. pos 缺口 11 份（72 份总数中，只有 A 线能编或能编但语义不同的那些）
+## 2. pos 缺口 10 份（72 份总数中，只有 A 线能编或能编但语义不同的那些）
 
 > **2026-11-12（PB-69）更正**：本节标题原写「20 份」，实测 **15** 份（判据与根因见 §0 末条）。表内同时改正两处成员错误：`borrow` 行划掉（PB-64 已放行）、补入从未进表的 `literal_forms`。
 > **2026-11-12（PB-70）**：15 → **12** 份（放行 3 份），另 5 份改归 G3；**G1 桶清空**，详见本节末的桶分布。
@@ -73,7 +74,7 @@
 | ~~`is_no_fallthrough`~~ | ~~四档都出码，IR 多打 `wild` / `range`~~（14 行 vs A 的 7 行） | G2→放行 | **PB-71 已解**：按 A 侧 `__is_matched`（PA-16 / P4）同口径移植——新增 `is_matched_vreg`，每轮 while 迭代在条件检查后、body 之前重置 0；每条 `is` 子句开头 `IR_JNZ` 跳过、匹配后进块前 `MOV` 置 1。四档输出与 `.expect` 七行逐字节相同，已入 `IR_SUBSET` |
 | `multi_arr_decl` | IR 出码非法 C：`lvalue expected` | G2 | 多维数组读写在 IR 是降级路径，产物编译期就错 |
 | `str_array_init` | IR 出码：`assignment makes integer from pointer` | G2 | 字符串数组初始化按整型槽发，指针没落位 |
-| `use_mod` | IR 出码：`implicit declaration of function 'add'` | G2 | 跨模块符号未接（路线图阶段 2「link/use 跨文件」） |
+| ~~`use_mod`~~ | ~~IR 出码：`implicit declaration of function 'add'` + `tcc: undefined symbol 'add'`~~ | G2→放行 | **PB-73 已解**：IR 侧模块加载落地——`ir_parse_file` 的顶层声明循环抽成可重入的 `ir_parse_top_level`，`use` 由 `ir_use_decl` 触发 `ir_use_module`，按 cwd / 源目录 / stdlib 三层解析模块文件（点号名按目录层级），保存 / 还原 lexer 后把模块顶层声明内联进同一个 `IrProg`（与 A 侧 `module_import` 同语义，错误定位在模块自己的文件名与行号上），循环 import 由 `ir_imported` 挡。四档输出与 `.expect` 逐字节相同，已入 `IR_SUBSET` |
 | ~~`flow` / `flow_move` / `flow_no_free` / `malloc_demo`~~ | **PB-63 已解**：真正卡点只有 `p.(T)` 一处（`malloc(类型)` 一直没问题——实测 `p void = malloc(i32)` 在 IR 能编能跑） | G1→放行 1 | `malloc_demo` 四档一致已入 `IR_SUBSET`；`flow` / `flow_move` / `flow_no_free` / `borrow` 过前端后改卡 **IR 不下降 `print`**（待裁第 7 条；IR-only 名单下已属必须做） |
 | ~~`borrow`~~ | ~~同 `flow` 族~~ | ~~G1→卡 print~~ | **PB-64 已放行**（`print` 下降后四档一致，已在 `IR_SUBSET`）。**2026-11-12 PB-69 划掉**：本行自 PB-64 起就是过期行，却一直留在缺口表里充数 |
 | ~~`literal_forms`~~ | ~~`ir: unexpected token '+' in expression`~~（12:14 `p i32 = +23`、14:15 `bn i32 = +0b10000`、24:15 `f4 f64 = +1.5e-2`）+ `ir: unexpected token 'true' in expression`（44:18 `t bool = true`），共 4 条；A 档能编能跑 | G1→放行 | **PB-69 补入、PB-70 同日解掉**：一元 `+` 作字面量前缀（A 侧 P7 / PA-57 已落，IR 侧没有）、布尔字面量 `true` / `false`、**以及第三处此前没看出来的卡点——声明型 `s string = "lit"` 的 `len(s)` 静默给 0**（PB-67 只覆盖了字面量推断与 `char[]` 两条路径）。三处补齐后四档输出与 `.expect` 逐字节相同，已入 `IR_SUBSET` |
@@ -271,3 +272,32 @@ err 侧 11 份不变，其中 E-b 6 份的修复依赖 pos 侧，E-a 3 份属第
   IR 不能直接复用它**；路径解析要么在 `irparse.c` 内自带一份，要么动共享的 `module.c`——**这一步的取舍另立一轮**。
 - err：**E-a 3 份**（文案不同源，属待裁第 26 条的分批清单）+ **E-b 6 份**（断在解析层，修复依赖 pos 侧的 G3）。
   **E-c 0 份。**
+
+## 9. PB-73 实测：IR 侧模块加载（use_mod 放行，追平撞墙在待裁第 23 条）
+
+**落地**：`ir_parse_file` 的顶层声明循环抽成可重入的 `ir_parse_top_level`；`use <name>` 由 `ir_use_decl`
+累积点号多段名后触发 `ir_use_module`——按 **cwd / 源文件目录 / stdlib** 三层解析模块文件（点号名按目录
+层级，`a.b` → `a/b.nc`），**保存 / 还原 lexer** 后把模块顶层声明内联进**同一个 `IrProg`**（与 A 侧
+`module_import` 同语义），循环 import 由 `ir_imported` 去重名单挡。`use_mod` 四档输出与 `.expect` 逐字节
+相同（`7` + `use ok`），已入 `IR_SUBSET`。错误定位落在模块自己的文件名与行号上（每次递归换来新的
+`LexerState filename`）。
+
+**为什么不能直接复用 A 的 `module_import`**：它内部递归调用的是 **A 前端的 `parse_module`**，会往 A 的
+符号表与 cgen 缓冲里写，IR 前端一调用就直接串线。所以路径解析在 `irparse.c` 内自带一份（约 40 行，与
+`module.c` 同口径），**不触碰共享的 `module.c`**——这也是「PB 只改 IR 线」的一贯做法。
+
+**验证**：Windows c/native 68P/3S 不变、ir **50P/19S**、0 FAIL；Linux 68P/4S + **50P/20S**、0 FAIL；
+`mathmod` / `module_top_forms` 两份既有模块型用例 PASS 不变（无回归）。三方对账：`IR_SUBSET` 59 /
+`IR_ONLY` 3 / `IR_ERR_COVERED` 24 无悬空，补集 pos **10** / err 9。
+
+**⇒ 追平到这里撞墙了**。剩余 pos 缺口 10 份**全部**挂待裁第 23 条（槽宽 vs 真实布局）：
+- G3 布局 7 份：`array_member_default` / `struct_member_default` / `designator_init` / `ownerof` /
+  `slice_str_infer` / `type_forms` / `void_slot_infer`
+- G2 但与第 23 条同源 3 份：`multi_arr_decl` / `str_array_init` / `alignof_builtin`
+
+err 9 份：E-a 3（文案不同源，属待裁第 26 条的分批清单）+ E-b 6（断在解析层，**修复依赖 pos 侧的 G3**）。
+**`irparse.c` 一块不需要裁定的活都不剩了**——G1 语法桶（PB-70 清空）、E-c 诊断桶（PB-72 清空）、
+独立的 G2（PB-71 收 `is_no_fallthrough`、PB-73 收 `use_mod`）全部做完。
+
+**下一步只有待裁第 23 条一条路**，且它同时是 §6 里 P2 退出判据重述（待裁第 34 条）与 §5 帧方向分歧
+（待裁第 33 条）的共同前提——三个待裁项在这条上会师。

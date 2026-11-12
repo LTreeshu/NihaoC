@@ -4875,6 +4875,11 @@ static void ir_type_decl(CompilerState *cs)
     agg_count++;
 }
 
+static void ir_parse_top_level(CompilerState *cs);
+static void ir_use_decl(CompilerState *cs);
+static void ir_use_module(CompilerState *cs, const char *name);
+static void ir_parse_module_source(CompilerState *cs, const char *filename);
+
 int ir_parse_file(CompilerState *cs, const char *filename)
 {
     size_t src_size = 0;
@@ -4895,15 +4900,139 @@ int ir_parse_file(CompilerState *cs, const char *filename)
         next_tok(cs);   /* 模块名 */
         skip_newlines(cs);
     }
-    while (cur_tok(cs) == TOK_USE) {
-        next_tok(cs);
-        while (cur_tok(cs) == TOK_IDENTIFIER || cur_tok(cs) == TOK_DOT) {
-            next_tok(cs);
+    while (cur_tok(cs) == TOK_USE) ir_use_decl(cs);
+
+    ir_parse_top_level(cs);
+    return 0;
+}
+
+/* ---- PB-73：模块加载（把模块顶层声明内联进同一个 IrProg，与 A 后端 module_import 同语义） ---- */
+
+static char **ir_imported;      /* 已导入模块名（点号形式；循环守卫 + 去重） */
+static int ir_imported_count;
+static int ir_imported_cap;
+
+static int ir_module_seen(const char *name)
+{
+    for (int i = 0; i < ir_imported_count; i++)
+        if (strcmp(ir_imported[i], name) == 0) return 1;
+    return 0;
+}
+
+static void ir_module_mark(const char *name)
+{
+    if (ir_module_seen(name)) return;
+    if (ir_imported_count >= ir_imported_cap) {
+        ir_imported_cap = ir_imported_cap ? ir_imported_cap * 2 : 8;
+        ir_imported = nihao_realloc(g_cs, ir_imported, ir_imported_cap * sizeof(char *));
+    }
+    ir_imported[ir_imported_count++] = nihao_strdup(g_cs, name);
+}
+
+/* 按 use 名解析模块文件：cwd / 源文件目录 / stdlib 三层候选，点号名按目录层级（a.b → a/b.nc）。
+ * 命中返回 1 并写出路径；不命中返回 0（外部 / 内建模块：无可内联的东西）。 */
+static int ir_module_resolve(const char *name, const char *input_file, char *out, size_t outsz)
+{
+    char slashed[512];
+    size_t si = 0;
+    for (const char *q = name; *q && si + 1 < sizeof(slashed); q++)
+        slashed[si++] = (*q == '.') ? '/' : *q;
+    slashed[si] = '\0';
+
+    char dirbuf[512] = "";
+    if (input_file) {
+        const char *slash = strrchr(input_file, '/');
+        const char *bslash = strrchr(input_file, '\\');
+        const char *sep = (bslash && (!slash || bslash > slash)) ? bslash : slash;
+        if (sep) {
+            int len = (int)(sep - input_file);
+            if (len > 0 && len < (int)sizeof(dirbuf) - 1) {
+                memcpy(dirbuf, input_file, len);
+                dirbuf[len] = '\0';
+            }
         }
-        skip_newlines(cs);
     }
 
-    /* 函数与类型定义列表 */
+    char cands[3][512];
+    int n = 0;
+    snprintf(cands[n++], 512, "%s.nc", slashed);
+    if (dirbuf[0]) snprintf(cands[n++], 512, "%s/%s.nc", dirbuf, slashed);
+    snprintf(cands[n++], 512, "stdlib/%s.nc", slashed);
+
+    for (int i = 0; i < n; i++) {
+        FILE *probe = fopen(cands[i], "rb");
+        if (!probe) continue;
+        fclose(probe);
+        snprintf(out, outsz, "%s", cands[i]);
+        return 1;
+    }
+    return 0;
+}
+
+/* `use <name>` 声明：累积点号多段名后触发导入（源文件头与顶层循环两处共用）。 */
+static void ir_use_decl(CompilerState *cs)
+{
+    next_tok(cs);                 /* use */
+    char use_name[256];
+    use_name[0] = '\0';
+    if (cur_tok(cs) == TOK_IDENTIFIER) {
+        snprintf(use_name, sizeof(use_name), "%s", cs->parser.lex->tok_str);
+        next_tok(cs);
+        while (cur_tok(cs) == TOK_DOT) {
+            next_tok(cs);
+            if (cur_tok(cs) != TOK_IDENTIFIER) break;
+            size_t len = strlen(use_name);
+            if (len + 1 + strlen(cs->parser.lex->tok_str) < sizeof(use_name))
+                snprintf(use_name + len, sizeof(use_name) - len, ".%s",
+                         cs->parser.lex->tok_str);
+            next_tok(cs);
+        }
+    }
+    if (use_name[0]) ir_use_module(cs, use_name);
+    skip_newlines(cs);
+}
+
+/* 递归导入一个模块：解析其头部（module / 嵌套 use），再把顶层声明喂进同一个 IrProg。
+ * 保存 / 还原 lexer（与 A 侧同款），错误定位自动落在模块自己的文件名与行号上。 */
+static void ir_parse_module_source(CompilerState *cs, const char *filename)
+{
+    size_t src_size = 0;
+    char *source = load_source_file(filename, &src_size);
+    if (!source) return;
+
+    LexerState *saved_lex = cs->parser.lex;
+    LexerState *mod_lex = nihao_malloc(cs, sizeof(LexerState));
+    memset(mod_lex, 0, sizeof(*mod_lex));
+    cs->parser.lex = mod_lex;
+    lexer_init(cs, filename, source);
+
+    next_tok(cs);
+    skip_newlines(cs);
+    if (cur_tok(cs) == TOK_MODULE) {
+        next_tok(cs);
+        next_tok(cs);             /* 模块名 */
+        skip_newlines(cs);
+    }
+    while (cur_tok(cs) == TOK_USE) ir_use_decl(cs);
+    ir_parse_top_level(cs);
+
+    cs->parser.lex = saved_lex;
+}
+
+static void ir_use_module(CompilerState *cs, const char *name)
+{
+    if (ir_module_seen(name)) return;
+    char path[512];
+    if (ir_module_resolve(name, cs->input_file, path, sizeof(path))) {
+        ir_module_mark(name);     /* 先标记：循环 import 靠它挡 */
+        ir_parse_module_source(cs, path);
+    }
+    /* 解析不到文件 = 外部 / 内建模块（如 stdio）：无可内联，静默跳过 */
+}
+
+/* 顶层声明列表（PB-73：抽成可重入，模块递归导入复用）。 */
+static void ir_parse_top_level(CompilerState *cs)
+{
     for (;;) {
         skip_newlines(cs);
         if (cur_tok(cs) == TOK_EOF) break;
@@ -4955,12 +5084,8 @@ int ir_parse_file(CompilerState *cs, const char *filename)
             /* 编译期块：执行 static_assert，其余跳过 */
             ir_cooking(cs);
         } else if (cur_tok(cs) == TOK_USE) {
-            /* use 模块导入：IR 单文件模型——解析声明并跳过（模块内容需内联） */
-            next_tok(cs);
-            while (cur_tok(cs) == TOK_IDENTIFIER || cur_tok(cs) == TOK_DOT) {
-                next_tok(cs);
-            }
-            if (cur_tok(cs) == TOK_NEWLINE) next_tok(cs);
+            /* use 模块导入：把模块顶层声明内联进同一 IrProg（PB-73） */
+            ir_use_decl(cs);
         } else if (cur_tok(cs) == TOK_LINK) {
             /* link "lib" [as] alias：静态库导入——IR 单文件模型解析跳过 */
             next_tok(cs);
@@ -4981,7 +5106,6 @@ int ir_parse_file(CompilerState *cs, const char *filename)
             next_tok(cs);
         }
     }
-    return 0;
 }
 
 /* ir-native 的宿主机器码后端：2026-09-26 裁定 IR 发射器只留 riscv64 与 loongarch64，

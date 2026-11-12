@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 2.0 线 P2 倒数第二簇（PB-73：IR 侧模块加载——`use` 把模块顶层声明内联进同一 IrProg；`use_mod` 入名单，追平撞墙在待裁第 23 条，2026-11-12）
+
+- **这是台账里最后一份不需要裁定的 pos 缺口**。A 侧 `module_import` 用「保存 lexer / 上下文 → 为模块源码建新 lexer → 递归 `parse_module` → 还原」把模块函数内联进同一份产物（产物 C 里 `int32_t add(...)` 直接出现在 main 之前）；IR 的 `ir_parse_file` 每次调用都 `P = ir_prog_new()`，是真正的单文件模型，`use` 被解析后跳过 ⇒ `use_mod` 报 `implicit declaration` + `undefined symbol 'add'`。
+- **落地**：把 `ir_parse_file` 的顶层声明循环抽成可重入的 `ir_parse_top_level`；`use <name>` 由 `ir_use_decl` 累积点号多段名后触发 `ir_use_module`——按 **cwd / 源文件目录 / stdlib** 三层解析模块文件（点号名按目录层级，`a.b` → `a/b.nc`），**保存 / 还原 lexer**（新 `LexerState` 带模块自己的文件名 ⇒ 错误定位落在模块的行号上）后把模块顶层声明内联进**同一个 `IrProg`**，循环 import 由 `ir_imported` 去重名单挡。
+- **不能直接复用 A 的 `module_import`**：它内部递归调的是 **A 前端的 `parse_module`**，IR 一调用就直接往 A 的符号表与 cgen 缓冲里写。所以路径解析在 `irparse.c` 内自带一份（约 40 行，与 `module.c` 同口径），**不触碰共享的 `module.c`**——延续「PB 只改 IR 线」，`module.c` 一行未动。**不新增 IR 操作码，两档发射器与 `ir_to_c.c`、A 线一行未改。**
+- **名单与计数**：`use_mod` 入 `IR_SUBSET`（**59 条**）⇒ Windows ir-c / ir-native **49 → 50 PASS**、SKIP **20 → 19**、0 FAIL，c / native **68P/0F/3S** 与比对档 36 格不变；Linux c / native 68P/0F/4S、ir **50P/0F/20S**、0 FAIL。三方对账：名单 ∩ 文件 59 / 3 / 24 无悬空，补集 pos **10** / err 9。
+- **零回归**：`mathmod` / `module_top_forms` 两份既有模块型用例 PASS 不变。**交叉**：ir-c 参照 62→**63**、两档各链接 60→**61**、qemu 各 58→**59 AGREE**、2 CRASH 不变；`comm` 对账新增 `use_mod` ×2、消失 0 行。
+- **→ 追平撞墙了**：剩余 pos 缺口 **10 份全部挂待裁第 23 条**（槽宽 vs 真实布局）——G3 布局 7 份（`array_member_default` / `struct_member_default` / `designator_init` / `ownerof` / `slice_str_infer` / `type_forms` / `void_slot_infer`）+ G2 同源 3 份（`multi_arr_decl` / `str_array_init` / `alignof_builtin`）。err 9 份里 E-a 3 属待裁第 26 条、E-b 6 依赖 pos 的 G3。**`irparse.c` 一块不需要裁定的活都不剩了**（G1 桶 PB-70 清空、E-c 桶 PB-72 清空、独立 G2 由 PB-71 / 73 收掉）。待裁第 23 / 33 / 34 三条在这条墙上会师。台账新增 **§9**。
+
 ### 2.0 线 P2 第八簇（PB-71 / PB-72：IR 补首匹配即止 `__is_matched`，并收掉 E-c 桶最后两份诊断——`len()` 静态可知性与通用 `void` 裸下标；三份入名单，**E-c 桶清空**，2026-11-12）
 
 - **三项都是追平 A 的既有语义，无新设计**。上一轮把 G1 语法桶清空后，台账里只剩两项独立可做（其余 10 份挂待裁第 23 条），本轮把其中一项加上 E-c 的两份诊断一起收掉。
