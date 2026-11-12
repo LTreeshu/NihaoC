@@ -2,6 +2,7 @@
 
 本文档记录 NihaoC 语言规范（Chinese.md / English.md）中各项指针安全规则与编译器（ncc）实际实现的对应状态。
 
+> 更新日期：2026-11-12（**PB-68 IR 前端补齐指针类型后缀档**）：`irparse.c` 新增后缀链走查器（`IrChain` + `ir_scan_postfix` / `ir_chain` / `ir_chain_assign`）与变量存储形态表 `vmode`（`VM_SLOT` / `VM_PTRARR`），把 `void[][]` 逐层解引用、`.(T[N])` 数组型后缀、指针数组、`malloc(void[N])` 退化统一成「逐层算地址 → 末层读 / 写」，全部复用既有 opcode ⇒ **不新增 IR 操作码，两档发射器与 `ir_to_c.c` 一行未改，A 线一行未改**。路由刻意做窄（仅 `VM_PTRARR` / 新形态 / 分组数 ≥ 2 三种情形改道），`arr[i][j]`、`s.a[0]`、单层 `p.(i32)` 走原路径与原诊断。`deref_slice` 入 `IR_SUBSET`（49 条），四档各 `[PASS]` 且 stdout 与 `.expect` 逐字节相同；Windows ir-c / ir-native 42→43 PASS、SKIP 27→26、0 FAIL，c / native 68P/3S 不变、比对档 36 格不变；Linux 68P/0F/4S + 43P/0F/27S、0 FAIL。**这一簇没有等真实布局**——指针数组槽里存的是堆地址而非帧基址，A 侧同形态即 `void*(*p) = malloc(N*sizeof(void*))`，故第 23 条未裁也能收簇。**新暴露一条方向分歧并登记不修**：`IR_ADDR` / `IR_ELEM_ADDR` 在两交叉档向下生长、在 `ir_to_c.c` 向上生长（静态证据：同一元素写落 `s0+56`、读落 `s0-72`，相距 128 字节），此前指针值寻址只落堆 / 字符串池所以看不见 ⇒ 待裁第 33 条。交叉整语料 54 AGREE / 2 CRASH，那 2 条用 HEAD 版 `irparse.c` 复跑同样 CRASH ⇒ **零回归**。台账 pos 缺口 21→20、G1 14→13，新增 §5。详见下方 PB-68 实测表。
 > 更新日期：2026-11-11（**PB-67 IR 前端补齐数组 / 切片容量档**）：`irparse.c` 补四件事——**多维数组声明**（`m i32[2][3]` 按行主序摊平成连续槽，新增维度表 `vdim` / `vndim` 与 `ir_flat_index` / `ir_array_init_list` 两个助手，**不新增 IR 操作码，两档发射器一行未改**）、**切片读入声明数组**（`cp i32[3] = arr[1..4]`，复制个数取**目标声明容量**，与 A 侧 `memcpy` 同口径）、**开区间切片 rhs**（`sw = arr[..5]`，指针取 `&arr[0]`、长度取 `hi`）、**字面量推断字符串的 `len()`**（`s = "abc"` → 3，此前静默给 0）。两份用例入 `IR_SUBSET`（`len_builtin` / `array_capacity_tiers`）；`deref_slice` **不入**——第一手复测证明它的真因是**指针类型后缀**（`void[][]` / `.(char[9])` / `void[2]` 指针数组 / `malloc(void[3])`），台账据此改记到新分出的「指针类型后缀档」一簇。门禁 ir-c / ir-native 40→42 PASS、SKIP 29→27、0 FAIL，c / native 不变；Linux 68P/0F/4S + 42P/0F/28S；交叉 riscv64 + loongarch64 四份产物**三套 oracle 零告警**、qemu 执行输出与 `.expect` 逐字相同。台账 pos 缺口 23→21、G1 16→14。详见下方 PB-67 实测表。
 > 更新日期：2026-11-11（**PB-66 IR 前端实现顶层声明与 `alias`**）：`irparse.c` 补上顶层声明这一层（顶层 `var` / `const` / `flow` / 模块级 `func` / `alias`），全局变量落成 `IrProg` 全局池（`__gN`）并复用既有 `IR_LD_ADDR` + `IR_LOAD` / `IR_STORE`——**不新增 IR 操作码，两档发射器一行未改**；顺带通了 `for` 的三形态 init 与任意表达式 step（step 移到 body 之后执行）、`else if` 链、struct 数组成员元素寻址。门禁 ir-c / ir-native 35→40 PASS、SKIP 34→29、0 FAIL，c / native 不变；Linux 68P/0F/4S + 40P/0F/30S；交叉整语料 106→116 份 `.s`、执行 96→102、8 条差异与改前逐条相同 ⇒ 零回归，三套 oracle 零告警。五份用例入 `IR_SUBSET`；台账 pos 缺口 28→23、G1 21→16。详见下方 PB-66 实测表。
 > 更新日期：2026-11-11（**PB-64 / PB-65 `print` 下降到 printf + 字符串池序列化转义**）：`irparse.c` 把内置名 `print` 按 A 口径下降（带格式串透传 `printf`、否则前置 `"%lld\n"` 且 CALL 实参数 +1，浮点先 DTOI）；`ir.c` 新增 `ir_str_escaped` 并接到 `ir_to_c` 与 `ir_backend` 两处——此前含换行的字符串在 ir-c 产物里是非法 C、在交叉 `.s` 里靠汇编器容错。门禁 ir-c / ir-native 32→35 PASS、SKIP 38→34、0 FAIL，c / native 不变；Linux 68P/0F/4S + 35P/0F/35S；交叉矩阵 53 OK / 0 FAIL 且 `unterminated string` 告警清零。flow 族四份入 IR_SUBSET；`str_array_init` 变为能编能跑但输出截断，属第 23 条家族、不入名单。详见下方实测表。
@@ -851,6 +852,40 @@
 | 交叉（两份 × 两架构） | — | riscv64 / loongarch64 各一份 `.s`：三套 oracle（msys2 GAS + zig LLVM + llvm-mc 18）**告警 0**，静态链接 0 告警，qemu 执行输出与 `.expect` **逐字相同**（4 份 diff 全空） |
 
 锚点：`irparse.c` 的维度表 `vdim` / `vndim`（`IR_MAX_DIMS` = 4）与建表 / 清零处、`ir_flat_index`（多维扁平下标）、`ir_array_init_list`（多维初始化列表递归填槽）、多维下标读路径（`ir_expr` 的 `TOK_LBRACKET` 分支收 `[j]…` 后转扁平）、赋值路径的切片块（开区间 `arr[..hi]` → `&arr[0]` + 长度 `hi`）、赋值路径的字面量长度登记（`ve[vi] = strlen(...)` + `vetyp[vi] = 8`）、声明路径的切片复制块（`cp T[K] = arr[lo..hi]` 按 K 复制）、维度解析与记录处（`dims[IR_MAX_DIMS]` → `vndim[vi]` / `vdim[vi][k]`）、初始化列表分派（`vndim[vi] >= 2` → `ir_array_init_list`）；名单在 `xmake.lua` 的 `IR_SUBSET`。
+
+**PB-68 实测：指针类型后缀档（2026-11-12，探针在 `ncc/build/p68x/`，不入版本库）**
+
+| 判据 | 改前（IR 侧第一手） | 改后 |
+|---|---|---|
+| `deref_slice`（8 组形态，PA 结转，80 行） | `ir: array dimension 1 must have a positive length` / `array dimension 2 ...`（第 9 行 `p3 void[][] = &p2`）+ `ir: unexpected token ']' in expression` | 四档各 `[PASS]`，产物 stdout 与 `.expect`（8 行 `ok`，CRLF）**逐字节相同**，入 `IR_SUBSET`（49 条） |
+| `void[][]` 逐层解引用 `p3[][].(i32)` | 裸 `[]` 被当数组维，两维都取不到长度即报错 | 裸 `void[]` **不再算一维**（通用指针的下一级，槽模型下不占维），层数由后缀链动态决定 |
+| 数组型后缀 `p.(char[9])[8] = 5` | `.(T)` 只收标量类型，`[` 之后断 | `.(T[N])` 解成「基址 + 元素宽」，末层可下标、可切片、可 `op=` |
+| 指针数组 `arryptr2 void[2] = {&arry, &arrybuf}` | 帧数组基址被当指针值用 | 初始化列表逐项存地址，`arryptr2[i].(T[N])[j]` 逐层走链 |
+| `malloc(void[3])` / `malloc(void[4][5])` | 尺寸按 `type_size_token(TOK_VOID)` = 0 算 | 新助手 `ir_malloc_size`：`void` 按 8 字节槽宽、多维取乘积；`type_size_token(TOK_VOID)` **保持 0 不动**（改它会波及 `sizeof(void)` 既有断言） |
+| `void[N] = malloc(void[N])` 的声明形态 | 声明成帧数组 `int64_t p[N]`，随后 `p = <堆地址>` 落到 C 上报 `lvalue expected` | 退化为**指针值数组**（`VM_PTRARR`），按标量指针槽声明（`elems` 传 0），与 A 侧 `void*(*p) = malloc(N*sizeof(void*))` 同口径；下标走「指针值 + 偏移」 |
+| 声明期链切片 `buf char[8] = p.(char[9])[0..7]` | 解析层不接受 | 源地址由链求值给出，**复制个数仍取目标容量**（与 PB-67 同口径）；路由判据要带起始偏移（`off=1`），否则 cur_tok 还在标识符上、扫描立刻 break |
+| 路由影响面 | — | 只有三种情形改走新路：`VM_PTRARR` 变量、后缀链含新形态（空下标 `p[]` / `.(T[N])`）、`[...]` 分组数 ≥ 2。`arr[i][j]` / `s.a[0]` / 单层 `p.(i32)` **继续走原路径与原诊断** |
+| 门禁 | Windows ir-c / ir-native 42P/27S | **43P / 26S**、0 FAIL；c / native **68P/0F/3S 不变**；Linux c / native 68P/0F/4S、ir-c / ir-native **43P/0F/27S**、0 FAIL |
+| 比对档 | 4 后端 34 / 2 后端 2 | 不变（Windows **36 格** = 34 + 2；Linux 35 格） |
+| 交叉整语料 | — | 两档各 56 份链接成功（各 2 份被帧护栏拒）、**54 AGREE / 2 CRASH_139**；那 2 条（`ir_str` / `str_array_init`）用 **HEAD 版 `irparse.c`** 重出码 / 重链 / 重跑**同样 CRASH_139** ⇒ 先存缺陷，**零回归** |
+| `deref_slice` 整份上交叉档 | — | **出码即被帧护栏拒**（`main` 帧 3328 > 2047 寻址限，既有天花板）；拆成八函数的探针能出码、汇编与链接 0 告警，但**三组算错地址** ⇒ 见下一行 |
+| **新暴露：帧生长方向分歧** | 看不见（指针值寻址只落堆 / 字符串池，两者都向上） | `IR_ADDR` / `IR_ELEM_ADDR` 在两交叉档**向下**、在 `ir_to_c.c` **向上**；静态证据：同一元素写用 `mul`+`add` 落 `s0+56`、读用 `slli`+`sub` 落 `s0-72`，**相距 128 字节**。**登记不修**（待裁第 33 条），本轮两档发射器与 `ir_to_c.c` **一行未改** |
+| 诚实边界 | — | IR 的 `char[9]` 是 **9 个 8 字节槽**、A 侧是 9 个连续字节 ⇒ 四档输出相同**不证明布局已定案**（待裁第 23 条）；`void[][N]` 的非 malloc 形态**未测**，仍走老路径 |
+
+隔离探针（`iso.nc` 五件对照，把方向分歧收窄到「新形态 + 非零下标」）：
+
+| 探针 | 形态 | ir-c | rv | la |
+|---|---|---|---|---|
+| A | 旧形态切片读入 `buf char[8] = arry[0..7]` | ok | ok | ok |
+| B | 旧形态切片读入（`i32` 元素对照） | ok | ok | ok |
+| C | 新形态 `p.(char[9])[8] = 42` | ok | **bad** | **bad** |
+| D | 新形态 `buf char[8] = p.(char[9])[0..7]` | ok | **bad** | **bad** |
+| E | `void[2]` 帧数组取指针再 `.(char[9])[8]` | ok | **bad** | **bad** |
+
+两条工具口径（本轮撞出来的，记下免得下轮重犯）：**① Linux 跑法换法**——PB 是 git worktree，其 `.git` 指向 Windows 路径，从 WSL `git clone` 直接报 `not a git repository` ⇒ 改为把**源码复制进 ext4**（`/home/ltree/pb68`）再构建，此前几轮的克隆法在 worktree 上不成立。**② CRLF 陷阱**——Windows 参照输出 `\r\n`、qemu 输出 `\n`，54 条曾被误判成 DIFF，两侧同时 `tr -d "\r"` 后一致；**与 `.expect` 比时不能去 CR**（那份文件本身是 CRLF）。
+
+锚点（本文件是唯一可带行号的文件，逐个 grep 复核）：`irparse.c` 的存储形态表 `VM_SLOT` / `VM_PTRARR` / `vmode`（**51–53**，建表 **644**、扩容 **688**、每变量初始化为 `VM_SLOT` **698**）、`ir_peek_ahead`（**61**）、`IrChain` 七字段（**926–934**）、`ir_scan_postfix`（**939**，带 `start` 偏移参数）、路由判据 `ir_chain_needs_new_off`（**1002**）与 `ir_chain_needs_new`（**1010**）、链求值 `ir_chain`（**1016**，`VM_PTRARR` 分支 **1031**）、链式赋值 `ir_chain_assign`（**1356**）、`ir_malloc_size`（**1502**，调用点 **1790**）、表达式路径路由（`ir_primary` 内 **1983–1991**）、语句路径两处路由（`.(` 分支 **3611**、`[` 分支 **4196**）、裸 `void[]` 不算维（注释 **3922**、分支 **3952**）、声明期 `is_ptrarr` 判据与 `var_declare` / `vmode` 落位（**3995–4009**）、声明期链切片复制块（**4143–4178**，判据在 **4147**）、`ir_scalar_code_of_token` 前向声明（**364**，本轮补，消掉 implicit-declaration 告警）。方向分歧的三处证据锚点：`ir_riscv64.c:184`（`IR_ADDR`）/ **190**（`IR_ELEM_ADDR`）、`ir_loongarch64.c:206` / **212**、`ir_to_c.c:275` / **296**——**三处本轮均未改动**。名单在 `xmake.lua:215`（`IR_SUBSET`）与其上的日期注文 **203**。文件行数：`irparse.c` 4299 → **4921**（净增 622）、`xmake.lua` 516 → **528**（净增 12，全在 `IR_SUBSET` 与其日期注文）；`ir.h` / `ir.c` / `ir_to_c.c` / `ir_backend.c` / 两档发射器 / A 线全部**零改动**，故本文件其余各处锚点**不动**。
+
 **fx32/fx64 与 align/sizeof 形态实测（PB-60，2026-11-09，探针在 `ncc/build/p60/`，不入版本库）**
 
 | 形态 | c / native | ir-c / ir-native（修前） | ir-c / ir-native（修后） | 交叉两档 |

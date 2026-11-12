@@ -200,7 +200,19 @@ end
 -- ④ 字面量推断字符串的 len()（`s = "abc"` → 长度 3，此前 IR 静默给 0）。
 -- 两份都带 .expect ⇒ IR 侧 PASS +2、SKIP −2。第三份 deref_slice 仍不入——它的真因不是容量档，
 -- 而是「指针类型后缀档」（`void[][]` 逐层解引用 / `.(char[9])` 数组型后缀 / 指针数组），已改记台账。
-local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true, fx_types = true, malloc_demo = true, flow = true, flow_no_free = true, borrow = true, flow_move = true, features = true, for_init_forms = true, transfer = true, mathmod = true, module_top_forms = true, len_builtin = true, array_capacity_tiers = true}
+-- PB-68（2026-11-12）新增 deref_slice：上一轮改记的「指针类型后缀档」本轮在 irparse.c 落地，
+-- 四档实跑输出逐字相同且与 .expect 逐字节相同（八行 ok）⇒ 入 IR_SUBSET，IR 侧 PASS 42→43、SKIP 27→26。
+-- 落地口径：新增后缀链求值器（ir_scan_postfix / ir_chain / ir_chain_assign），只在「根变量是 malloc
+-- 退化的指针值数组」「链含新形态（空下标 p[] / 数组型后缀 .(T[N])）」「链有两组以上后缀」三种情况下接管，
+-- 单组旧形态一律走原路径，故门禁其余各档计数一字未变。`void[N] = malloc(void[N])` 按标量指针槽声明
+-- （A 侧同形态是 `void*(*p) = malloc(N*sizeof(void*))`），malloc 字节数改由 ir_malloc_size 算（void 计 8）。
+-- 边界照旧诚实：① IR 的 `char[9]` 仍是 9 个 8 字节槽（A 侧是 9 字节紧凑布局），`.(char[9])[k]` 按槽宽 8
+-- 寻址才与 IR 自己的 `arry[k]` 自洽——真实布局仍是待裁第 23 条，本份进名单是因为四档输出相同，不是因为布局已定案；
+-- ② 两交叉档对本份**出码即被帧护栏拒**（main 帧 3328 字节 > 2047 寻址限），拆函数探针能出码、能链接、
+-- 0 告警，但八组里有三组算错地址：IR_ADDR / IR_ELEM_ADDR 在两档发射器是**向下**生长、在 ir_to_c 是**向上**
+-- （C 数组），此前 is_ptr=1 的寻址只指向堆或字符串池（向上）故未暴露，本轮新形态第一次把帧地址装进指针值
+-- 再做下标运算才显形。该方向分歧带设计权重（改哪一侧要动整条交叉出码面），**登记不修**，见台账与待裁清单。
+local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true, fx_types = true, malloc_demo = true, flow = true, flow_no_free = true, borrow = true, flow_move = true, features = true, for_init_forms = true, transfer = true, mathmod = true, module_top_forms = true, len_builtin = true, array_capacity_tiers = true, deref_slice = true}
 local IR_ONLY = {ir_builtin = true, ir_slice = true, ir_sparam = true}
 -- IR_ERR_COVERED: err 用例中 IR 前端已实现对应诊断的（未列出的非 m2 用例仍在 IR 侧跳过）
 -- cooking_bare_var 刻意不入：IR 前端对块内裸 <var-decl> 只给 `ir: undeclared variable 'K'`，

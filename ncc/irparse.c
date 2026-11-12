@@ -44,6 +44,14 @@ static int *vptr;          /* 是否指针类（void）：1=是（仅指针类�
 static int (*vdim)[IR_MAX_DIMS];
 static int *vndim;
 
+/* 变量存储形态（PB-68 指针类型后缀档）：
+ *   0 = 帧槽/帧数组——元素就放在帧槽里，下标按「帧槽基址 + 偏移」寻址；
+ *   1 = 指针值数组——槽里存的是一个地址（`void[N] = malloc(void[N])` 的退化形态），
+ *       下标按「指针值 + 偏移」寻址。 */
+#define VM_SLOT   0
+#define VM_PTRARR 1
+static int *vmode;
+
 /* 可见性常量直接用 ncc.h 的 Visibility 枚举（PB-27.3+9：与 cgen 端 enum nihao_vis 数值统一：
  *   VIS_UNDEF=0, VIS_CONST=1, VIS_FLOW=2, VIS_STATIC=3, VIS_VAR=4）。 */
 
@@ -353,6 +361,7 @@ static int ir_coerce(int vr, int vtype_code)
  * 隐式声明会导致 x64 指针参数截断，必须显式声明） */
 static int var_declare(const char *name, int elems, int type_idx, int vis);
 static int ir_expr(CompilerState *cs);
+static int ir_scalar_code_of_token(TokenType tt);
 
 /* ---- struct/union/enum 类型表 ---- */
 #define IR_MAX_AGG 16
@@ -632,6 +641,7 @@ static void var_reset(void)
         vtype = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vdim = nihao_malloc(g_cs, vn_cap * sizeof(*vdim));
         vndim = nihao_malloc(g_cs, vn_cap * sizeof(int));
+        vmode = nihao_malloc(g_cs, vn_cap * sizeof(int));
     }
 }
 
@@ -675,6 +685,7 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
         vtype = nihao_realloc(g_cs, vtype, vn_cap * sizeof(int));
         vdim = nihao_realloc(g_cs, vdim, vn_cap * sizeof(*vdim));
         vndim = nihao_realloc(g_cs, vndim, vn_cap * sizeof(int));
+        vmode = nihao_realloc(g_cs, vmode, vn_cap * sizeof(int));
     }
     vn[vn_count] = name;
     pt[vn_count] = -1;
@@ -684,6 +695,7 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
     vvis[vn_count] = vis;
     vtype[vn_count] = 0;
     vndim[vn_count] = 0;
+    vmode[vn_count] = VM_SLOT;
     for (int k = 0; k < IR_MAX_DIMS; k++) vdim[vn_count][k] = 0;
     int base = -1;
     if (elems > 0 && type_idx < 0) {
@@ -898,6 +910,521 @@ static void ir_array_init_list(CompilerState *cs, int vi, int level, int offset)
     }
 }
 
+/* ---- 后缀链求值（PB-68 指针类型后缀档）----
+ *
+ * 语言层的后缀不止一种：下标 arr[i]、切片 arr[a..b]、空下标 p[]（解一层引用）、
+ * 解引用 p.() / p.(T)、数组型后缀 p.(T[N])（把通用指针定成「指向 T[N]」）。
+ * 旧路径一次只处理一种后缀（`[` 之后直接返回），多步链与新形态都落不到。
+ * 这里把整条链一次走完，链状态描述「当前对象」：
+ *   val      当前值 vreg；
+ *   kind     1 = 当前值是地址（可再解引用 / 可下标）；0 = 普通值；
+ *   elem     元素/指向的标量类型码（-1 = 未知）；
+ *   elem_ptr 1 = 元素本身是通用指针（解出来的值仍是地址）；
+ *   addr     末步的可写地址（-1 = 无；赋值目标用）；
+ *   width    元素寻址宽度（字节）：槽模型 8，字节寻址（动态字符串）1；
+ *   is_slice 末步是切片（此时 val 就是切片首地址）。 */
+typedef struct {
+    int val;
+    int kind;
+    int elem;
+    int elem_ptr;
+    int addr;
+    int width;
+    int is_slice;
+} IrChain;
+
+/* 后缀链分组扫描：数出后缀「组」数，并标记新形态。
+ * 组 = 连续下标组 | 一次 .() | 一次成员访问（. / ->，成员后的 [..] 算同一组）。
+ * 旧路径只处理单组后缀；多组或新形态走链式求值。 */
+static void ir_scan_postfix(CompilerState *cs, int start, int *groups, int *has_new)
+{
+    *groups = 0;
+    *has_new = 0;
+    int pos = start;
+    for (;;) {
+        TokenType t = ir_peek_ahead(cs, pos);
+        if (t == TOK_LBRACKET) {
+            if (ir_peek_ahead(cs, pos + 1) == TOK_RBRACKET) *has_new = 1;  /* 空下标 p[] */
+            int depth = 0;
+            do {
+                TokenType u = ir_peek_ahead(cs, pos);
+                if (u == TOK_EOF) break;
+                if (u == TOK_LBRACKET) depth++;
+                else if (u == TOK_RBRACKET) depth--;
+                pos++;
+            } while (depth > 0);
+            (*groups)++;
+            continue;
+        }
+        if (t == TOK_DOT_PAREN) {
+            int p = pos + 1;
+            if (ir_peek_ahead(cs, p) != TOK_RPAREN &&
+                ir_peek_ahead(cs, p) != TOK_EOF) {
+                p++;                                    /* 类型名 */
+                if (ir_peek_ahead(cs, p) == TOK_LBRACKET) *has_new = 1;  /* 数组型后缀 .(T[N]) */
+            }
+            int depth = 1;
+            pos = p;
+            while (depth > 0) {
+                TokenType v = ir_peek_ahead(cs, pos);
+                if (v == TOK_EOF) break;
+                if (v == TOK_LPAREN) depth++;
+                else if (v == TOK_RPAREN) depth--;
+                pos++;
+            }
+            (*groups)++;
+            continue;
+        }
+        if (t == TOK_DOT || t == TOK_ARROW) {
+            pos++;                                    /* . / -> */
+            if (ir_peek_ahead(cs, pos) == TOK_IDENTIFIER) pos++;   /* 成员名 */
+            if (ir_peek_ahead(cs, pos) == TOK_LBRACKET) {  /* 成员后的 [..] 同一组 */
+                int depth = 0;
+                do {
+                    TokenType u = ir_peek_ahead(cs, pos);
+                    if (u == TOK_EOF) break;
+                    if (u == TOK_LBRACKET) depth++;
+                    else if (u == TOK_RBRACKET) depth--;
+                    pos++;
+                } while (depth > 0);
+            }
+            (*groups)++;
+            continue;
+        }
+        break;
+    }
+}
+
+/* 这条后缀链是否要走链式求值：
+ *   - 根变量是「指针值数组」（malloc 退化形态）→ 下标寻址语义与帧数组不同；
+ *   - 链含新形态（空下标 p[] / 数组型后缀 .(T[N])）；
+ *   - 链有两组以上后缀（多步链）。 */
+static int ir_chain_needs_new_off(CompilerState *cs, int vi, int off)
+{
+    if (vmode[vi] == VM_PTRARR) return 1;
+    int groups = 0, has_new = 0;
+    ir_scan_postfix(cs, off, &groups, &has_new);
+    return has_new || groups >= 2;
+}
+
+static int ir_chain_needs_new(CompilerState *cs, int vi)
+{
+    return ir_chain_needs_new_off(cs, vi, 0);
+}
+
+/* 链求值：从变量 vi 出发逐个消费后缀步。返回 1 成功，0 失败（已给诊断）。 */
+static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
+{
+    ch->val = vt[vi];
+    ch->kind = 0;
+    ch->elem = -1;
+    ch->elem_ptr = 0;
+    ch->addr = -1;
+    ch->width = 8;
+    ch->is_slice = 0;
+
+    int base_vreg = vt[vi];   /* 当前寻址基址 */
+    int ptr_base = 0;         /* 1 = 基址取「指针值」，0 = 取帧槽地址 */
+    int root_nd = vndim[vi];  /* 根变量的维数（多维摊平用） */
+    int step = 0;             /* 已走的后缀步数 */
+
+    if (vmode[vi] == VM_PTRARR) {
+        ptr_base = 1;         /* 槽里存的是地址 */
+        ch->kind = 1;
+        ch->elem = 0;
+        ch->elem_ptr = 1;     /* 元素是通用指针 */
+    } else if (vetyp[vi] == 8) {
+        ptr_base = 1;         /* 动态字符串：槽里是池地址（字节寻址） */
+        ch->kind = 1;
+        ch->elem = 8;
+        ch->width = 1;
+    } else if (ve[vi] > 0 || root_nd >= 1) {
+        ch->elem = vetyp[vi];  /* 帧数组：元素在帧槽里 */
+        ch->width = ir_elem_width(vetyp[vi]);
+        ch->elem_ptr = vptr[vi];   /* void 元素数组：元素本身是通用指针 */
+    } else if (vptr[vi]) {
+        ptr_base = 1;         /* 普通通用指针变量 */
+        ch->kind = 1;
+        ch->elem = PT_IS_SCALAR(pt[vi]) ? PT_SCALAR_CODE(pt[vi]) : -1;
+    } else {
+        ch->elem = vtype[vi];  /* 标量槽 */
+    }
+
+    for (;;) {
+        TokenType t = cur_tok(cs);
+        if (t == TOK_LBRACKET) {
+            next_tok(cs);
+            if (cur_tok(cs) == TOK_RBRACKET) {
+                /* 空下标 p[]：解一层引用（≡ p.()） */
+                next_tok(cs);
+                if (ch->kind != 1) {
+                    nihao_error(cs, "ir: '[]' needs a pointer to dereference");
+                    return 0;
+                }
+                int tgt = ch->val;
+                int v = ir_new_vreg(F);
+                ir_emit(F, IR_LOAD, v, tgt, -1, 0);
+                ch->addr = tgt;
+                ch->val = v;
+                ch->kind = 1;
+                ch->elem = -1;
+                ch->elem_ptr = 0;
+                ch->is_slice = 0;
+                base_vreg = v;
+                ptr_base = 1;
+                step++;
+                continue;
+            }
+            if (cur_tok(cs) == TOK_RANGE) {
+                /* arr[..hi]：省略起点的切片 → 基址 */
+                next_tok(cs);
+                ir_expr(cs);
+                expect(cs, TOK_RBRACKET);
+                int addr = ir_elem_addr(cs, base_vreg, 0, ch->width, ptr_base);
+                ch->addr = addr;
+                ch->val = addr;
+                ch->kind = 1;
+                ch->is_slice = 1;
+                base_vreg = addr;
+                ptr_base = 1;
+                step++;
+                continue;
+            }
+            int idx = ir_expr(cs);
+            if (cur_tok(cs) == TOK_RANGE) {
+                /* 切片 arr[lo..hi] → 元素地址（值即地址） */
+                next_tok(cs);
+                ir_expr(cs);
+                expect(cs, TOK_RBRACKET);
+                int addr = ir_elem_addr(cs, base_vreg, idx, ch->width, ptr_base);
+                ch->addr = addr;
+                ch->val = addr;
+                ch->kind = 1;
+                ch->is_slice = 1;
+                base_vreg = addr;
+                ptr_base = 1;
+                step++;
+                continue;
+            }
+            expect(cs, TOK_RBRACKET);
+            /* 多维：首个下标步收连续下标并按行主序摊平（与旧路径同口径） */
+            int idxs[IR_MAX_DIMS];
+            int nidx = 1;
+            idxs[0] = idx;
+            if (step == 0) {
+                while (cur_tok(cs) == TOK_LBRACKET && nidx < IR_MAX_DIMS) {
+                    next_tok(cs);
+                    int j = ir_expr(cs);
+                    expect(cs, TOK_RBRACKET);
+                    idxs[nidx++] = j;
+                }
+            }
+            int addr;
+            int partial = 0;
+            if (nidx > 1 || root_nd >= 2) {
+                int flat = ir_flat_index(cs, vi, idxs, nidx);
+                addr = ir_elem_addr(cs, base_vreg, flat, ch->width, ptr_base);
+                partial = (nidx < root_nd);
+            } else {
+                addr = ir_elem_addr(cs, base_vreg, idx, ch->width, ptr_base);
+            }
+            if (partial) {
+                /* 子行首地址（m[1] 是第 1 行的指针） */
+                ch->addr = addr;
+                ch->val = addr;
+                ch->kind = 1;
+                ch->is_slice = 0;
+                base_vreg = addr;
+                ptr_base = 1;
+                step++;
+                continue;
+            }
+            int v = ir_new_vreg(F);
+            if (ch->width == 1) ir_emit(F, IR_LOAD8, v, addr, -1, 0);
+            else ir_emit(F, IR_LOAD, v, addr, -1, 0);
+            if (ch->elem == 1 || ch->elem == 8) ir_set_double(v);
+            else if (ch->elem > 0) v = ir_coerce(v, ch->elem);
+            ch->addr = addr;
+            ch->val = v;
+            ch->kind = ch->elem_ptr ? 1 : 0;
+            ch->elem_ptr = 0;
+            ch->elem = -1;
+            ch->is_slice = 0;
+            base_vreg = v;
+            ptr_base = ch->kind;
+            step++;
+            continue;
+        }
+        if (t == TOK_DOT_PAREN) {
+            next_tok(cs);
+            int tcode = -1;
+            TokenType ttype = TOK_EOF;
+            int arr_len = -1;
+            if (cur_tok(cs) != TOK_RPAREN) {
+                ttype = cur_tok(cs);
+                tcode = ir_scalar_code_of_token(ttype);
+                if (tcode < 0) {
+                    nihao_error(cs, "ir: '.()' dereference takes a scalar type or nothing, "
+                                    "not '%s'", cs->parser.lex->tok_str);
+                    return 0;
+                }
+                next_tok(cs);
+                if (cur_tok(cs) == TOK_LBRACKET) {
+                    /* 数组型后缀 .(T[N])：把通用指针定成「指向 T[N]」——
+                     * 地址不变，元素类型改成 T（后续下标按 T 寻址）。 */
+                    next_tok(cs);
+                    arr_len = 0;
+                    if (cur_tok(cs) == TOK_INT_CONST) {
+                        arr_len = (int)cs->parser.lex->tok_val.i;
+                        next_tok(cs);
+                    }
+                    expect(cs, TOK_RBRACKET);
+                }
+            }
+            expect(cs, TOK_RPAREN);
+            if (arr_len >= 0) {
+                if (ch->kind != 1) {
+                    nihao_error(cs, "ir: '.()' with an array type needs a pointer value");
+                    return 0;
+                }
+                ch->elem = tcode;
+                ch->elem_ptr = (ttype == TOK_VOID);   /* void 元素 = 通用指针 */
+                ch->kind = 1;
+                ch->addr = -1;
+                ch->is_slice = 0;
+                ch->width = 8;
+                base_vreg = ch->val;
+                ptr_base = 1;
+                step++;
+                continue;
+            }
+            /* 普通解引用：读指针所指处的值 */
+            if (ch->kind != 1) {
+                nihao_error(cs, "ir: '.()' needs a pointer to dereference");
+                return 0;
+            }
+            int tgt = ch->val;
+            int v = ir_new_vreg(F);
+            ir_emit(F, IR_LOAD, v, tgt, -1, 0);
+            if (tcode >= 0) {
+                if (tcode == 1 || tcode == 8) ir_set_double(v);
+                else if (tcode != 0) v = ir_coerce(v, tcode);
+            } else if (ch->elem == 1 || ch->elem == 8) {
+                ir_set_double(v);
+            }
+            ch->addr = tgt;
+            ch->val = v;
+            ch->kind = 0;
+            ch->elem_ptr = 0;
+            ch->elem = (tcode >= 0) ? tcode : ch->elem;
+            ch->is_slice = 0;
+            base_vreg = v;
+            ptr_base = 0;
+            step++;
+            continue;
+        }
+        if (t == TOK_ARROW) {
+            /* 指针成员访问 p->field：链上只在首步支持（成员类型取 pt[]） */
+            if (step != 0 || pt[vi] < 0) {
+                nihao_error(cs, "ir: '->' member access is only supported on a "
+                                "pointer variable");
+                return 0;
+            }
+            next_tok(cs);
+            const char *fname = cs->parser.lex->tok_str;
+            next_tok(cs);
+            int ti = pt[vi];
+            int off = 0;
+            int last_fi = -1;
+            for (;;) {
+                int fi = agg_member_find(ti, fname);
+                if (fi < 0) {
+                    nihao_error(cs, "ir: no member '%s' in type '%s'", fname,
+                                agg_types[ti].name);
+                    return 0;
+                }
+                last_fi = fi;
+                off += (agg_types[ti].kind == 1) ? 0 : agg_types[ti].moff[fi];
+                int mt = agg_types[ti].mtype[fi];
+                if (mt >= 0 && (cur_tok(cs) == TOK_DOT || cur_tok(cs) == TOK_ARROW)) {
+                    ti = mt;
+                    next_tok(cs);
+                    fname = cs->parser.lex->tok_str;
+                    next_tok(cs);
+                    continue;
+                }
+                break;
+            }
+            int base = ir_new_vreg(F);
+            ir_emit(F, IR_MOV, base, ch->val, -1, 0);
+            int addr;
+            if (off == 0) {
+                addr = base;
+            } else {
+                int ov = ir_new_vreg(F);
+                ir_emit(F, IR_CONST, ov, -1, -1, off * 8);
+                addr = ir_new_vreg(F);
+                ir_emit(F, IR_ADD, addr, base, ov, 0);
+            }
+            int v = ir_new_vreg(F);
+            ir_emit(F, IR_LOAD, v, addr, -1, 0);
+            if (agg_types[ti].mbits[last_fi] > 0) {
+                int mv = ir_bitmask(agg_types[ti].mbits[last_fi]);
+                int r2 = ir_new_vreg(F);
+                ir_emit(F, IR_AND, r2, v, mv, 0);
+                v = r2;
+            }
+            ch->addr = addr;
+            ch->val = v;
+            ch->kind = 0;
+            ch->elem = -1;
+            ch->elem_ptr = 0;
+            ch->is_slice = 0;
+            base_vreg = v;
+            ptr_base = 0;
+            step++;
+            continue;
+        }
+        if (t == TOK_DOT) {
+            /* 成员访问 s.field：链上只在首步支持（聚合类型取 vty[]） */
+            if (step != 0 || vty[vi] < 0) {
+                nihao_error(cs, "ir: member access is only supported on an aggregate "
+                                "variable");
+                return 0;
+            }
+            next_tok(cs);
+            const char *fname = cs->parser.lex->tok_str;
+            next_tok(cs);
+            int ti = vty[vi];
+            int off = 0;
+            int last_fi = -1;
+            for (;;) {
+                int fi = agg_member_find(ti, fname);
+                if (fi < 0) {
+                    nihao_error(cs, "ir: no member '%s' in type '%s'", fname,
+                                agg_types[ti].name);
+                    return 0;
+                }
+                last_fi = fi;
+                off += (agg_types[ti].kind == 1) ? 0 : agg_types[ti].moff[fi];
+                int mt = agg_types[ti].mtype[fi];
+                if (mt >= 0 && cur_tok(cs) == TOK_DOT) {
+                    ti = mt;
+                    next_tok(cs);
+                    fname = cs->parser.lex->tok_str;
+                    next_tok(cs);
+                    continue;
+                }
+                break;
+            }
+            int esize = 0;
+            int addr;
+            if (cur_tok(cs) == TOK_LBRACKET) {
+                addr = ir_member_elem_addr(cs, vi, ti, last_fi, off, fname, &esize);
+                if (addr < 0) return 0;
+            } else {
+                addr = ir_new_vreg(F);
+                ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
+            }
+            int v = ir_new_vreg(F);
+            if (esize == 1) ir_emit(F, IR_LOAD8, v, addr, -1, 0);
+            else ir_emit(F, IR_LOAD, v, addr, -1, 0);
+            if (agg_types[ti].mbits[last_fi] > 0) {
+                int mv = ir_bitmask(agg_types[ti].mbits[last_fi]);
+                int r2 = ir_new_vreg(F);
+                ir_emit(F, IR_AND, r2, v, mv, 0);
+                v = r2;
+            }
+            ch->addr = addr;
+            ch->val = v;
+            ch->kind = 0;
+            ch->elem = -1;
+            ch->elem_ptr = 0;
+            ch->is_slice = 0;
+            base_vreg = v;
+            ptr_base = 0;
+            step++;
+            continue;
+        }
+        break;
+    }
+    return 1;
+}
+
+/* 链式赋值（PB-68）：<链> = e / <链> op= e / <链>++ / <链>--。
+ * 链由 ir_chain 求值，末步给出可写地址与元素类型（元素类型用于截断协调）。 */
+static void ir_chain_assign(CompilerState *cs, int vi)
+{
+    IrChain ch;
+    if (!ir_chain(cs, vi, &ch)) {
+        skip_newlines(cs);
+        return;
+    }
+    if (ch.addr < 0) {
+        nihao_error(cs, "ir: the left-hand side of the assignment is not a "
+                        "writable location");
+        skip_newlines(cs);
+        return;
+    }
+    int sc = (ch.elem >= 0) ? ch.elem : vtype[vi];
+    TokenType at = cur_tok(cs);
+    int is_compound = 0;
+    IrOp op = IR_NOP;
+    if (at == TOK_PLUS_ASSIGN)         { op = IR_ADD; is_compound = 1; }
+    else if (at == TOK_MINUS_ASSIGN)    { op = IR_SUB; is_compound = 1; }
+    else if (at == TOK_STAR_ASSIGN)     { op = IR_MUL; is_compound = 1; }
+    else if (at == TOK_SLASH_ASSIGN)    { op = IR_DIV; is_compound = 1; }
+    else if (at == TOK_PERCENT_ASSIGN)  { op = IR_MOD; is_compound = 1; }
+    if (at == TOK_INCREMENT || at == TOK_DECREMENT) {
+        /* 后缀 ++ / -- */
+        next_tok(cs);
+        int one = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, one, -1, -1, 1);
+        int cur = ir_new_vreg(F);
+        ir_emit(F, IR_LOAD, cur, ch.addr, -1, 0);
+        int nv = ir_new_vreg(F);
+        ir_emit(F, at == TOK_INCREMENT ? IR_ADD : IR_SUB, nv, cur, one, 0);
+        nv = ir_coerce(nv, sc);
+        ir_emit(F, IR_STORE, -1, ch.addr, nv, 0);
+        skip_newlines(cs);
+        return;
+    }
+    if (at != TOK_ASSIGN && !is_compound) {
+        nihao_error(cs, "ir: expected '=' or 'op=' after the pointer expression");
+        skip_newlines(cs);
+        return;
+    }
+    next_tok(cs);
+    int b = ir_expr(cs);
+    int v;
+    if (!is_compound) {
+        v = b;
+    } else {
+        int cur = ir_new_vreg(F);
+        ir_emit(F, IR_LOAD, cur, ch.addr, -1, 0);
+        int rhs = b;
+        if (sc == 1 || sc == 8) {
+            /* 浮点元素：LOAD 已是 double 位模式 */
+            ir_set_double(cur);
+            if (!ir_is_double(rhs)) rhs = ir_to_double(rhs);
+            int nv = ir_new_vreg(F);
+            ir_emit(F, op == IR_MUL ? IR_FMUL : op == IR_DIV ? IR_FDIV :
+                        op == IR_SUB ? IR_FSUB : IR_FADD, nv, cur, rhs, 0);
+            ir_set_double(nv);
+            v = nv;
+        } else {
+            if (ir_is_double(cur)) { int t = ir_new_vreg(F); ir_emit(F, IR_DTOI, t, cur, -1, 0); cur = t; }
+            if (ir_is_double(rhs)) { int t = ir_new_vreg(F); ir_emit(F, IR_DTOI, t, rhs, -1, 0); rhs = t; }
+            int nv = ir_new_vreg(F);
+            ir_emit(F, op, nv, cur, rhs, 0);
+            v = nv;
+        }
+    }
+    v = ir_coerce(v, sc);
+    ir_emit(F, IR_STORE, -1, ch.addr, v, 0);
+    skip_newlines(cs);
+}
+
 /* 基本类型字节大小（语言语义） */
 static long long type_size_token(TokenType t)
 {
@@ -966,6 +1493,32 @@ static long long type_size_of(CompilerState *cs, int *type_idx_out)
         sz = sz * n;
     }
     if (type_idx_out) *type_idx_out = ti;
+    return sz;
+}
+
+/* malloc(T) / malloc(T[N]) 的字节数（PB-68）：void 按通用指针 8 字节计，
+ * 数组后缀逐维连乘（A 侧同口径：`malloc(void[3])` → 3 * sizeof(void*) = 24，
+ * `malloc(void[4][5])` → 20 * sizeof(void*) = 160）。 */
+static long long ir_malloc_size(CompilerState *cs)
+{
+    long long sz;
+    if (cur_tok(cs) == TOK_VOID) {
+        sz = 8;
+        next_tok(cs);
+    } else {
+        sz = type_size_of(cs, NULL);
+        if (sz < 0) sz = 8;
+    }
+    while (cur_tok(cs) == TOK_LBRACKET) {
+        next_tok(cs);
+        long long n = 1;
+        if (cur_tok(cs) == TOK_INT_CONST) {
+            n = cs->parser.lex->tok_val.i;
+            next_tok(cs);
+        }
+        expect(cs, TOK_RBRACKET);
+        sz *= n;
+    }
     return sz;
 }
 
@@ -1234,7 +1787,7 @@ static int ir_primary(CompilerState *cs)
             /* 函数调用：malloc 特判（参数是类型，非表达式） */
             if (strcmp(name, "malloc") == 0) {
                 next_tok(cs);
-                long long sz = type_size_of(cs, NULL);
+                long long sz = ir_malloc_size(cs);
                 expect(cs, TOK_RPAREN);
                 int szv = ir_new_vreg(F);
                 ir_emit(F, IR_CONST, szv, -1, -1, sz < 0 ? 8 : sz);
@@ -1426,6 +1979,15 @@ static int ir_primary(CompilerState *cs)
             }
             nihao_error(cs, "ir: undeclared variable '%s'", name);
             return ir_new_vreg(F);
+        }
+        /* PB-68：多步后缀链与新形态（空下标 p[]、数组型后缀 .(T[N])）走链式求值；
+         * 单组旧形态仍走下面各自的旧路径（行为不变）。 */
+        if ((cur_tok(cs) == TOK_LBRACKET || cur_tok(cs) == TOK_DOT_PAREN ||
+             cur_tok(cs) == TOK_ARROW || cur_tok(cs) == TOK_DOT) &&
+            ir_chain_needs_new(cs, vi)) {
+            IrChain ch;
+            if (!ir_chain(cs, vi, &ch)) return ir_new_vreg(F);
+            return ch.val;
         }
         if (cur_tok(cs) == TOK_LBRACKET) {
             /* 数组下标 arr[idx] -> LOAD(&arr[0] + idx*8)；切片 arr[lo..hi] -> 地址 */
@@ -3046,6 +3608,10 @@ static void ir_stmt(CompilerState *cs)
                 return;
             }
             ir_vis_check_writable(cs, vi);  /* M2：写前检查是否被活动借用冻结 */
+            if (ir_chain_needs_new(cs, vi)) {   /* PB-68：多步链 / 新形态 */
+                ir_chain_assign(cs, vi);
+                return;
+            }
             next_tok(cs);           /* .( */
             int wcode = -1;         /* PB-63：`.(T)` 的显式类型码，优先于 pt[] 推出来的指向类型 */
             if (cur_tok(cs) != TOK_RPAREN) {
@@ -3352,14 +3918,19 @@ static void ir_stmt(CompilerState *cs)
                 }
             } else {
                 /* 数组维度后缀（可多维，PB-67）：逐段解析 [..]，记录各维长度。
-                 * 槽模型下多维按行主序摊平成连续槽，总槽数 = 各维之积。 */
+                 * 槽模型下多维按行主序摊平成连续槽，总槽数 = 各维之积。
+                 * PB-68（指针类型后缀档）：`void` 基类型的裸 `[]` 不是数组维而是
+                 * 「指针级」（A 侧 `void[]` → void**、`void[][]` → void***），
+                 * 固定维 `[N]` 才是数组维。 */
                 while (cur_tok(cs) == TOK_LBRACKET) {
                     next_tok(cs);
                     is_arr = 1;     /* char[] 动态字符串与数组共用此标记 */
                     int cnt = 0;
+                    int dyn = 0;     /* 1 = 动态后缀（[..] / [...] / [N...]） */
                     if (cur_tok(cs) == TOK_RANGE || cur_tok(cs) == TOK_ELLIPSIS) {
                         /* 纯动态数组 [...] / [..]：固定默认容量 8 槽（增长语义留 TODO） */
                         cnt = 8;
+                        dyn = 1;
                         next_tok(cs);
                         if (cur_tok(cs) == TOK_INT_CONST) {
                             /* [...N] / [..N]：历史兼容写法（A 方案早期实现），
@@ -3372,10 +3943,16 @@ static void ir_stmt(CompilerState *cs)
                         next_tok(cs);
                         if (cur_tok(cs) == TOK_RANGE || cur_tok(cs) == TOK_ELLIPSIS) {
                             /* N... 动态数组：初始容量 N 个槽（增长忽略） */
+                            dyn = 1;
                             next_tok(cs);
                         }
                     }
                     expect(cs, TOK_RBRACKET);
+                    if (nt == TOK_VOID && cnt == 0 && !dyn) {
+                        /* 裸 []：通用指针的下一级（指针级，不是数组维）——
+                         * 槽模型下不占维，解引用层数由后缀链动态决定 */
+                        continue;
+                    }
                     if (nd < IR_MAX_DIMS) dims[nd++] = cnt;
                     elems = cnt;
                 }
@@ -3415,7 +3992,12 @@ static void ir_stmt(CompilerState *cs)
                     if (sv >= 0) src_vi = sv;   /* RHS 是裸变量引用 → 走所有权检查 */
                 }
             }
-            int vi = var_declare(name, elems, -1, decl_vis);
+            /* PB-68 指针类型后缀档：`void[N] = malloc(void[N])` 退化为「指针值数组」
+             * （A 侧同形态：`void*(*p) = malloc(N * sizeof(void*))`）——槽里存的是
+             * 堆地址而不是帧数组基址，故按标量指针槽声明，下标走「指针值 + 偏移」。 */
+            int is_ptrarr = (nt == TOK_VOID && elems > 0 &&
+                             call_name && strcmp(call_name, "malloc") == 0);
+            int vi = var_declare(name, is_ptrarr ? 0 : elems, -1, decl_vis);
             /* 记录维度（PB-67）：只有多维（nd>=2）进维度表；一维与动态字符串
              * （char[] / void[]）沿用历史单维寻址路径，行为不变 */
             if (nd >= 2) {
@@ -3424,6 +4006,7 @@ static void ir_stmt(CompilerState *cs)
                     vdim[vi][k] = (k < nd) ? dims[k] : 0;
             }
             if (nt == TOK_VOID) vptr[vi] = 1;   /* 指针类标记（仅 void 触发所有权语义） */
+            if (is_ptrarr) vmode[vi] = VM_PTRARR;
             if (src_vi >= 0) {
                 ir_vis_check_assign(cs, vi, src_vi);  /* M2 转移检查（裸变量 RHS） */
             } else if ((call_ret_vis == VIS_CONST || call_ret_vis == VIS_FLOW ||
@@ -3557,6 +4140,41 @@ static void ir_stmt(CompilerState *cs)
                             }
                             copied = 1;
                         }
+                    } else if (after == TOK_DOT_PAREN) {
+                        /* PB-68：指针后缀链切片读入 buf T[N] = p.(T[M])[lo..hi]。
+                         * 源地址由链求值给出（指针值寻址），复制个数仍取目标容量。 */
+                        int avi = var_find(cs->parser.lex->tok_str);
+                        if (avi >= 0 && ir_chain_needs_new_off(cs, avi, 1)) {
+                            next_tok(cs);   /* p */
+                            IrChain ch;
+                            if (!ir_chain(cs, avi, &ch)) {
+                                skip_newlines(cs);
+                                return;
+                            }
+                            if (ch.is_slice) {
+                                int s8 = (ch.width == 1);
+                                for (int k = 0; k < elems; k++) {
+                                    int saddr = ch.val;
+                                    if (k > 0) {
+                                        int kv = ir_new_vreg(F);
+                                        ir_emit(F, IR_CONST, kv, -1, -1, k * ch.width);
+                                        saddr = ir_new_vreg(F);
+                                        ir_emit(F, IR_ADD, saddr, ch.val, kv, 0);
+                                    }
+                                    int val = ir_new_vreg(F);
+                                    if (s8) ir_emit(F, IR_LOAD8, val, saddr, -1, 0);
+                                    else ir_emit(F, IR_LOAD, val, saddr, -1, 0);
+                                    int daddr = ir_new_vreg(F);
+                                    ir_emit(F, IR_ADDR, daddr, vt[vi], -1, k);
+                                    if (s8) ir_emit(F, IR_STORE8, -1, daddr, val, 0);
+                                    else ir_emit(F, IR_STORE, -1, daddr, val, 0);
+                                }
+                            } else {
+                                int vr = ir_coerce(ch.val, vtype[vi]);
+                                ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
+                            }
+                            copied = 1;
+                        }
                     }
                 }
                 if (!copied) {
@@ -3569,13 +4187,17 @@ static void ir_stmt(CompilerState *cs)
         } else if (nt == TOK_LBRACKET) {
             /* 数组元素赋值 arr[idx] = expr | 切片赋值 arr[lo..hi] = {v0, v1, ...} */
             next_tok(cs);           /* name */
-            next_tok(cs);           /* [ */
             int vi = var_find(name);
             if (vi < 0) {
                 nihao_error(cs, "ir: undeclared variable '%s'", name);
                 skip_newlines(cs);
                 return;
             }
+            if (ir_chain_needs_new(cs, vi)) {   /* PB-68：多步链 / 新形态 */
+                ir_chain_assign(cs, vi);
+                return;
+            }
+            next_tok(cs);           /* [ */
             int idx = ir_expr(cs);   /* lo 或单下标 */
             if (cur_tok(cs) == TOK_RANGE) {
                 /* 切片赋值：arr[lo..hi] = {v0, v1, ...}（逐个 STORE；hi 边界留校验） */
