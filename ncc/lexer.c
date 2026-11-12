@@ -697,3 +697,33 @@ void lexer_peek(LexerState *lex)
     }
 }
 
+
+/* ============================================================
+ * Token 访问器（原在 parser.c，A 线删除后移至词法层——ir 前端与词法测试共用）
+ * ============================================================ */
+
+TokenType cur_tok(CompilerState *cs)
+{
+    return cs->parser.lex->tok;
+}
+
+void next_tok(CompilerState *cs)
+{
+    lexer_next(cs->parser.lex);
+}
+
+void expect(CompilerState *cs, TokenType tok)
+{
+    if (cur_tok(cs) != tok) {
+        nihao_error(cs, "expected '%s', got '%s'",
+                   token_name(tok), token_name(cur_tok(cs)));
+    }
+    next_tok(cs);
+}
+
+void skip_newlines(CompilerState *cs)
+{
+    while (cur_tok(cs) == TOK_NEWLINE) {
+        next_tok(cs);
+    }
+}
