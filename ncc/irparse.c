@@ -607,6 +607,12 @@ static int is_val_vreg = -1;
  * -1 = 当前不在 while 体内（与 is_val_vreg 同步保存/恢复，支持嵌套）。 */
 static int is_matched_vreg = -1;
 
+/* PB-75(b)：上一次解析的 malloc(T) 的标量元素码。malloc 参数是类型而非表达式，
+ * 其类型信息没有随返回 vreg 传出；声明/赋值处靠这个全局给它记 pt[]「指向窄标量」
+ * ——修复 D1（`malloc(i32)` 配 8 字节写越界）的第一步。
+ * -2=未触发；-1=参数非标量（void 数组 / 聚合名）；其余=标量码（0=i64 2=i8 …）。 */
+static int last_malloc_sc = -2;
+
 /* PB-27.7：is 模式比较的类型感知——按 is_val_vreg 类型选 int (IR_CMP_*) 或
  * double (IR_FCMP) 指令；double 常量转位模式存 IR_CONST imm。 */
 /* `is` 模式的整数字面量，可带一个前缀符号（BNF §6 <pattern> 的带符号字面量）。
@@ -1531,6 +1537,33 @@ static int ir_scalar_code_of_token(TokenType tt)
     }
 }
 
+/* PB-75(b)：指针解引用的窄标量读宽——填进 IR_LOAD 的 imm：
+ *   正 w = 零扩展读 w 字节（u8/u16/u32）；负 -w = 符号扩展读 w 字节（i8/i16/i32）；
+ *   0 = 8 字节读（i64/f64/f32，保持旧行为）。读后值域已是正确 64 位，后续 ir_coerce 幂等。 */
+static int64_t ir_load_width_imm(int code)
+{
+    switch (code) {
+        case 2: return -1;   /* i8  符号扩展 */
+        case 5: return  1;   /* u8  零扩展 */
+        case 3: return -2;   /* i16 符号扩展 */
+        case 6: return  2;   /* u16 零扩展 */
+        case 4: return -4;   /* i32 符号扩展 */
+        case 7: return  4;   /* u32 零扩展 */
+        default: return 0;   /* 0=i64 1=f64 8=f32/指针等 → 8 字节 */
+    }
+}
+
+/* PB-75(b)：窄标量存储宽（IR_STORE 的 imm）：写低 w 字节；0 = 8 字节。 */
+static int ir_store_width(int code)
+{
+    switch (code) {
+        case 2: case 5: return 1;
+        case 3: case 6: return 2;
+        case 4: case 7: return 4;
+        default: return 0;
+    }
+}
+
 /* 解析类型并返回字节大小（含聚合/数组）。
  * type_idx_out 非空时输出聚合类型索引（-1=基本类型）。失败返回 -1。 */
 static long long type_size_of(CompilerState *cs, int *type_idx_out)
@@ -1911,6 +1944,14 @@ static int ir_primary(CompilerState *cs)
             /* 函数调用：malloc 特判（参数是类型，非表达式） */
             if (strcmp(name, "malloc") == 0) {
                 next_tok(cs);
+                /* PB-75(b)：记录 malloc 的标量元素码（声明/赋值处据此给 pt[] 记指向类型） */
+                if (cur_tok(cs) == TOK_VOID || cur_tok(cs) == TOK_IDENTIFIER) {
+                    last_malloc_sc = -1;
+                } else if (is_type_token(cur_tok(cs))) {
+                    last_malloc_sc = ir_scalar_code_of_token(cur_tok(cs));
+                } else {
+                    last_malloc_sc = -1;
+                }
                 long long sz = ir_malloc_size(cs);
                 expect(cs, TOK_RPAREN);
                 int szv = ir_new_vreg(F);
@@ -2195,7 +2236,12 @@ static int ir_primary(CompilerState *cs)
             int addr = ir_new_vreg(F);
             ir_emit(F, IR_MOV, addr, vt[vi], -1, 0);    /* p 槽值 = 目标地址（MOV 勿 LOAD） */
             int vr = ir_new_vreg(F);
-            ir_emit(F, IR_LOAD, vr, addr, -1, 0);       /* 读目标内容 */
+            /* PB-75(b)：窄标量按指向类型宽读（符号/零扩展进 imm），修 D1 堆越界 */
+            {
+                int rc = (tcode >= 0) ? tcode :
+                         (PT_IS_SCALAR(pt[vi]) ? PT_SCALAR_CODE(pt[vi]) : -1);
+                ir_emit(F, IR_LOAD, vr, addr, -1, ir_load_width_imm(rc));
+            }
             if (tcode >= 0) {
                 /* 宽度按 T：浮点标记照 T，窄整型走 TRUNC（与声明处一致） */
                 if (tcode == 1 || tcode == 8) ir_set_double(vr);
@@ -3799,10 +3845,10 @@ static void ir_stmt_impl(CompilerState *cs)
                 if (at != TOK_ASSIGN) {
                     /* 复合 p.() op= e：LOAD 当前值 → 按指向类型协调 → op → 截断 → STORE */
                     int cur = ir_new_vreg(F);
-                    ir_emit(F, IR_LOAD, cur, addr, -1, 0);
-                    v = ir_expr(cs);
                     int sc = (wcode >= 0) ? wcode :
                              ((PT_IS_SCALAR(pt[vi])) ? PT_SCALAR_CODE(pt[vi]) : vtype[vi]);
+                    ir_emit(F, IR_LOAD, cur, addr, -1, ir_load_width_imm(sc));   /* PB-75(b) */
+                    v = ir_expr(cs);
                     IrOp op;
                     switch (at) {
                         case TOK_PLUS_ASSIGN:    op = IR_ADD; break;
@@ -3834,7 +3880,11 @@ static void ir_stmt_impl(CompilerState *cs)
                     v = ir_coerce(v, (wcode >= 0) ? wcode :
                              ((PT_IS_SCALAR(pt[vi])) ? PT_SCALAR_CODE(pt[vi]) : vtype[vi]));
                 }
-                ir_emit(F, IR_STORE, -1, addr, v, 0);
+                {
+                    int scw = (wcode >= 0) ? wcode :
+                              ((PT_IS_SCALAR(pt[vi])) ? PT_SCALAR_CODE(pt[vi]) : vtype[vi]);
+                    ir_emit(F, IR_STORE, -1, addr, v, ir_store_width(scw));   /* PB-75(b) */
+                }
                 skip_newlines(cs);
             } else {
                 nihao_error(cs, "ir: expected '=' or 'op=' after p.()");
@@ -4368,6 +4418,13 @@ static void ir_stmt_impl(CompilerState *cs)
                     int vr = ir_expr(cs);
                     vr = ir_coerce(vr, vtype[vi]);   /* PB-1：目标类型协调（DTOI/ITOD/TRUNC） */
                     ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
+                    /* PB-75(b)：`p void = malloc(i32)` 此前丢指向类型——RHS 解析完后
+                     * 补记 pt[]，让 .() 读/写按元素宽（修 PB-48 D1 堆越界） */
+                    if (nt == TOK_VOID && call_name &&
+                        strcmp(call_name, "malloc") == 0 && last_malloc_sc >= 0) {
+                        pt[vi] = PT_SCALAR(last_malloc_sc);
+                    }
+                    last_malloc_sc = -2;
                 }
             }
             skip_newlines(cs);

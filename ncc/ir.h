@@ -40,6 +40,9 @@ typedef enum {
     IR_ELEM_ADDR,   /* dst = &base[idx]（元素地址，后端按自身布局方向） */
     IR_LOAD,        /* dst = *(a)                     */
     IR_STORE,       /* *(a) = b                       */
+    /* PB-74(b)：IR_LOAD / IR_STORE 的 imm 承载字节宽（0 或未用 = 8 字节，兼容旧出码）：
+     *   LOAD  imm = 1/2/4  → 零扩展读 w 字节；imm = -w → 符号扩展读 w 字节（i8/i16/i32）；
+     *   STORE imm = 1/2/4  → 写低 w 字节。两档发射器与 ir_to_c 按此分派窄 ld/st。 */
     IR_LOAD8,       /* dst = *(uint8_t*)(a)（字节读，动态字符串元素） */
     IR_STORE8,      /* *(uint8_t*)(a) = b（字节写）    */
     IR_LD_ADDR,     /* dst = address of global sym    */

@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 2.0 线 P2 真实布局阶段 A（PB-75：窄指针存取 + `malloc(T)` 指向类型——修掉 PB-48 D1 堆越界；ltree 裁 (b) 的存储层第一刀，2026-11-12）
+
+- **目标**：待裁第 23 条选 (b)「写宽降到元素宽度」。本提交是存储层的最小第一步：**指针解引用 / 下标存取的宽度降到元素宽**，先消灭 PB-48 的 D1——`malloc(i32)` 折 `malloc(4)` 后 `.()` 读写发 8 字节 `*(int64_t*)`，确定性覆盖紧邻的下一个存活分配（PB-53 已证 musl 相邻 `malloc(4)` 只差 4 字节）。
+- **根因有两层**，本轮都修：① `LOAD` / `STORE` 恒 8 字节，IR 没有窄存取 opcode；② **`p void = malloc(i32)` 根本不记「指向 i32」**——`malloc` 的参数是类型不是表达式，`ir_primary` 里类型码被 `ir_malloc_size` 吃掉，`pt[vi]` 一直 -1，所以 `.()` 拿不到宽度。
+- **机制**：`IR_LOAD` / `IR_STORE` 的 imm 承载字节宽（原先恒 0）——LOAD `imm=1/2/4` 零扩展读对应宽、`imm=-w` 符号扩展读（i8/i16/i32）；STORE `imm=1/2/4` 写低 w 字节。`imm=0` 保持 8 字节，所以**全部既有出码零变化**。前端新增 `ir_load_width_imm` / `ir_store_width` 两个助手 + 全局 `last_malloc_sc`（`malloc` 参数类型码的通道），`.()`/`.(T)` 读、`.() =`/`op=` 写、复合 RMW 三处按指向类型码发窄读写；两个汇编发射器补 `lb/lbu/lh/lhu/lw/lwu` 与 `sb/sh/sw`、`ld.b/ld.bu/ld.h/ld.hu/ld.w/ld.wu` 与 `st.b/st.h/st.w`。
+- **读的符号交给「零扩展读 + 既有截断」**：窄读一律零扩展进 64 位，符号由随后的 `ir_coerce`（i8/i16/i32 的 TRUNC）或「负 imm 符号扩展读」保证——读写后的值域与旧的 8 字节槽行为**逐字节一致**，这就是门禁零回归的原因。
+- **验证**：Windows c / native **68P/0F/3S 不变**、ir-c / ir-native **51P/0F/18S**、0 FAIL、比对档 36 格不变；Linux c / native 68P/0F/4S、ir 51P/0F/19S、0 FAIL、比对档 35 格。**ASan 阴性对照**：`ir_builtin` 的 ir-c 产物用 `clang -fsanitize=address` 链接运行，**0 report**（改前 PB-48 记的 `heap-buffer-overflow: WRITE of size 8` 消失）；产物 C 由 `*(int64_t*)` 变 `*(uint32_t*)` 写 + `*(int32_t*)` 读。交叉（riscv64 / loongarch64）窄指令 `sw`/`lw`（sb/sh/lwu 等）落位，`comm` 对账与本轮基线**逐条不变**。
+- **没做也没有假装做的**：这是**指针值寻址（堆）**的窄存取；**帧数组元素仍走 8 字节槽**（读写自洽、四档已对，不动它避免无谓回归）。聚合体成员真实字节偏移、数组成员真实宽是阶段 B（下一刀）。`ir_builtin` 仍在 `IR_ONLY`（A 后端拒它的子集语法），本轮不把它移进 `IR_SUBSET`——修的是它背后的内存安全，不是它的名单归属。
+
 ### 2.0 线 P2 真实布局首刀（PB-74：`alignof` 真实对齐——ltree 裁 (b)「写宽降到元素宽度」的第一处落地；`alignof_builtin` 入名单，2026-11-12）
 
 - **待裁第 23 条三口径里 ltree 选了 (b)**：写宽降到元素宽度（`int32_t` / 窄 STORE），放弃「一切皆 8 字节槽」。这是这个方向的第一次提交。

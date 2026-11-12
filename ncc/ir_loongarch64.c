@@ -223,7 +223,15 @@ static void la_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
         case IR_LOAD:
             nb_put(b, "  ld.d $a0, ");
             la_slot(b, in->a, tb);
-            nb_put(b, "\n  ld.d $a0, $a0, 0\n");
+            nb_put(b, "\n  ");
+            /* PB-75(b)：imm 承载字节宽（0=8；±w=窄读，负=符号扩展） */
+            if (in->imm < 0) {
+                long long w = -in->imm;
+                nb_put(b, "%s $a0, $a0, 0\n", w == 1 ? "ld.b" : w == 2 ? "ld.h" : "ld.w");
+            } else {
+                nb_put(b, "%s $a0, $a0, 0\n",
+                       in->imm == 1 ? "ld.bu" : in->imm == 2 ? "ld.hu" : in->imm == 4 ? "ld.wu" : "ld.d");
+            }
             la_store_a0(b, in->dst, tb);
             break;
         case IR_STORE:
@@ -231,7 +239,8 @@ static void la_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             la_slot(b, in->a, tb);
             nb_put(b, "\n  ld.d $a1, ");
             la_slot(b, in->b, tb);
-            nb_put(b, "\n  st.d $a1, $a0, 0\n");
+            nb_put(b, "\n  %s $a1, $a0, 0\n",
+                   in->imm == 1 ? "st.b" : in->imm == 2 ? "st.h" : in->imm == 4 ? "st.w" : "st.d");
             break;
         case IR_LOAD8:
             nb_put(b, "  ld.d $a0, ");

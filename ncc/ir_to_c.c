@@ -301,19 +301,36 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                            in->imm == 4 ? 4 : 8);
                     break;
                 case IR_LOAD:
-                    /* 类型感知存取（PB-1 数组元素宽度/浮点数组）：dst 标记 double → double 指针 */
-                    cb_put(&b, "    %s = *(%s*)(intptr_t)%s;\n",
-                           vrid[in->dst],
-                           (f->vreg_type && in->dst < f->vreg_count &&
-                            f->vreg_type[in->dst] == 1) ? "double" : "int64_t",
-                           vrid[in->a]);
+                    /* 类型感知存取：imm 承载字节宽（0=8；±w=窄读，负=符号扩展），
+                     * dst 标记 double → double 指针（PB-1 数组元素宽度/浮点数组） */
+                    if (in->imm > 0 || in->imm < 0) {
+                        long long w = in->imm < 0 ? -in->imm : in->imm;
+                        const char *t = (in->imm < 0)
+                            ? (w == 1 ? "int8_t" : w == 2 ? "int16_t" : "int32_t")
+                            : (w == 1 ? "uint8_t" : w == 2 ? "uint16_t" : "uint32_t");
+                        cb_put(&b, "    %s = *(%s*)(intptr_t)%s;\n",
+                               vrid[in->dst], t, vrid[in->a]);
+                    } else {
+                        cb_put(&b, "    %s = *(%s*)(intptr_t)%s;\n",
+                               vrid[in->dst],
+                               (f->vreg_type && in->dst < f->vreg_count &&
+                                f->vreg_type[in->dst] == 1) ? "double" : "int64_t",
+                               vrid[in->a]);
+                    }
                     break;
                 case IR_STORE:
-                    /* 源 vreg 为 double → double 指针（否则 int64 截断 double 位模式） */
-                    cb_put(&b, "    *(%s*)(intptr_t)%s = %s;\n",
-                           (f->vreg_type && in->b < f->vreg_count &&
-                            f->vreg_type[in->b] == 1) ? "double" : "int64_t",
-                           vrid[in->a], vrid[in->b]);
+                    if (in->imm > 0) {
+                        const char *t = in->imm == 1 ? "uint8_t" :
+                                        in->imm == 2 ? "uint16_t" : "uint32_t";
+                        cb_put(&b, "    *(%s*)(intptr_t)%s = %s;\n",
+                               t, vrid[in->a], vrid[in->b]);
+                    } else {
+                        /* 源 vreg 为 double → double 指针（否则 int64 截断 double 位模式） */
+                        cb_put(&b, "    *(%s*)(intptr_t)%s = %s;\n",
+                               (f->vreg_type && in->b < f->vreg_count &&
+                                f->vreg_type[in->b] == 1) ? "double" : "int64_t",
+                               vrid[in->a], vrid[in->b]);
+                    }
                     break;
                 case IR_LOAD8:
                     cb_put(&b, "    %s = *(uint8_t*)(intptr_t)%s;\n",

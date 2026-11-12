@@ -201,7 +201,15 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
         case IR_LOAD:
             nb_put(b, "  ld a0, ");
             rv_slot(b, in->a, tb);
-            nb_put(b, "\n  ld a0, 0(a0)\n");
+            nb_put(b, "\n  ");
+            /* PB-75(b)：imm 承载字节宽（0=8；±w=窄读，负=符号扩展） */
+            if (in->imm < 0) {
+                long long w = -in->imm;
+                nb_put(b, "%s a0, 0(a0)\n", w == 1 ? "lb" : w == 2 ? "lh" : "lw");
+            } else {
+                nb_put(b, "%s a0, 0(a0)\n",
+                       in->imm == 1 ? "lbu" : in->imm == 2 ? "lhu" : in->imm == 4 ? "lwu" : "ld");
+            }
             rv_store_a0(b, in->dst, tb);
             break;
         case IR_STORE:
@@ -209,7 +217,8 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             rv_slot(b, in->a, tb);
             nb_put(b, "\n  ld a1, ");
             rv_slot(b, in->b, tb);
-            nb_put(b, "\n  sd a1, 0(a0)\n");
+            nb_put(b, "\n  %s a1, 0(a0)\n",
+                   in->imm == 1 ? "sb" : in->imm == 2 ? "sh" : in->imm == 4 ? "sw" : "sd");
             break;
         case IR_LOAD8:
             nb_put(b, "  ld a0, ");
