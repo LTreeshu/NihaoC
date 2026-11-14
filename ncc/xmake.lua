@@ -272,7 +272,7 @@ local IR_ONLY = {ir_builtin = true, ir_slice = true, ir_sparam = true}
 -- 前缀故与 A 侧不同源、不能进 IR_ERR_COVERED」，本轮复测证伪——前缀在子串**之前**，共用子串
 -- `'is' pattern match only valid inside while loop body` 照样整体命中；`PA` 侧同判据（其
 -- IR_ERR_SKIP 黑名单从未含这两份，即 PA 的 IR 门禁一直真跑它们）
-local IR_ERR_COVERED = {safe_assign_removed = true, safe_dot_removed = true, linkas_not_implemented = true, bracket_attr_unknown = true, is_bad_pattern = true, is_outside_while = true, is_in_do_body = true, m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, m2e_param = true, m2f_retflow = true, m2f_retflow_const_flow = true, m2f_retflow_const_static = true, m2f_retflow_const_var = true, m2f_retflow_static_flow = true, m2f_retflow_static_var = true, str_array_bad_elem = true, str_array_overflow = true, multi_arr_nostr = true, multi_arr_overflow = true, len_unknown = true, void_subscript = true}
+local IR_ERR_COVERED = {safe_assign_removed = true, safe_dot_removed = true, linkas_not_implemented = true, bracket_attr_unknown = true, is_bad_pattern = true, is_outside_while = true, is_in_do_body = true, m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, m2e_param = true, m2f_retflow = true, m2f_retflow_const_flow = true, m2f_retflow_const_static = true, m2f_retflow_const_var = true, m2f_retflow_static_flow = true, m2f_retflow_static_var = true, str_array_bad_elem = true, str_array_overflow = true, multi_arr_nostr = true, multi_arr_overflow = true, len_unknown = true, void_subscript = true, deref_void_type = true}
 
 task("test")
     on_run(function ()

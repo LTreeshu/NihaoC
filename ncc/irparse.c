@@ -1221,6 +1221,11 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
             int arr_len = -1;
             if (cur_tok(cs) != TOK_RPAREN) {
                 ttype = cur_tok(cs);
+                if (ttype == TOK_VOID && ir_peek_ahead(cs, 1) == TOK_RPAREN) {
+                    /* 码 0 碰撞修复：裸 `.(void)` 无意义；`.(void[N])` 是合法数组后缀 */
+                    nihao_error(cs, "ir: '.()' dereference: 'void' has no size — use a scalar type");
+                    return 0;
+                }
                 tcode = ir_scalar_code_of_token(ttype);
                 if (tcode < 0) {
                     nihao_error(cs, "ir: '.()' dereference takes a scalar type or nothing, "
@@ -2236,7 +2241,13 @@ static int ir_primary(CompilerState *cs)
              * 在 expect(')') 处断掉（`expected ')', got 'i32'`），台账里 6 份用例卡在这 */
             int tcode = -1;
             if (cur_tok(cs) != TOK_RPAREN) {
-                tcode = ir_scalar_code_of_token(cur_tok(cs));
+                if (cur_tok(cs) == TOK_VOID && ir_peek_ahead(cs, 1) == TOK_RPAREN) {
+                    /* 码 0 碰撞修复：裸 `.(void)` 无意义；`.(void[N])` 是合法数组后缀 */
+                    nihao_error(cs, "ir: '.()' dereference: 'void' has no size — use a scalar type");
+                    tcode = 0;
+                } else {
+                    tcode = ir_scalar_code_of_token(cur_tok(cs));
+                }
                 if (tcode < 0) {
                     nihao_error(cs, "ir: '.()' dereference takes a scalar type or nothing, "
                                     "not '%s'", cs->parser.lex->tok_str);
@@ -3849,7 +3860,13 @@ static void ir_stmt_impl(CompilerState *cs)
             next_tok(cs);           /* .( */
             int wcode = -1;         /* PB-63：`.(T)` 的显式类型码，优先于 pt[] 推出来的指向类型 */
             if (cur_tok(cs) != TOK_RPAREN) {
-                wcode = ir_scalar_code_of_token(cur_tok(cs));
+                if (cur_tok(cs) == TOK_VOID && ir_peek_ahead(cs, 1) == TOK_RPAREN) {
+                    /* 码 0 碰撞修复：裸 `.(void)` 无意义；`.(void[N])` 是合法数组后缀 */
+                    nihao_error(cs, "ir: '.()' dereference: 'void' has no size — use a scalar type");
+                    wcode = 0;
+                } else {
+                    wcode = ir_scalar_code_of_token(cur_tok(cs));
+                }
                 if (wcode < 0) {
                     nihao_error(cs, "ir: '.()' dereference takes a scalar type or nothing, "
                                     "not '%s'", cs->parser.lex->tok_str);
