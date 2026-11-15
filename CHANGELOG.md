@@ -7,7 +7,8 @@
 ### 2.0 设计改变：`print` / `puts` 不再内置，改为 stdio 标准库提供（2026-11-12）
 
 - **规范层**（`docs/Chinese.md` / `docs/English.md`）：`print` / `puts` 从「内置名」名单移到「由 **stdio 标准库**（`use stdio`）提供」——它们是普通函数、参与作用域解析，不再是编译器特判的内置。§2.3.1 标题由「输出内建」改为「输出（stdio 标准库）」。内置名只剩 `len` / `malloc` / `static_assert`。
-- **实现侧（待办，记入 TODO-PB）**：`irparse.c` 里 `print` 的内置下降（PB-64 落地：格式串透传 `printf`、否则前置 `"%lld\n"`、浮点先 DTOI）应移除，`print` 改为像 `puts` 一样直发外部符号；stdio 标准库模块提供 `print` / `puts` 实现。这不等同于「退回 PB-64 之前」——那时 `print` 是裸外部符号、链接期才报 undefined，现在是**有 stdio 模块提供**。
+- **API 形态（2026-11-12 ltree 裁定）**：去 `printf`，只保留 `print` + `puts` 两个 stdio 函数；`print` 的**具体参数与解析方案下轮再定**。即「print 双形态（字面量→printf 直通 / 否则→整型打印）」这套静态区分魔法将随 printf 一并去掉，`print` 收敛为单一语义的普通函数。
+- **实现侧（待办，记入 TODO-PB）**：`irparse.c` 里 `print` 的内置下降（PB-64 落地：格式串透传 `printf`、否则前置 `"%lld\n"`、浮点先 DTOI）待按上述形态移除，`print` 改为像 `puts` 一样直发外部符号；stdio 标准库模块提供 `print` / `puts` 声明。
 
 ### 2.0 里程碑：A 线退役，仓库收敛为 IR-only 单一管线（2026-11-12）
 
