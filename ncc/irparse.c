@@ -750,8 +750,12 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
     int base = -1;
     if (elems > 0 && type_idx < 0) {
         /* 基本类型数组：分配 elems 个连续 vreg（native 槽字节连续），
-         * 但只发基槽 ALLOCA（imm=8*elems → ir-c 生成 C 数组 t{base}[elems]，
-         * 元素槽 vreg 不单独声明，ADDR(imm=k) 生成 &t{base}[k]） */
+         * 只发基槽 ALLOCA（imm=8*elems → ir-c 生成 C 数组 t{base}[elems]，
+         * 元素槽 vreg 不单独声明，ADDR(imm=k) 生成 &t{base}[k]）。
+         * 注：聚合体（type_idx>=0）仍走下方「每槽一个 ALLOCA(8)」的单槽路径——
+         * 2026-11-12 尝试改多槽会让聚合整体赋值 `m = l` 退化成 C 数组赋值
+         * （tcc: lvalue expected），需连同「整体赋值逐槽复制 + 参数/返回」
+         * 一起做，属完整阶段 B，故本轮回退。 */
         for (int k = 0; k < elems; k++) {
             int vr = ir_new_vreg(F);
             if (k == 0) {
