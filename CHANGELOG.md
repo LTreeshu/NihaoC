@@ -4,13 +4,20 @@
 
 ## [Unreleased]
 
-### 2.0 设计改变：`print` / `puts` 不再内置，改为 stdio 标准库提供（2026-11-12）
+### 版本归位 0.2.0 + 严格 tag 制度 + 版本发布规划（2026-11-12）
+
+- **版本归位 `0.2.0`**：A 线退役、仓库收敛 IR-only 后，版本单一真源（`ncc/xmake.lua` 的 `nihao_version`）由 1.0.0 → **0.2.0**，`--version` 报 `NihaoC Compiler v0.2.0`。`0.x` 系列＝尚未到 1.0，语义仍可能变化；从这里开始新的版本发布线。
+- **严格 tag 制度（ltree 定）**：任何 tag（含本地 `git tag`）均由 **ltree 审核决定**后才可打，代理不得自行打 / 推送 / 移动 / 删除 tag；审核通过后按附注 tag（口径 `VERSIONING_ROADMAP.md` §3.2）打点，推送 tag 另需授权。
+- **版本发布规划**已写入 `docs/GIT_CONVENTIONS.md`「版本化与发布」：递增口径（功能簇 +`0.0.1`、结构变化 +`0.1.0`）、发布判据（门禁全绿 + 交叉零回归 + 文档版本同步）、发布流程（改版本号 → 全量复跑 → ltree 审核 → 打 tag → 授权推送）。
+- **门禁基线**：ir-c / ir-native **52P/0F/18S**、0 FAIL、比对 36 格。
+
+### 设计改变：`print` / `puts` 不再内置，改为 stdio 标准库提供（2026-11-12）
 
 - **规范层**（`docs/Chinese.md` / `docs/English.md`）：`print` / `puts` 从「内置名」名单移到「由 **stdio 标准库**（`use stdio`）提供」——它们是普通函数、参与作用域解析，不再是编译器特判的内置。§2.3.1 标题由「输出内建」改为「输出（stdio 标准库）」。内置名只剩 `len` / `malloc` / `static_assert`。
 - **API 形态（2026-11-12 ltree 裁定）**：去 `printf`，只保留 `print` + `puts` 两个 stdio 函数；`print` 的**具体参数与解析方案下轮再定**。即「print 双形态（字面量→printf 直通 / 否则→整型打印）」这套静态区分魔法将随 printf 一并去掉，`print` 收敛为单一语义的普通函数。
 - **实现侧（待办，记入 TODO-PB）**：`irparse.c` 里 `print` 的内置下降（PB-64 落地：格式串透传 `printf`、否则前置 `"%lld\n"`、浮点先 DTOI）待按上述形态移除，`print` 改为像 `puts` 一样直发外部符号；stdio 标准库模块提供 `print` / `puts` 声明。
 
-### 2.0 里程碑：A 线退役，仓库收敛为 IR-only 单一管线（2026-11-12）
+### 里程碑：A 线退役，仓库收敛为 IR-only 单一管线（2026-11-12）
 
 - **物理删除 A 线**（ltree 裁「物理删除」）：`parser.c` / `cgen.c` / `native.c` 及符号表 / 类型 / 可见性 / 模块 / 链接 / 内建运行时七个子系统共 **9 个源文件删除（-5495 行）**。NihaoC 现在是单一 IR 管线：`irparse.c`（前端）→ `ir.c`（中间层）→ `ir_to_c.c` / `ir_backend.c` / `ir_riscv64.c` / `ir_loongarch64.c`（出码）。
 - **CLI**：`-backend` 只接受 `ir-c | ir-native | ir-riscv64 | ir-loongarch64`（默认 `ir-c`）；`c` / `native` / `ir-arm64` / `ir-x86_64` 一律报「was removed」；`-run` 随 native 删除。

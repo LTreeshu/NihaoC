@@ -22,10 +22,19 @@
 - 分支与 `origin` 保持一致：新建分支后建立上游跟踪（`git push -u origin <branch>` 或 `git branch --set-upstream-to`）——**推送本身受 §3.1 门禁约束，需所有者授权**；无网络或未获授权时，用本地 `git config branch.<name>.remote/merge` 建立跟踪即可。
 
 ### 版本化与发布
-- `v1.0.0`：`PA` 通过发布门禁（c/native 全量 0 FAIL + examples 全跑通）→ 合入 `main` → tag `v<major>.<minor>.<patch>`（`release:` 前缀）。
-- `v1.0.x`：hotfix 走 `PA` 分支修复 → 合 `main` → tag。
-- **发布前必查版本号**：编译器版本只写在 `ncc/xmake.lua` 顶部的 `nihao_version` 一处（`set_version` 与注入 C 的 `NIHAO_VERSION` 都由它派生，`--version`／帮助横幅／verbose 启动行／`nihao.toml` 脚手架版本全部取该值），上抬版本时改这一处并与 tag 一致（口径见 `VERSIONING_ROADMAP.md` §3.2）。
-- `v2.0.0`：`PB` 阶段 2（能力平移）达标、全矩阵 0 FAIL → 合入 `main` → tag。
+
+**版本序列（自 2026-11-12 A 线退役、仓库收敛 IR-only 后启用）**：
+- 版本归位 `0.2.0`（IR-only 单一管线的新起点；`0.x` 系列＝尚未到 1.0，语义仍可能变化）。
+- 递增口径：每个功能簇 / 一组修复完成并过门禁时 +`0.0.1`（`0.2.0 → 0.2.1 → …`），结构级变化再 +`0.1.0`（`→ 0.3.0 → …`）。
+- 达到并稳定「IR 语义可与已删的 A 线对标的能力集」时才谈 `1.0.0`（具体判据届时由 ltree 定）。
+
+**严格 tag 制度（2026-11-12 ltree 定）**：
+- **tag 由 ltree 审核决定**。代理（AI）不得自行 `git tag`，也不得推送 / 删除 / 移动任何 tag；每一枚 tag 的**打点时机、commit 落点与版本号**都先经 ltree 审核。
+- ltree 审核通过后，代理才会执行 `git tag -a vX.Y.Z <commit>`（附注 tag，口径同 `VERSIONING_ROADMAP.md` §3.2），并只在**另行授权推送**时 `git push origin <tag>`。
+
+**发布前必查版本号**：编译器版本只写在 `ncc/xmake.lua` 顶部的 `nihao_version` 一处（`set_version` 与注入 C 的 `NIHAO_VERSION` 都由它派生，`--version`／帮助横幅／verbose 启动行／`nihao.toml` 脚手架版本全部取该值），上抬版本时改这一处并与 tag 一致（口径见 `VERSIONING_ROADMAP.md` §3.2）。
+**发布判据（每版）**：门禁 `xmake test --all` 全绿（当前基线 ir-c / ir-native 各 52P/0F/18S、0 FAIL）+ 交叉两档 `comm` 零回归；文档与版本号同步。
+**发布流程**：改 `nihao_version` → 全量门禁 + 交叉复跑 → ltree 审核 → 打 tag（附注）→ 推送分支与 tag（各需 ltree 授权）。
 - **共享文档的测试计数写法**（一致性核对 PA-36/PA-38/PA-39 定案，防再次漂移）：共享层文档（`docs/ROADMAP.md` 里程碑表、`README.md`、`docs/STAGE_SUMMARY.md` 等）只写**不随用例增删变化的不变量**（如「全矩阵 0 FAIL」），且必须绑定版本号或日期；某分支某时点的详细 `PASS / FAIL / SKIP` 计数只写在该分支专属 `TODO-PA.md` / `TODO-PB.md` 与 `CHANGELOG.md` 对应版本段。快照类文档须在开头标明快照日期、给出权威指针，不得以现在时陈述现状。
 - 共享文件（lexer/token/sym/type/vis/stdlib/module/linker 等）改动：语法演进**先 `PB` 验证 → 再 `PA` 移植**；bug 修复**先 `PA` → 再同步 `PB`**；双仓库（`NihaoC/ncc/` 发布副本 ↔ 独立活跃仓库 `ncc`）成对提交流程**已废止**（PA-38 定案，见 `docs/STAGE_SUMMARY.md` §1），两条线现由同一仓库的 `PA` / `PB` 分支承载，共享文档跨分支用 `git merge-file` 三方合并同步。
 
@@ -56,7 +65,8 @@
 - `git push origin <tag>` / `git push --tags`（发布 tag）
 - 通过平台 CLI/API 触发远端写入：`gh pr create`、GitLink/GitHub 合并请求、release 上传、CI 手动触发等
 
-允许且不需要授权的**纯本地**操作：`git add` / `commit` / `merge` / `cherry-pick` / `rebase`（未推送的提交）/ `stash` / 本地 `git tag`（创建，但不推送）。
+允许且不需要授权的**纯本地**操作：`git add` / `commit` / `merge` / `cherry-pick` / `rebase`（未推送的提交）/ `stash`。
+**自 2026-11-12 起，打 tag（含本地 `git tag`）不再属于纯本地自由操作**——任何 tag 的**创建**都由所有者 ltree 审核决定后才可执行，代理不得自行 `git tag`（更不得推送 tag）；本地 tag 若已存在，一律视为待 ltree 审核，不得擅自移动、删除或重打。
 
 ### 3.2 什么才算授权
 

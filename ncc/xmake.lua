@@ -2,8 +2,8 @@
 -- 使用 tcc 工具链构建（与代码生成后端保持一致，跨平台）
 set_project("nihao")
 -- 编译器版本单一真源：发布时只改这一处，set_version 与注入 C 的 NIHAO_VERSION 都由它派生
--- 2026-11-12 A 线退役、仓库收敛 IR-only 单一管线 ⇒ 版本进入 2.0 线
-local nihao_version = "2.0.0"
+-- 2026-11-12 A 线退役、仓库收敛 IR-only 单一管线 ⇒ 版本进入 0.2 线
+local nihao_version = "0.2.0"
 set_version(nihao_version)
 add_defines("NIHAO_VERSION_TAG=" .. nihao_version)
 
