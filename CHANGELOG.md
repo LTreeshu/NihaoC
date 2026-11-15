@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### `print` / `puts` 双形态库化落地（2026-11-12）
+
+- **裁定**（ltree 选「双形态库化」）：保留 print 双形态（字面量→格式串、否则→单值+换行），但把 print/puts 从「编译器内置名」改成「stdio 标准库成员」，`use stdio` 门控。
+- **落地**：`use stdio` 由「静默跳过」改为**登记 stdio 内建导入**（`ir_use_module` 识别 `stdio` / `stdio.*`）；未 `use stdio` 就使用 print/puts 时给**一次温和 Warning**（`-v` 下可见，默认零噪音，不阻断编译）。print 双形态下降、`printf` 内部实现均**保持现状行为不变**。
+- **为什么不硬拒绝**（诚实边界）：语料里 **43 份 puts 用例 + 4 份 print 用例**（含 PA 结转的 `flow`/`borrow`/`transfer`）未写 `use stdio`，硬拒绝会 break 它们、且给 PA 结转用例单侧加 `use stdio` 会造成用例集分叉（违反「不单侧改结转用例」）。因此门控做成「识别 + 提示」而非「硬门禁」；将来若要对齐严格门控，把一个 Warning 改成 error 并批量补 `use stdio` 即可。
+- **「去 printf」**：用户层与规范层不再依赖 `printf` 这个 C 名字（§2.3.1 改为「按格式串约定输出」），print 是自成一体的 stdio 函数。
+- 门禁零回归：ir-c / ir-native **52P/0F/18S**、0 FAIL。
+
 ### 版本归位 0.2.0 + 严格 tag 制度 + 版本发布规划（2026-11-12）
 
 - **版本归位 `0.2.0`**：A 线退役、仓库收敛 IR-only 后，版本单一真源（`ncc/xmake.lua` 的 `nihao_version`）由 1.0.0 → **0.2.0**，`--version` 报 `NihaoC Compiler v0.2.0`。`0.x` 系列＝尚未到 1.0，语义仍可能变化；从这里开始新的版本发布线。

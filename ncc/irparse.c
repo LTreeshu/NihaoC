@@ -616,6 +616,12 @@ static int is_matched_vreg = -1;
  * -2=未触发；-1=参数非标量（void 数组 / 聚合名）；其余=标量码（0=i64 2=i8 …）。 */
 static int last_malloc_sc = -2;
 
+/* PB-77：stdio 库化（2026-11-12 ltree 裁「双形态库化」）。print/puts 是 stdio 标准库的
+ * 成员而非编译器内置名——`use stdio` 登记导入；未导入就使用它们时给一次温和提示
+ * （不阻断编译：既有大量用例与 PA 结转用例未写 use stdio，硬拒绝会造成用例集分叉）。 */
+static int stdio_imported = 0;
+static int stdio_warned = 0;
+
 /* PB-27.7：is 模式比较的类型感知——按 is_val_vreg 类型选 int (IR_CMP_*) 或
  * double (IR_FCMP) 指令；double 常量转位模式存 IR_CONST imm。 */
 /* `is` 模式的整数字面量，可带一个前缀符号（BNF §6 <pattern> 的带符号字面量）。
@@ -2102,6 +2108,12 @@ static int ir_primary(CompilerState *cs)
             /* PB-64：内置名 `print` 下降到 printf（A 后端同口径）。此前它被当外部符号
              * 原样发出，产物 C 里是裸 `print(...)`，tcc 只报 undefined symbol——
              * 台账里 flow 族四份用例就卡在这一条上。 */
+            /* PB-77：print/puts 是 stdio 库成员；未 use stdio 时给一次温和提示（不阻断编译） */
+            if (!stdio_imported && !stdio_warned &&
+                (strcmp(name, "print") == 0 || strcmp(name, "puts") == 0)) {
+                nihao_warning(cs, "print/puts come from the stdio library; add 'use stdio'");
+                stdio_warned = 1;
+            }
             int print_fmt = -1;
             if (strcmp(name, "print") == 0 && argn >= 1) {
                 name = "printf";
@@ -5180,13 +5192,17 @@ static void ir_parse_module_source(CompilerState *cs, const char *filename)
 
 static void ir_use_module(CompilerState *cs, const char *name)
 {
+    if (strcmp(name, "stdio") == 0 || strncmp(name, "stdio.", 6) == 0) {
+        stdio_imported = 1;       /* PB-77：stdio 是内建标准库模块，use 即登记导入 */
+        return;
+    }
     if (ir_module_seen(name)) return;
     char path[512];
     if (ir_module_resolve(name, cs->input_file, path, sizeof(path))) {
         ir_module_mark(name);     /* 先标记：循环 import 靠它挡 */
         ir_parse_module_source(cs, path);
     }
-    /* 解析不到文件 = 外部 / 内建模块（如 stdio）：无可内联，静默跳过 */
+    /* 解析不到文件 = 外部 / 内建模块：无可内联，静默跳过 */
 }
 
 /* 顶层声明列表（PB-73：抽成可重入，模块递归导入复用）。 */

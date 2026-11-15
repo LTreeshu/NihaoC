@@ -61,17 +61,16 @@ NiHao is a new statically compiled language designed for system-level programmin
   to `puts` makes the C library dereference that number as an address, crashing or emitting garbage.
 - `print(x)` — when the argument is **not** a string literal: prints the value as a decimal integer
   followed by a newline (the value, not the address).
-- `print("fmt", a, b, ...)` — when the argument **is** a string literal: forwarded verbatim to C
-  `printf`. The first argument is the C format string, so the conversions (`%d` / `%s` / `%lld` …),
+- `print("fmt", a, b, ...)` — when the argument **is** a string literal: output follows the format
+  string given as the first argument, so the conversions (`%d` / `%s` / `%lld` …),
   their count and their types are the caller's responsibility; extra arguments are **not**
   concatenated and no newline is added. Hence `print("[LOG] ", msg)` emits only `[LOG] ` (the `msg`
   is dropped); the correct form is `print("[LOG] %s\n", msg)`.
 
-> The two forms are distinguished statically by the first argument token (literal → `printf`
-> passthrough, otherwise → integer print), so `print(buf)` with `buf` a string variable prints its
+> The two forms are distinguished statically by the first argument token (literal → format-string
+> output, otherwise → integer print), so `print(buf)` with `buf` a string variable prints its
 > address as an integer, not its contents — use `puts` to print strings.
-> `puts` is a plain C library passthrough. Availability of `print` per backend is tracked in
-> `docs/IMPLEMENTATION_STATUS.md`.
+> `print` / `puts` are provided by the stdio library.
 
 ### 2.4 Keyword Reference
 
