@@ -145,9 +145,15 @@ int irgen_c_emit(IrProg *p, const char *outfile)
         /* PB 阶段3 C 项：构建 vreg 标识符表——有名用源码名，无名用 tN（与声明一致）。
          * 用于局部变量声明与全部指令操作数引用，使生成 C 可读。 */
         char **vrid = NULL;
+        char **arrid = NULL;    /* PB-76(b)：数组/聚合块的存储标识符（声明与 IR_ADDR 用） */
+        unsigned char *memb = NULL;  /* PB-76(b)：1 = 聚合成员槽，由基槽数组映射，不单独声明 */
         if (f->vreg_count > 0) {
             vrid = nihao_malloc(g_cs, f->vreg_count * sizeof(char *));
+            arrid = nihao_malloc(g_cs, f->vreg_count * sizeof(char *));
+            memb = nihao_malloc(g_cs, f->vreg_count);
             for (int i = 0; i < f->vreg_count; i++) {
+                arrid[i] = NULL;
+                memb[i] = 0;
                 if (f->vreg_name && i < f->vreg_count && f->vreg_name[i]) {
                     vrid[i] = nihao_strdup(g_cs, f->vreg_name[i]);
                 } else {
@@ -156,22 +162,45 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                     vrid[i] = nihao_strdup(g_cs, tmp);
                 }
             }
+            /* 聚合块槽映射：基槽 IR_AGG_ALLOCA imm=8*n → 成员槽 vreg 改名为 "<name>[k]"，
+             * 使成员访问（&name[k]）与指针 +8*k 落在同一块连续存储上。 */
+            for (int ai = 0; ai < f->ins_count; ai++) {
+                IrIns *in = &f->ins[ai];
+                if (in->op == IR_ALLOCA && in->imm > 8) {
+                    arrid[in->dst] = vrid[in->dst];
+                } else if (in->op == IR_AGG_ALLOCA) {
+                    int n = (int)(in->imm / 8);
+                    arrid[in->dst] = vrid[in->dst];
+                    for (int k = 0; k < n && in->dst + k < f->vreg_count; k++) {
+                        char tmp[256];
+                        snprintf(tmp, sizeof(tmp), "%s[%d]", arrid[in->dst], k);
+                        vrid[in->dst + k] = nihao_strdup(g_cs, tmp);
+                        if (k > 0) memb[in->dst + k] = 1;
+                    }
+                }
+            }
         }
 
-        /* 局部变量声明：遍历全部 vreg——数组基（ALLOCA imm>8）声明为
-         * C 数组 vrid[i][imm/8]；其余（标量槽/临时）声明单变量。
-         * 数组元素 vreg 无 ALLOCA 也声明（未被引用，无害）。 */
+        /* 局部变量声明：遍历全部 vreg——数组/聚合基（ALLOCA imm>8 或 AGG_ALLOCA）
+         * 声明为 C 数组 name[imm/8]；聚合成员槽已映射到该数组元素，跳过声明；
+         * 其余（标量槽/临时）声明单变量。 */
         if (f->vreg_count > 0) {
             for (int i = 0; i < f->vreg_count; i++) {
+                if (memb[i]) continue;
                 long long asz = -1;
+                int is_agg = 0;
                 for (int ai = 0; ai < f->ins_count; ai++) {
-                    if (f->ins[ai].op == IR_ALLOCA && f->ins[ai].dst == i) {
+                    if ((f->ins[ai].op == IR_ALLOCA ||
+                         f->ins[ai].op == IR_AGG_ALLOCA) &&
+                        f->ins[ai].dst == i) {
                         asz = (long long)f->ins[ai].imm;
+                        is_agg = (f->ins[ai].op == IR_AGG_ALLOCA);
                         break;
                     }
                 }
-                if (asz > 8) {
-                    cb_put(&b, "    int64_t %s[%lld];\n", vrid[i], asz / 8);
+                if (is_agg || asz > 8) {
+                    cb_put(&b, "    int64_t %s[%lld];\n",
+                           arrid[i] ? arrid[i] : vrid[i], asz / 8);
                 } else {
                     cb_put(&b, "    %s %s;\n",
                            (f->vreg_type && f->vreg_type[i] == 1) ? "double" : "int64_t",
@@ -272,21 +301,30 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                 case IR_ALLOCA:
                     /* C 中局部变量已声明；ALLOCA 槽即 vrid */
                     break;
+                case IR_AGG_ALLOCA:
+                    /* 聚合块已在声明段落成 C 数组；成员槽映射到 name[k] */
+                    break;
                 case IR_ADDR:
-                    /* 平铺槽（imm=8）：&vrid{a+imm} 直接引用槽 vreg；
-                     * 基本数组基（imm>8）：&vrid{a}[imm]（C 数组元素，字节连续） */
+                    /* 聚合块 / 基本数组（imm>8）：&storage[imm]（连续存储，字节按槽宽）；
+                     * 平铺槽（imm=8）：&vrid{a+imm} 直接引用槽 vreg */
                     {
                         long long asz = 8;
+                        int is_agg = 0;
                         for (int ai = 0; ai < f->ins_count; ai++) {
-                            if (f->ins[ai].op == IR_ALLOCA &&
+                            if ((f->ins[ai].op == IR_ALLOCA ||
+                                 f->ins[ai].op == IR_AGG_ALLOCA) &&
                                 f->ins[ai].dst == in->a) {
                                 asz = (long long)f->ins[ai].imm;
+                                is_agg = (f->ins[ai].op == IR_AGG_ALLOCA);
                                 break;
                             }
                         }
-                        if (asz > 8) {
+                        if (is_agg || asz > 8) {
                             cb_put(&b, "    %s = (int64_t)(intptr_t)&%s[%lld];\n",
-                                   vrid[in->dst], vrid[in->a], (long long)in->imm);
+                                   vrid[in->dst],
+                                   (arrid && in->a < f->vreg_count && arrid[in->a])
+                                       ? arrid[in->a] : vrid[in->a],
+                                   (long long)in->imm);
                         } else {
                             cb_put(&b, "    %s = (int64_t)(intptr_t)&%s;\n",
                                    vrid[in->dst], vrid[in->a + (int)in->imm]);

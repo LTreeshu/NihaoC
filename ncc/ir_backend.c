@@ -137,7 +137,8 @@ int irgen_backend_emit(IrProg *p, const char *outfile, const char *backend)
         int lbl_max = -1;
         for (int i = 0; i < f->ins_count; i++) {
             IrIns *in = &f->ins[i];
-            if (in->op == IR_ALLOCA || in->op == IR_PARAM) continue;
+            if (in->op == IR_ALLOCA || in->op == IR_AGG_ALLOCA ||
+                in->op == IR_PARAM) continue;
             if (in->op == IR_LABEL || in->op == IR_JMP ||
                 in->op == IR_JZ || in->op == IR_JNZ) {
                 if (in->label > lbl_max) lbl_max = in->label;

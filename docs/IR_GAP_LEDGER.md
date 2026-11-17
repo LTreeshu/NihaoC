@@ -97,7 +97,7 @@
 | `ownerof` | `ir: unexpected token '.' in expression`（`&boy.name`）+ `unexpected token 'structof'` / `expected '{', got '('` | **G3**（PB-70 改归，原记 G1「`.()` 后缀链形态」） | **原归类被第一手复测推翻**：真卡点是 `structof` / `holdof` / `unionof` / `bitoffsetof` 四个从属查询内置 + `&聚合体.成员`，全都要成员真实偏移（PB-33 的 P2 当年就明确让 IR 保持拒绝）。与后缀链无关 |
 | `slice_str_infer` | `ir: member 'name' element 8 lies beyond the IR 8-byte slot`（19:27）+ `slice assignment expects { v0, v1, ... }` + `'.()' dereference takes a scalar type or nothing, not 'Say'` | **G3**（PB-70 改归，原记 G1） | 首错就是**数组成员越首槽的专属诊断**（PB-66 立的那道护栏），另卡聚合体 `.(Say)`。不是推断语法缺口 |
 | ~~`stmt_terminators`~~ | ~~`ir: unsupported top-level token ';'`~~（11 条） | G1→放行 | **PB-70 已解**：语句尾终止符 + 空语句 + 顶层空声明 + `return;`，四档输出与 `.expect` 逐字节相同，已入 `IR_SUBSET`。**边界**：本份的 `Cfg struct { a i32 b i32 }` 在 IR 只占 1 槽，产物 C 里 `p.b = 2` 写的是**无关临时槽 `&t1`**，输出恰好为 3 只因 t1 未被复用 ⇒ 进名单是因为输出相同，不是布局已定案（第 23 条） |
-| `type_forms` | 改前 `ir: unexpected token 'i32' in expression`（括号类型）；**PB-70 后能编能跑**，四条断言里 `arrow typed` 仍打 `bad` | **G3**（PB-70 改归，原记 G1） | 括号类型 `(i32)` / `(i32)[3]`、一元 `+`、`q.()` 三处 PB-70 已补齐；**剩下的唯一卡点是 `r->y` / `pt.y`**——聚合体第二成员越出 IR 的 1 个 8 字节槽 ⇒ 第 23 条。**刻意不入名单**（入去就是当场红） |
+| `type_forms` | 改前 `ir: unexpected token 'i32' in expression`（括号类型）；**PB-70 后能编能跑**，四条断言里 `arrow typed` 仍打 `bad` | **G3**（PB-70 改归，原记 G1） | 括号类型 `(i32)` / `(i32)[3]`、一元 `+`、`q.()` 三处 PB-70 已补齐；**剩下的唯一卡点是 `r->y` / `pt.y`**——聚合体第二成员越出 IR 的 1 个 8 字节槽 ⇒ 第 23 条。**刻意不入名单**（入去就是当场红）。**2026-11-18（PB-76）更新**：聚合体整块连续槽落地后 ir-c / ir-native 已打 `ok` 且与 `.expect` 相同；两交叉档仍 `bad`（帧方向，待裁第 33 条）⇒ 仍不入名单，闸门换成第 33 条 |
 | `void_slot_infer` | `ir: 'q' is not a pointer to aggregate (assign &var first)` + `unexpected token '->'`（28:8 / 29:8） | **G3**（PB-70 改归，原记 G1） | 真卡点是 `q void = &pt`（pt 是聚合体）的**聚合体指针跟踪**与 `q->x` / `q->y`；`q->y` 是第二成员、越出 1 槽。裸 `.()` / 空下标 `[]` 那几组 PB-68 后已能过 |
 
 **桶分布**：G1 **14**、G2 **5**、G3 **2**（G4 在 pos 侧本轮为 0——两份「看似可提升」的 `alignof_builtin` 与
@@ -338,3 +338,33 @@ err 9 份：E-a 3（文案不同源，属待裁第 26 条的分批清单）+ E-b
 
 **验收口径**：每阶段全门禁 + Linux + 交叉 `comm` 零回归；阶段 B 收尾后把这 9 份一次性入名单，
 并用 ASan（宿主档）+ 布局探针（交叉档）验证 D1/D2 越界清零。
+
+## 11. PB-76 实测：阶段 B 第一刀——聚合体整块连续槽（2026-11-18）
+
+**先复测（探针 `build/pb76a.nc`，ir-c）**：改前输出 `direct 11 22 / after ptr 33 22 / via ptr 33 44 / mix 55 44`
+——`r->y = 44` 只改到指针路线的读回，直接访问 `p.y` 仍是 22。**根因**：ir-c 里聚合成员是互不相邻的
+C 标量（`int64_t p; int64_t t1;`），`&p + 8` 落到两者之间的栈空隙；直接访问 `p.y` 取的是 `&t1`。
+即 §10 阶段 B 的**前置缺口**——存储不连续，字节偏移再准也没用。
+
+**落地（不新增成员字节偏移，先做连续性）**：
+
+| 位置 | 改动 |
+|---|---|
+| `ncc/ir.h` | 新增 `IR_AGG_ALLOCA`（紧邻 `IR_ALLOCA`） |
+| `ncc/irparse.c` | `var_declare` 对聚合体只由基槽发一条 `IR_AGG_ALLOCA`（`imm=8*mslots`），成员 vreg 仍按 `base+k` 分配；sret 返回 / `_mr_ret` 缓冲 / 多变量聚合声明的槽数由 `mcount` 改 `mslots`；verbose dump 表补一格 |
+| `ncc/ir_backend.c` | 指令循环与 `IR_ALLOCA` 一样跳过（两发射器零改动） |
+| `ncc/ir_to_c.c` | 聚合块声明为 `int64_t name[slots]`；成员 vreg 标识符映射为 `name[k]`（不单独声明）；`IR_ADDR` 用存储名取址（`&name[imm]`） |
+
+**验证**：
+- 探针四项全对（`after ptr 33 44 / via ptr 33 44 / mix 55 55`）；`type_forms` 的 `arrow typed` 在 ir-c / ir-native 变 `ok`。
+- ASan（WSL gcc `-fsanitize=address -O1`）：探针与 `ir_arrow` 产物 **0 report** ⇒ PB-48 D2 的栈越界结构性消除。
+- **零回归硬证据**：用 `git archive HEAD` 建改动前编译器，全 pos 语料 × `ir-riscv64` / `ir-loongarch64` 共 **126 份 `.s` 逐字节相同**（两发射器确实零变化）；ir-c 产物只有 **10 份聚合相关文件**变化，其中 8 份可执行用例新旧输出逐字相同。门禁 **52P/0F/18S、0 FAIL**（与改前一致）。
+- **交叉实跑**：`type_forms` 在 riscv64 / loongarch64 上仍打 `arrow typed bad`。原因**不是**本轮引入——汇编帧槽向下生长，`&p + 8` 向高地址走、离开成员槽；此前该用例在交叉档记 `AGREE`，是「指针写 + 指针读」自洽造成的**假一致**（对照：`ir_arrow` 至今仍 AGREE，因为它的断言也只走指针）。
+
+**⇒ 对缺口表的影响**：`type_forms` 的 ir-c 侧已修好，但交叉档不一致使其**仍不入名单**（待裁第 33 条现为唯一闸门，见 `TODO-PB.md` 待裁 33 的 2026-11-18 补注）。**名单与计数不变**：`IR_SUBSET` 60 / `IR_ONLY` 3 ⇒ pos 可编 **63 / 72、缺口 9**；err 覆盖 **25 / 34、缺口 9**（分母由 33 更正为 34，`deref_void_type` 加入后未同步）。
+
+**仍属第 23 条后续（本轮明确未做）**：成员字节偏移（成员仍各占 8 字节槽，非字节紧凑）、
+数组成员真实宽（仍 1 槽 + 首 8 字节可寻址）、`structof` / `holdof` / `unionof` / `bitoffsetof` 四内置、
+指定式初值 `.field = v`、成员默认值展开。逐份剩余：`array_member_default` / `designator_init` /
+`ownerof` / `slice_str_infer` / `str_array_init` / `struct_member_default` / `void_slot_infer`（7 份）
++ `type_forms`（等第 33 条）+ `multi_arr_decl`（多维读写路径，非布局）。

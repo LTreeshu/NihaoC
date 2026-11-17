@@ -238,6 +238,8 @@ end
 --    声明型 string 的 ve[] 一直是 0 ⇒ len(s) 静默给 0）——只登记长度，不改 vetyp/寻址宽度。
 -- 括号类型 `(T)` / `(T)[N]` 也同轮落地（归一成内层类型 token 走同一条声明路径），但 type_forms **不入名单**：
 -- 它四条断言里 `arrow typed` 仍打 bad——`r->y` 是聚合体第二成员、越出 IR 的 1 个 8 字节槽，属待裁第 23 条。
+-- （2026-11-18 PB-76 更正：聚合体改为整块连续槽 + ir-c 单条 C 数组之后 `arrow typed` 在 ir-c/ir-native
+-- 已正确；两交叉档仍是 bad（帧槽向下生长，`&p+8` 向高地址走），属待裁第 33 条——故 type_forms 暂不入名单。）
 -- PB-71 / PB-72（2026-11-12）新增 is_no_fallthrough（pos）与 len_unknown / void_subscript（err）：
 -- ⇒ IR 侧 PASS 46→49、SKIP 23→20。三处落地全在 irparse.c，不新增 IR 操作码，发射器与 A 线一行未改：
 -- ① 首匹配即止（A 侧 __is_matched，PA-16 / P4）：新增 is_matched_vreg，每轮 while 迭代在条件检查后、
@@ -253,6 +255,16 @@ end
 --    这些真正确定长度处登记。此前 len(标量) 静默给 0 并产出可执行文件（台账 E-c 桶）。
 -- ③ 通用 void 指针的裸下标 / 切片：ir_check_void_subscript，与 A 侧同判据同文案。两条例外——空下标 `p[]`
 --    是省略类型解引用（合法）、PB-68 的 VM_PTRARR（ve[] 为 0 但可下标）。此前静默接受非法程序。
+-- PB-76（2026-11-18）聚合体改「整块连续槽」布局后 `r->y` 落到 `p.y`
+-- （此前的 1 槽/成员各自 ALLOCA 在 ir-c 里是互不相邻的 C 标量，`&p + 8` 写到栈上无关位置）。
+-- 实现：新增 IR_AGG_ALLOCA（基槽一次分配 imm=8*mslots，汇编后端与 ALLOCA 一样跳过、**两档 .s 全语料逐字节不变**）；
+-- ir-c 把整块落成一条 C 数组 `int64_t name[slots]`，成员槽 vreg 映射为 `name[k]`，不单独声明。
+-- type_forms 本轮**仍不入名单**：ir-c / ir-native 四条断言已与 .expect 相同，但两交叉档实跑
+-- `arrow typed` 仍打 bad——汇编帧槽向下生长，`&p + 8` 向高地址走、离开成员槽，正是待裁第 33 条
+-- （帧生长方向）的既有分歧；本轮 asm 出码未变（旧的 AGREE 是「指针写+指针读」自洽造成的假一致）。
+-- 等第 33 条裁定后连同交叉档一起转正。
+-- 边界照旧诚实：成员仍各占 8 字节槽（非字节紧凑），数组成员仍按 1 槽 + 首 8 字节可寻址；
+-- 字节级真实布局仍是待裁第 23 条，`str_array_init` / `slice_str_infer` 等仍不入名单。
 local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true, fx_types = true, malloc_demo = true, flow = true, flow_no_free = true, borrow = true, flow_move = true, features = true, for_init_forms = true, transfer = true, mathmod = true, module_top_forms = true, len_builtin = true, array_capacity_tiers = true, deref_slice = true, is_pattern_forms = true, stmt_terminators = true, literal_forms = true, is_no_fallthrough = true, use_mod = true, alignof_builtin = true}
 local IR_ONLY = {ir_builtin = true, ir_slice = true, ir_sparam = true}
 -- IR_ERR_COVERED: err 用例中 IR 前端已实现对应诊断的（未列出的非 m2 用例仍在 IR 侧跳过）

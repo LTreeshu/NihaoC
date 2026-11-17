@@ -748,14 +748,23 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
     vlen_known[vn_count] = (elems > 0) ? 1 : 0;
     for (int k = 0; k < IR_MAX_DIMS; k++) vdim[vn_count][k] = 0;
     int base = -1;
-    if (elems > 0 && type_idx < 0) {
+    if (elems > 0 && type_idx >= 0) {
+        /* 聚合体（struct/union/enum）：整块占 elems 个连续 8 字节槽（mslots，嵌套递归）。
+         * 只给基槽发 IR_AGG_ALLOCA——汇编后端与 ALLOCA 一样跳过，成员槽由 vreg 编号
+         * base+k 自然落在相邻帧槽；ir-c 把整块落成一条 C 数组 int64_t name[elems]，
+         * 成员 vreg 映射为 name[k]。这样 `&agg + 8*k` 与直接成员访问（ADDR + k）落到
+         * 同一存储，修复 `r->y` 写进聚合块之外的缺陷（PB-76(b)）。 */
+        for (int k = 0; k < elems; k++) {
+            int vr = ir_new_vreg(F);
+            if (k == 0) {
+                base = vr;
+                ir_emit(F, IR_AGG_ALLOCA, vr, -1, -1, 8LL * elems);
+            }
+        }
+    } else if (elems > 0) {
         /* 基本类型数组：分配 elems 个连续 vreg（native 槽字节连续），
          * 只发基槽 ALLOCA（imm=8*elems → ir-c 生成 C 数组 t{base}[elems]，
-         * 元素槽 vreg 不单独声明，ADDR(imm=k) 生成 &t{base}[k]）。
-         * 注：聚合体（type_idx>=0）仍走下方「每槽一个 ALLOCA(8)」的单槽路径——
-         * 2026-11-12 尝试改多槽会让聚合整体赋值 `m = l` 退化成 C 数组赋值
-         * （tcc: lvalue expected），需连同「整体赋值逐槽复制 + 参数/返回」
-         * 一起做，属完整阶段 B，故本轮回退。 */
+         * 元素槽 vreg 不单独声明，ADDR(imm=k) 生成 &t{base}[k]）。 */
         for (int k = 0; k < elems; k++) {
             int vr = ir_new_vreg(F);
             if (k == 0) {
@@ -2089,7 +2098,7 @@ static int ir_primary(CompilerState *cs)
             if (is_mr_call) {
                 /* 缓冲大小 = 返回聚合类型成员数（struct 返回用 ret_agg_ti） */
                 int ti = (mr_agg_ti >= 0) ? mr_agg_ti : agg_type_find("__mr");
-                long long sz = (ti >= 0) ? (long long)agg_types[ti].mcount * 8 : 8;
+                long long sz = (ti >= 0) ? (long long)agg_types[ti].mslots * 8 : 8;
                 int szv = ir_new_vreg(F);
                 ir_emit(F, IR_CONST, szv, -1, -1, sz);
                 ir_emit(F, IR_PARAM, -1, szv, -1, 0);
@@ -3056,7 +3065,7 @@ static void ir_multi_decl(CompilerState *cs, int vis)
         ti = agg_type_find(cs->parser.lex->tok_str);
         if (ti >= 0) {
             next_tok(cs);
-            elems = (agg_types[ti].kind == 2) ? 1 : agg_types[ti].mcount;
+            elems = (agg_types[ti].kind == 2) ? 1 : agg_types[ti].mslots;
         } else {
             nihao_error(cs, "ir: unknown type '%s' in multi-declaration",
                         cs->parser.lex->tok_str);
@@ -3591,8 +3600,8 @@ static void ir_stmt_impl(CompilerState *cs)
                 int retvi = var_find("_mr_ret");
                 if (retvi >= 0) {
                     next_tok(cs);
-                    int mcount = agg_types[vty[rvi]].mcount;
-                    for (int k = 0; k < mcount; k++) {
+                    int mslots = agg_types[vty[rvi]].mslots;
+                    for (int k = 0; k < mslots; k++) {
                         int off = ir_new_vreg(F);
                         ir_emit(F, IR_CONST, off, -1, -1, (long long)k * 8);
                         int addr = ir_new_vreg(F);
@@ -5315,7 +5324,7 @@ int ir_compile(CompilerState *cs, const char *filename, int backend, int verbose
             "CMP_EQ", "CMP_NE", "CMP_LT", "CMP_LE", "CMP_GT", "CMP_GE",
             "FADD", "FSUB", "FMUL", "FDIV", "FCMP", "ITOD", "DTOI",
             "FTRUNC", "TRUNC", "JMP", "JZ", "JNZ", "CALL", "CALLI", "PARAM", "RET",
-            "LABEL", "ALLOCA", "ADDR", "ELEM_ADDR", "LOAD", "STORE",
+            "LABEL", "ALLOCA", "AGG_ALLOCA", "ADDR", "ELEM_ADDR", "LOAD", "STORE",
             "LOAD8", "STORE8", "LD_ADDR", "END",
         };
         for (int fi = 0; fi < P->fn_count; fi++) {

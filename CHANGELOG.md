@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 2.0 线 P2 真实布局阶段 B 第一刀（PB-76：聚合体整块连续槽 + ir-c 单条 C 数组——修 `r->y` 写到聚合块之外；2026-11-18）
+
+- **缺陷与根因**：`r = &p` 后 `r->y = 44` 写不到 `p.y`。ir-c 产物里聚合体的每个成员是**互不相邻的 C 标量**（`int64_t p; int64_t t1;`），`&p + 8` 落在两者之间的栈空隙，而直接访问 `p.y` 取的是 `&t1` —— 两条路径指向不同存储。探针实测改前：`direct 11 22 / after ptr 33 22 / via ptr 33 44 / mix 55 44`（指针写只改到第一个成员）。
+- **机制**：新增 IR 操作码 `IR_AGG_ALLOCA`——聚合变量只由基槽分配一次（`imm = 8 * mslots`），成员槽仍按 vreg 编号 `base+k` 隐式存在。汇编后端与 `IR_ALLOCA` 一样跳过（帧大小按 vreg 计数，出码零变化）；`ir_to_c` 把整块落成**一条 C 数组** `int64_t p[slots]`，成员槽 vreg 的标识符映射为 `p[k]`（不再单独声明），`IR_ADDR` 改用存储名取址。这样 `&p + 8*k`、`p[k]`、聚合整体赋值（逐槽 MOV）、sret 返回拷贝全部落到同一块连续存储。
+- **连带修正两处槽数口径**：聚合体返回值 `_mr_ret` 缓冲大小与 sret 返回的逐槽 STORE 循环、多变量聚合声明，原来都用 `mcount`（嵌套聚合时偏少），改为 `mslots`。
+- **修好**：`r->y` 四行探针全对（`after ptr 33 44 / via ptr 33 44 / mix 55 55`）；`type_forms` 的 `arrow typed` 由 `bad` 变 `ok`（ir-c / ir-native 与 `.expect` 逐字相同）。ASan（WSL gcc，`-O1`）对探针与 `ir_arrow` 产物 **0 report**——PB-48 D2 的栈越界结构性消失。
+- **零回归**：用 `git archive HEAD` 建改动前编译器，全 pos 语料 × 两交叉档 `.s` **126 份逐字节相同**；ir-c 产物仅 10 份聚合相关文件变化（`features` / `ir_arrow` / `ir_bitfield` / `ir_mr` / `ir_nested` / `ir_sparam` / `ir_struct` / `stmt_terminators` / `struct_param_prefix` / `type_forms`），这 8 份可执行用例新旧输出逐字相同。门禁 `ir-c` / `ir-native` **52P/0F/18S、0 FAIL**（与改前一致）。
+- **诚实边界**：成员仍各占 8 字节槽（**非字节紧凑**），数组成员仍按 1 槽 + 首 8 字节可寻址——字节级布局仍是待裁第 23 条的后续。`type_forms` **未入名单**：两交叉档实跑 `arrow typed` 仍 `bad`——汇编帧槽向下生长，`&p + 8` 向高地址离开成员槽，即待裁第 33 条（帧方向）；此前交叉档记 AGREE 是「指针写 + 指针读」自洽造成的假一致。等第 33 条裁定后再转正。
+- **名单/计数**：`IR_SUBSET` **60** / `IR_ONLY` **3** 不变，pos IR 可编 **63 / 72**、缺口 **9**；err 覆盖 **25 / 34**、缺口 **9**（分母由 33 更正为 34：`deref_void_type` 加入后未同步）。
+
 ### `print` / `puts` 双形态库化落地（2026-11-12）
 
 - **裁定**（ltree 选「双形态库化」）：保留 print 双形态（字面量→格式串、否则→单值+换行），但把 print/puts 从「编译器内置名」改成「stdio 标准库成员」，`use stdio` 门控。

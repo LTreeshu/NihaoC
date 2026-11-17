@@ -36,6 +36,9 @@ typedef enum {
     IR_RET,         /* return dst (-1 = bare return)  */
     IR_LABEL,
     IR_ALLOCA,      /* dst = address of a stack slot of size imm */
+    IR_AGG_ALLOCA,  /* PB-76(b) 聚合体分配：dst..dst+imm/8-1 是连续成员槽；
+                     * ir-c 落成一条 C 数组并把成员 vreg 映射到 name[k]，
+                     * 汇编后端与 ALLOCA 一样跳过（槽由 vreg 编号自然给出） */
     IR_ADDR,        /* dst = address of local variable vreg a */
     IR_ELEM_ADDR,   /* dst = &base[idx]（元素地址，后端按自身布局方向） */
     IR_LOAD,        /* dst = *(a)                     */

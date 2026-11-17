@@ -2,20 +2,20 @@
 
 本文档记录 NihaoC 语言规范（Chinese.md / English.md / BNF.md）中各项语义与编译器（`ncc/`）实际实现的对应状态。
 
-> 更新日期：2026-11-12（**A 线退役 + 仓库收敛 IR-only 单一管线**）。此前本文件含大量 A 线（`parser.c`/`cgen.c`/`native.c`）
+> 更新日期：2026-11-18（PB-76：聚合体整块连续槽 + ir-c 单条 C 数组）。此前本文件含大量 A 线（`parser.c`/`cgen.c`/`native.c`）
 > 实现表与源码行号锚点，随 A 线物理删除全部作废，已整体重写为下方 IR-only 简明版。历史细节见 `CHANGELOG.md`。
 >
 > 本文件是**实现状态层**文档：`BNF.md` / `Chinese.md` / `English.md` / 两份语法元素表只写设计、不写落地；状态一律记在这里或 `TODO.md`。
 
-## 1. 现态（2026-11-12）
+## 1. 现态（2026-11-18）
 
 | 项 | 现值 |
 |---|---|
 | 管线 | 单一 IR 管线：`irparse.c`（前端）→ `ir.c`（中间层）→ 出码 |
 | 后端 | `ir-c`（默认）、`ir-native`（本机 x86-64 上等价 `ir-c`）、`ir-riscv64`、`ir-loongarch64`（交叉 `.s`） |
-| 门禁 | `ir-c` **51P/0F/18S**、`ir-native` **51P/0F/18S**、0 FAIL、比对 36 格（2 后端） |
-| pos 覆盖 | IR 可编 **62 / 72**（`IR_SUBSET` + `IR_ONLY`）；缺口 **9** 份 = 真实布局家族 |
-| err 覆盖 | IR 覆盖 **24 / 33**（`IR_ERR_COVERED`）；缺口 9 份 |
+| 门禁 | `ir-c` **52P/0F/18S**、`ir-native` **52P/0F/18S**、0 FAIL、比对 36 格（2 后端） |
+| pos 覆盖 | IR 可编 **63 / 72**（`IR_SUBSET` 60 + `IR_ONLY` 3）；缺口 **9** 份 = 布局/语义残余 |
+| err 覆盖 | IR 覆盖 **25 / 34**（`IR_ERR_COVERED`）；缺口 9 份 |
 | 机器码发射器 | `ir-riscv64` / `ir-loongarch64` 两档（交叉验证：60 链接 / 59 AGREE / 2 既有 CRASH）；`ir-riscv32` / `ir-arm` 未开工 |
 
 ## 2. 核心实现锚点
@@ -32,22 +32,26 @@
 | `len()` | `vlen_known` 表 + 诊断 |
 | 可见性 / 所有权 | `ir_vis_*` 一族（vstate / vborrow_src / vptr） |
 | 类型对齐 | `type_align_token`、`ir_agg_align`（PB-74） |
-| 聚合体 | `agg_types`（`msize`/`mscode`/`mtype`/`marr_*`）、`agg_compute_offsets`、`ir_agg_init`/`ir_agg_decl` |
+| 聚合体 | `agg_types`（`msize`/`mscode`/`mtype`/`marr_*`）、`agg_compute_offsets`、`ir_agg_init`/`ir_agg_decl`；**聚合体存储 = 整块连续 8 字节槽**：前端发 `IR_AGG_ALLOCA`（`imm=8*mslots`），汇编后端跳过（槽按 vreg 编号连续），ir-c 落成 `int64_t name[slots]` 并把成员 vreg 映射到 `name[k]`（PB-76） |
 
 ## 3. 已知边界（真实字节布局，IR 线尚未实现的能力）
 
-9 份 pos 用例依赖「聚合体真实布局」（成员字节偏移、数组成员真实宽、`offsetof`/四个从属查询内置），当前 IR 仍按
-8 字节槽模型——成员各占独立槽、`p.y` 这类第二成员寻址落在聚合存储之外。明细见 `docs/IR_GAP_LEDGER.md` §10。
+聚合体已是**连续的 8 字节槽块**（`&p + 8` 能到 `p.y`，PB-76），但**尚未字节紧凑**：成员各占一个 8 字节槽、
+数组成员仍按 1 槽且只可寻址首 8 字节；`structof` / `holdof` / `unionof` / `bitoffsetof` 与指定式初值 / 成员默认值
+仍要真实字节偏移。两交叉档还存在**帧生长方向分歧**（待裁第 33 条）：汇编槽向下生长，`&p + 8*k` 向高地址走，
+`type_forms` 因此在交叉档打 `bad`（ir-c / ir-native 已正确）。明细见 `docs/IR_GAP_LEDGER.md` §11。
 
 | 用例 | 卡点 |
 |---|---|
-| `type_forms` / `void_slot_infer` | 聚合体第二成员越槽（`r->y` / `q->y`） |
+| `type_forms` | ir-c/ir-native 已对；交叉档因帧方向（待裁 33）仍 `bad` |
+| `void_slot_infer` | `q void = &pt` 的聚合体指针跟踪（`q->y`） |
 | `struct_member_default` / `array_member_default` | 成员默认值需真实偏移 |
 | `designator_init` | 指定式初值 `.field = v` 需真实偏移 |
 | `ownerof` | `structof`/`holdof`/`unionof`/`bitoffsetof` 四内置需真实偏移 |
-| `slice_str_infer` | 数组成员越首槽（`char[9]` 成员） |
+| `slice_str_infer` / `str_array_init` | 数组成员越首槽（`char[9]` 成员），需数组成员真实宽 |
+| `multi_arr_decl` | 多维数组读写降级路径 |
 
-9 份 err 缺口：E-a 3（诊断文案不同源）、E-b 6（断在解析层、依赖 pos 侧的 G3 布局）。
+9 份 err 缺口：E-a 3（诊断文案不同源）、E-b 6（断在解析层、依赖 pos 侧布局）。
 
 ## 4. 输出内建（2026-11-12 设计改变）
 
