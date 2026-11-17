@@ -7,18 +7,20 @@
 
 ## 一、分支策略 | Branch Strategy
 
-仓库维护三条长期分支，各司其职（版本语义见 `docs/VERSIONING_ROADMAP.md`）：
+分支模型（**2026-11-17 ltree 裁定：PB 开发 + main 发布镜像**，A 线物理删除后收敛为 IR-only 单管线）——版本语义见 `docs/VERSIONING_ROADMAP.md`：
 
 | 分支 | 职责 |
 | ---- | ---- |
-| `main` | 主分支 / **稳定发布线**。1.x 累积成果，始终可构建、可测试、可发布；仅接受 `PA` 合入（2.0 就绪前 `PB` 不合入） |
-| `PA`  | 方案 A：`parser → C 文本` → 外部 tcc / libtcc（native）后端的**产品化路径（1.0）**。特性冻结，只修 bug / 文档 / 发布准备 |
-| `PB`  | 方案 B：`irparse → IR（三地址码）` → C / riscv64 / loongarch64 汇编的**下一代演进线（2.0）**，持续开发；其余平台由 C 路线代劳（2026-09-26 裁定，见 `TODO-PB.md` 的 PB-34） |
+| `PB` | **唯一开发主线（IR-only，0.2.x）**。`irparse → IR` → C / riscv64 / loongarch64 汇编；日常开发、门禁、提交都在这里进行 |
+| `main` | **发布镜像**。只在发布时从 `PB` 快进（`git merge --ff-only PB`）并打 tag；平时不直接提交，内容恒等于最近一次发布 |
+| `PA` | **已冻结历史线**（1.x / A 线终点，只读）。2026-11-17 起不再合入、不再提交；保留用于追溯 `v1.0.x` |
+| `backup-pb-20260916` | 归档只读快照，不参与日常流程 |
 
 ### 分支规则
-- 三条分支于 2026-08-29 从同一稳定点分出（当时 `main` 为 `04f1435`）；此后 `main` 随 `PA` 合入继续前进，`PA` 与 `PB` 的实际共同祖先为 `7d4c652`（2026-08-31）。
-- 功能/修复先落在对应的 `PA` 或 `PB` 分支，验证通过后再视需要合回 `main`。
-- 新增命名分支时遵循 `feature/<name>`、`fix/<name>`、`docs/<name>` 命名；以 `PA`/`PB` 为主分支的工作，直接提交到对应分支即可。
+- 历史沿革：三条分支于 2026-08-29 从同一稳定点分出（当时 `main` 为 `04f1435`）；`PA` 与 `PB` 的实际共同祖先为 `7d4c652`（2026-08-31）。以上仅为历史陈述，现行模型见上表。
+- **单工作区、普通分支切换**：所有操作在主仓库 `D:/workspace/workbudy/NihaoC` 内用 `git switch <branch>` 完成。**不再使用 `git worktree`**——worktree 会独占分支（导致主仓库无法检出该分支），且其 `.git` 内的 gitdir 为绝对路径，换到 WSL 或迁移目录即失效（2026-11-17 已移除 `D:/workspace/workbudy/pbwt`）。
+- 功能/修复直接提交到 `PB`，验证通过后仍留在 `PB`；发布时才快进 `main`。
+- 临时分支遵循 `feature/<name>`、`fix/<name>`、`docs/<name>` 命名，合回 `PB` 后删除。
 - 分支与 `origin` 保持一致：新建分支后建立上游跟踪（`git push -u origin <branch>` 或 `git branch --set-upstream-to`）——**推送本身受 §3.1 门禁约束，需所有者授权**；无网络或未获授权时，用本地 `git config branch.<name>.remote/merge` 建立跟踪即可。
 
 ### 版本化与发布
@@ -34,9 +36,9 @@
 
 **发布前必查版本号**：编译器版本只写在 `ncc/xmake.lua` 顶部的 `nihao_version` 一处（`set_version` 与注入 C 的 `NIHAO_VERSION` 都由它派生，`--version`／帮助横幅／verbose 启动行／`nihao.toml` 脚手架版本全部取该值），上抬版本时改这一处并与 tag 一致（口径见 `VERSIONING_ROADMAP.md` §3.2）。
 **发布判据（每版）**：门禁 `xmake test --all` 全绿（当前基线 ir-c / ir-native 各 52P/0F/18S、0 FAIL）+ 交叉两档 `comm` 零回归；文档与版本号同步。
-**发布流程**：改 `nihao_version` → 全量门禁 + 交叉复跑 → ltree 审核 → 打 tag（附注）→ 推送分支与 tag（各需 ltree 授权）。
+**发布流程**：改 `nihao_version` → 全量门禁 + 交叉复跑 → 快进 `main`（`git merge --ff-only PB`）→ ltree 审核 → 打 tag（附注）→ 推送分支与 tag（各需 ltree 授权）。
 - **共享文档的测试计数写法**（一致性核对 PA-36/PA-38/PA-39 定案，防再次漂移）：共享层文档（`docs/ROADMAP.md` 里程碑表、`README.md`、`docs/STAGE_SUMMARY.md` 等）只写**不随用例增删变化的不变量**（如「全矩阵 0 FAIL」），且必须绑定版本号或日期；某分支某时点的详细 `PASS / FAIL / SKIP` 计数只写在该分支专属 `TODO-PA.md` / `TODO-PB.md` 与 `CHANGELOG.md` 对应版本段。快照类文档须在开头标明快照日期、给出权威指针，不得以现在时陈述现状。
-- 共享文件（lexer/token/sym/type/vis/stdlib/module/linker 等）改动：语法演进**先 `PB` 验证 → 再 `PA` 移植**；bug 修复**先 `PA` → 再同步 `PB`**；双仓库（`NihaoC/ncc/` 发布副本 ↔ 独立活跃仓库 `ncc`）成对提交流程**已废止**（PA-38 定案，见 `docs/STAGE_SUMMARY.md` §1），两条线现由同一仓库的 `PA` / `PB` 分支承载，共享文档跨分支用 `git merge-file` 三方合并同步。
+- 共享文件（lexer/token/sym/type/vis/stdlib/module/linker 等）改动：2026-11-12 A 线物理删除后只剩 `PB` 一条活跃线，历史「语法演进先 `PB` → 再 `PA` 移植、bug 修复先 `PA` → 再同步 `PB`」的跨线流程随之废止；`PA` 于 2026-11-17 冻结为只读，此后不再有跨分支共享文档同步。双仓库（`NihaoC/ncc/` 发布副本 ↔ 独立活跃仓库 `ncc`）成对提交流程已废止（PA-38 定案，见 `docs/STAGE_SUMMARY.md` §1）。
 
 ---
 
@@ -99,9 +101,14 @@ git commit -m "[AI] <描述>"
 # 推送（推送由所有者决定/授权；未授权时停在本地提交）
 git push                        # ← 需所有者授权
 
-# 发布 tag（本地创建免授权，推送需授权）
-git tag -a v1.0.2 -m "release: v1.0.2 ..."
-git push origin v1.0.2          # ← 需所有者授权
+# 发布 tag（创建须 ltree 审核；推送须 ltree 另行授权）
+git tag -a v0.2.0 -m "release: v0.2.0 ..."   # ← 须 ltree 审核后才执行
+git push origin v0.2.0          # ← 需所有者授权
+
+# 发布时快进发布镜像（本地操作，无需授权）
+git switch main
+git merge --ff-only PB
+git switch PB
 
 # 与远端同步（只读，无需授权）
 git fetch
@@ -117,3 +124,5 @@ git pull --rebase
 - **2026-08-31 `v1.0.0` tag（commit `2036fba`，PA-12 TODO 状态更新）**：发布门禁达标（c/native 12P/0F + examples 6/6）；合 `main` 与 tag 推送由 ltree 决定（推送授权门禁见 §3.1）。
 - **2026-09-03 1.0.x 指针语法收敛（`PA`）+ `v1.0.1` tag（commit `75c59cc`）**：移除 `T*` 显式声明与一元 `*` 解引用，解引用统一 `.()`/`.(T)`/`->`；另含 Linux 平台修复（PA-9）、`is` 模式匹配规范定案（仅文档）、§12 指针传递矩阵文档统一。PB 线对应落地提交 `887067a`（2026-09-04）。
 - **2026-09-19 ~ 09-21 `v1.0.2` 发布准备（2026-09-21 打本地附注 tag；2026-09-24 经 ltree 授权，tag 与三支均已推送）**：`PA` 上 v1.0.1 之后的全部提交（`is` 移除 `=>`／PA-13、`is _` 通配符补全／PA-15、循环体外 `is` 前端守卫／PA-18、`do` 体内 `is` IR 侧拒绝／PA-19、`?=` 安全赋值记号移除／PA-20、`?.` / `?(` 安全解引用记号移除＋检查落入 `.()`／PA-21、从属查询与位域偏移内置函数补实现＋三参签名定稿／PA-22、§5.1 指针后缀链与切片补实现／PA-25、`len(x)` 内置函数补实现／PA-27、`else if` 在 IR 前端补支持／PA-28、§7.3 调用方接收规则与 §12.1 传递矩阵矛盾收口（文档定案）／PA-29、结构体成员分隔符文档示例修正（文档-only）／PA-23、`alignof` 改由编译器编译期求对齐并输出字面量／PA-24、§5.1.4／§5.1.5 复合体指针与函数指针示例补实现（切片赋值的字符串右值＋推断声明取成员类型与返回类型）／PA-26、`print`/`puts` 输出语义写入规范 §2.3.1（文档-only）／PA-30、`is` 多子句首个匹配即止在 A 后端实现／PA-16、定长字符数组的字符串初值改数组存储＋容量诊断（BNF v2.8）／PA-31、`flow` 自动释放收紧为只发给堆右值（`no_auto_free` 登记存储来源，修复对静态字面量与 `&x` 的非法 `free`）／PA-32、`flow → flow` 所有权转移在 1.0 线可书写（本语句右值豁免 `moved_src`、失效自下一条语句生效、释放责任移交接收方、冻结源禁止转交）／PA-33、`var {…} char[N]` 多变量声明的定长数组存储＋三条诊断（复用 PA-31 判定并登记 `len()` 容量，BNF v2.10）／PA-34、编译器版本号改由 `xmake.lua` 注入做单一真源（`--version`／帮助／verbose／`nihao.toml` 同源）／PA-35、README 的现在时计数换为 v1.0.2 现值＋权威指针／PA-36、ROADMAP「当前代码架构」重写为真实目录树（消除 `test/`／`arch/`／`myapp/` 幽灵路径与 `前端`／`后端` 假子目录）／PA-37、STAGE_SUMMARY 定性为历史快照＋现在时计数换为权威指针（§1 双仓库同步流程标废止）／PA-38、里程碑表计数写法约定＋PB 验收行去无法溯源的详细计数（本文件 §1 同步新增「共享文档的测试计数写法」）／PA-39、本文件三处失实/失效陈述修正（分支基线改带日期的历史陈述、已废止的双仓库成对提交义务撤下、失效的「§1 发布门禁」引用改指 §3.1）／PA-40、VERSIONING_ROADMAP 双仓库流程三处加废止注＋两处 `56 PASS` 绑定制定时日期／PA-41、中英规范标题编号与层级修正（`is` 模式匹配归入 §6.3，§12.2 及其下级降为 h3/h4，交叉引用无破坏）／PA-42、语法元素表「其他运算符」补 `..` / `...` / `;` / `#` / `::` 五行＋英文表三行畸形 bullet 修复（中英 bullet 计数归一）／PA-43、`ncc/vis.c` 注释的 §12.2 章节号误引改指 §12.1（注释-only，改后复跑全矩阵与基线一致）／PA-44、语法元素表中/英两表的 `=>` / `?=` 行判为 1.0 与 2.0 线的实现差异并结案（PB 待回灌清单登记于 `TODO-PA.md`）／PA-45、本文件与 `ROADMAP.md` 里程碑行的「`main` 已重新对齐为 `PA` 镜像」无日期现在时陈述改为绑定日期＋核对命令，并按该陈述实际把 `PA` 本地合入 `main`（PA-46，文档 + 本地合入，推送仍待授权）／PA-46、`v1.0.2` 以附注 tag（`git tag -a`）打在 `PA` 已验证 tip `18f9c77` 并把 tag 形态与落点约定写入 `VERSIONING_ROADMAP.md` §3.2，tag 仅本地创建未推送／PA-47、`codegen.c` 死代码全链清理、xmake PATH 探测修复、BNF v2.1/v2.2/v2.3/v2.4/v2.5/v2.6/v2.7/v2.8/v2.9/v2.10 收敛、TODO 分层、文档-实现一致性核对、禁止自动推送规则入文档、共享文档 PA↔PB 双向同步）已就绪，v1.0.2 门禁 c/native 各 38P/0F/5S（IR 线 6P/0F/33S，权威详值见 `CHANGELOG.md` v1.0.2 段）；`main` 已于 2026-09-21 由 `PA` 本地合入对齐（PA 侧内容锚点为 PA-45 提交 `e0ecb28` 与本行所在提交；merge commit 见 `git log main -1`，核对命令 `git diff main PA` 应为空）；文档-实现一致性核对 A/B/C 三组已全部收口，D 组三项全部结案：D1（语法元素表 `=>` / `?=` 行归属，经 `git diff PA PB` 判定为 1.0/2.0 线的实现差异并结案，PA-45）、D2（本行的 main 镜像陈述，PA-46）、D3（`v1.0.2` 于 2026-09-21 打本地附注 tag → `18f9c77`，PA-47）——****A/B/C/D 四组全部收口；2026-09-24 经 ltree 授权推送 `PA`/`PB`/`main` 三支（PA-54），同日经 ltree 单独授权补推 `v1.0.2` tag——**分支与 tag 至此均已推送**。同日 tag 之后另完成 **语法设计固定轮（`BNF.md` v2.11 / PA-48，文档-only）**：R1~R19 逐条落地、基本类型收为 16 个（C 风格别名转入词法保留字）、四份设计文档剥离实现状态；同轮实测缺口登记为开放待办 PA-49~PA-53，无代码变更故未重跑门禁。tag 与推送由 ltree 决定（推送授权门禁见 §3.1）。
+- **2026-11-12 A 线退役**：`parser.c` / `cgen.c` / `native.c` 及其共享链物理删除，仓库收敛为 IR-only 单管线；版本归位 `0.2.0`，并启用严格 tag 制度（见 §一「版本化与发布」与 `VERSIONING_ROADMAP.md`）。
+- **2026-11-17 分支模型收敛为「`PB` 开发 + `main` 发布镜像」（ltree 裁定）**：`PA` 冻结为 1.x / A 线历史只读线，`backup-pb-20260916` 归档；**废除 `git worktree`**，已移除 `D:/workspace/workbudy/pbwt`——原因是 worktree 独占分支导致主仓库 `fatal: 'PB' is already used by worktree`，且 worktree 的 `.git` 内 gitdir 为绝对路径，换 WSL / 迁移目录即失效。此后所有操作在主仓库单工作区用 `git switch` 完成；发布时先 `git merge --ff-only PB` 快进 `main`，再由 ltree 审核打 tag（推送另需授权）。
