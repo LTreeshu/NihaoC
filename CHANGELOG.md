@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 帧生长方向结案（PB-81：ltree 对第 33 条选 (c) provenance——帧来源指针的成员偏移改走方向感知寻址；`type_forms` / `void_slot_infer` 入名单；2026-11-18）
+
+- **裁定**：`IR_ADDR` / `IR_ELEM_ADDR` 在汇编档向下、在 ir-c 向上（C 数组）的分歧，选 **(c)**：在 IR 前端区分「帧地址来源」与「堆/池来源」，按来源选寻址方式，不改两发射器的帧布局、不移动既有交叉基线。
+- **机制**：新增变量表 `vfrm[]`（1 = 指针值来自 `&帧变量`）。`&聚合体变量` 的赋值与声明路径置位，`r = s` 这类指针拷贝传播来源；`malloc`/字符串池/参数来源保持 0。新增 `ir_ptr_slot_off(vi, base, off)`：帧来源用 `IR_ELEM_ADDR`（汇编 `sub`、C `add`；方向由后端决定），堆/池来源仍用字节 `ADD`。五处 `->` 成员偏移全部改走该助手。
+- **验证**：`type_forms` 与 `void_slot_infer` 在两交叉档 qemu 实跑由 `arrow typed bad` / `void arrow bad` 变为全部 `ok`，与 `.expect` 逐字节相同 ⇒ 两份入 `IR_SUBSET`，**ir-c / ir-native 57P/0F/13S、0 FAIL**（PASS 55→57、SKIP 15→13）。
+- **交叉变化面**：全 pos 语料 × 两档 `.s` 与改动前逐份对比，**只有 6 份聚合指针用例变化**（`ir_arrow` / `ir_mr` / `ir_nested` / `ir_struct` / `struct_param_prefix` / `type_forms`），其余 120 份逐字节不变；变化的 5 份可执行用例在两档实跑输出全为 `ok`（`type_forms` 见上）。新增 6 份产物即此前编不过的三份用例（`designator_init` / `struct_member_default` / `void_slot_infer`）。
+- **计数**：`IR_SUBSET` **65** / `IR_ONLY` 3 ⇒ pos IR 可编 **68 / 72、缺口 4**；err 覆盖 **25 / 34、缺口 9**。剩余 4 份全部属第 23 条字节级布局家族（`ownerof` / `slice_str_infer` / `str_array_init` / `multi_arr_decl`）。
+
 ### P2 聚合体数组落地（PB-80：`P arr[N]` 声明 / 逐元素默认值 / 指定式与扁平初值 / 元素成员寻址；`array_member_default` 入名单；2026-11-18）
 
 - **缺陷**：`a P[3]` 之后 `a[0].x` 直接报 `unexpected token '[' in expression`——IR 只支持「单个聚合体变量」，聚合体数组既没有声明路径、也没有元素成员寻址；用例里的函数内类型定义（`S union {…}` 写在 `main` 里）同样不认。

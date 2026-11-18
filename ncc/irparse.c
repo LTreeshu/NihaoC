@@ -51,6 +51,11 @@ static int *vndim;
 #define VM_SLOT   0
 #define VM_PTRARR 1
 static int *vmode;
+/* 指针来源（PB-81，待裁 33 选 (c) provenance）：
+ *   1 = 指针值来自帧地址（`&聚合体变量`）——帧槽在汇编档向下生长、在 C 档向上；
+ *   0 = 堆/池地址（malloc、字符串池）或未知（参数/跨函数返回）——两侧都向上。
+ * 只有帧来源的指针做成员偏移时才改用方向感知的 IR_ELEM_ADDR（汇编减、C 加）。 */
+static int *vfrm;
 
 /* PB-72：逻辑长度是否静态可知（A 侧 Symbol.len_known）。ve[] 的 0 既表示「标量」
  * 也表示「空动态字符串」，光看 ve>0 会把后者误判成不可知 ⇒ 单开一张标志表。
@@ -901,6 +906,7 @@ static void var_reset(void)
         vdim = nihao_malloc(g_cs, vn_cap * sizeof(*vdim));
         vndim = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vmode = nihao_malloc(g_cs, vn_cap * sizeof(int));
+        vfrm = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vlen_known = nihao_malloc(g_cs, vn_cap * sizeof(int));
     }
 }
@@ -946,6 +952,7 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
         vdim = nihao_realloc(g_cs, vdim, vn_cap * sizeof(*vdim));
         vndim = nihao_realloc(g_cs, vndim, vn_cap * sizeof(int));
         vmode = nihao_realloc(g_cs, vmode, vn_cap * sizeof(int));
+        vfrm = nihao_realloc(g_cs, vfrm, vn_cap * sizeof(int));
         vlen_known = nihao_realloc(g_cs, vlen_known, vn_cap * sizeof(int));
     }
     vn[vn_count] = name;
@@ -957,6 +964,7 @@ static int var_declare(const char *name, int elems, int type_idx, int vis)
     vtype[vn_count] = 0;
     vndim[vn_count] = 0;
     vmode[vn_count] = VM_SLOT;
+    vfrm[vn_count] = 0;
     vlen_known[vn_count] = (elems > 0) ? 1 : 0;
     for (int k = 0; k < IR_MAX_DIMS; k++) vdim[vn_count][k] = 0;
     int base = -1;
@@ -1363,6 +1371,27 @@ static int ir_chain_needs_new(CompilerState *cs, int vi)
 }
 
 /* 链求值：从变量 vi 出发逐个消费后缀步。返回 1 成功，0 失败（已给诊断）。 */
+/* 指针的成员偏移寻址（PB-81，待裁 33 选 (c) provenance）。
+ * off = 槽偏移。帧来源指针（vfrm[vi]=1）：帧槽在汇编档向下、C 档向上（C 数组），
+ * 用方向感知的 IR_ELEM_ADDR（idx=off、宽 8）；堆/池来源两侧都向上，仍用字节 ADD。 */
+static int ir_ptr_slot_off(int vi, int base, int off)
+{
+    if (off == 0) return base;
+    int addr;
+    if (vfrm[vi]) {
+        int c = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, c, -1, -1, off);
+        addr = ir_new_vreg(F);
+        ir_emit(F, IR_ELEM_ADDR, addr, base, c, 8);
+    } else {
+        int ov = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, ov, -1, -1, (long long)off * 8);
+        addr = ir_new_vreg(F);
+        ir_emit(F, IR_ADD, addr, base, ov, 0);
+    }
+    return addr;
+}
+
 static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
 {
     ch->val = vt[vi];
@@ -1612,15 +1641,7 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
             }
             int base = ir_new_vreg(F);
             ir_emit(F, IR_MOV, base, ch->val, -1, 0);
-            int addr;
-            if (off == 0) {
-                addr = base;
-            } else {
-                int ov = ir_new_vreg(F);
-                ir_emit(F, IR_CONST, ov, -1, -1, off * 8);
-                addr = ir_new_vreg(F);
-                ir_emit(F, IR_ADD, addr, base, ov, 0);
-            }
+            int addr = ir_ptr_slot_off(vi, base, off);   /* PB-81：按指针来源选方向 */
             int v = ir_new_vreg(F);
             /* PB-76(b)：标量成员按成员类型窄读（符号扩展）；位域保持 8 字节 + AND */
             {
@@ -2613,16 +2634,8 @@ static int ir_primary(CompilerState *cs)
             }
             int base = ir_new_vreg(F);
             ir_emit(F, IR_MOV, base, vt[vi], -1, 0);    /* p 槽值 = 目标地址（MOV 勿 LOAD） */
-            int addr;
-            if (off == 0) {
-                addr = base;
-            } else {
-                /* off 为槽偏移，IR_ADD 是字节加法 → 乘 8（与 IR_ADDR 槽语义区分） */
-                int ov = ir_new_vreg(F);
-                ir_emit(F, IR_CONST, ov, -1, -1, off * 8);
-                addr = ir_new_vreg(F);
-                ir_emit(F, IR_ADD, addr, base, ov, 0);
-            }
+            /* off 为槽偏移：帧来源指针用方向感知的 ELEM_ADDR，堆/池来源用字节 ADD（PB-81） */
+            int addr = ir_ptr_slot_off(vi, base, off);
             int vr = ir_new_vreg(F);
             /* PB-76(b)：标量成员按成员类型窄读（符号扩展）；位域成员保持 8 字节读 + AND */
             {
@@ -4035,6 +4048,7 @@ static void ir_stmt_impl(CompilerState *cs)
                             int addr = ir_new_vreg(F);
                             ir_emit(F, IR_ADDR, addr, vt[avi], -1, 0);
                             ir_emit(F, IR_MOV, vt[vi], addr, -1, 0);
+                            vfrm[vi] = 1;   /* PB-81：指针值来自帧地址 */
                             skip_newlines(cs);
                             return;
                         }
@@ -4051,12 +4065,18 @@ static void ir_stmt_impl(CompilerState *cs)
                 vlen_known[vi] = 1;   /* PB-72 */
                 if (fresh) vetyp[vi] = 8;
             }
+            int vfrm_src = -1;      /* PB-81：`r = s` 的指针来源传播 */
+            if (cur_tok(cs) == TOK_IDENTIFIER) {
+                int s = var_find(cs->parser.lex->tok_str);
+                if (s >= 0) vfrm_src = vfrm[s];
+            }
             int vr = ir_expr(cs);
             /* PB-1 补缺（2026-09-01）：窄整数目标此前只在「声明初始化」路径经
              * ir_coerce 截断，普通赋值直接落槽 —— `b u8 = 0; b = 300` 在 IR 后端
              * 得到 300 而 A 方案（C 语义）得到 44。此处统一补目标类型协调。 */
             vr = ir_coerce(vr, vtype[vi]);
             ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
+            if (vfrm_src > 0) vfrm[vi] = 1;
             skip_newlines(cs);
         } else if (nt == TOK_PLUS_ASSIGN || nt == TOK_MINUS_ASSIGN ||
                    nt == TOK_STAR_ASSIGN || nt == TOK_SLASH_ASSIGN ||
@@ -4293,27 +4313,14 @@ static void ir_stmt_impl(CompilerState *cs)
                         /* 位域复合赋值：基于位域值运算（LOAD+AND 取低 N 位） */
                         int caddr = ir_new_vreg(F);
                         ir_emit(F, IR_MOV, caddr, vt[vi], -1, 0);
-                        if (off > 0) {
-                            int ov = ir_new_vreg(F);
-                            ir_emit(F, IR_CONST, ov, -1, -1, off * 8);
-                            int a2 = ir_new_vreg(F);
-                            ir_emit(F, IR_ADD, a2, caddr, ov, 0);
-                            caddr = a2;
-                        }
+                        if (off > 0)
+                            caddr = ir_ptr_slot_off(vi, caddr, off);   /* PB-81 */
                         cur = ir_bf_load(caddr, bfbits);
                     } else {
-                        /* 普通成员当前值：LOAD(p 值 + off*8) */
+                        /* 普通成员当前值：LOAD(p 值 + off*8)，方向按来源（PB-81） */
                         int base = ir_new_vreg(F);
                         ir_emit(F, IR_MOV, base, vt[vi], -1, 0);
-                        int caddr;
-                        if (off == 0) {
-                            caddr = base;
-                        } else {
-                            int ov = ir_new_vreg(F);
-                            ir_emit(F, IR_CONST, ov, -1, -1, off * 8);
-                            caddr = ir_new_vreg(F);
-                            ir_emit(F, IR_ADD, caddr, base, ov, 0);
-                        }
+                        int caddr = ir_ptr_slot_off(vi, base, off);
                         cur = ir_new_vreg(F);
                         ir_emit(F, IR_LOAD, cur, caddr, -1,
                                 ir_load_width_imm(agg_types[ti].mscode[fi]));   /* PB-76(b) */
@@ -4321,18 +4328,10 @@ static void ir_stmt_impl(CompilerState *cs)
                     nv = ir_new_vreg(F);
                     ir_emit(F, aop, nv, cur, b, 0);
                 }
-                /* STORE 到 p 值 + off*8 */
+                /* STORE 到 p 值 + off*8（方向按来源，PB-81） */
                 int base = ir_new_vreg(F);
                 ir_emit(F, IR_MOV, base, vt[vi], -1, 0);
-                int addr;
-                if (off == 0) {
-                    addr = base;
-                } else {
-                    int ov = ir_new_vreg(F);
-                    ir_emit(F, IR_CONST, ov, -1, -1, off * 8);
-                    addr = ir_new_vreg(F);
-                    ir_emit(F, IR_ADD, addr, base, ov, 0);
-                }
+                int addr = ir_ptr_slot_off(vi, base, off);
                 if (bfbits > 0) {
                     ir_bf_store(addr, nv, bfbits);
                 } else {
@@ -4791,6 +4790,7 @@ static void ir_stmt_impl(CompilerState *cs)
                                 } else if (vty[avi] < 0) {
                                     pt[vi] = PT_SCALAR(vtype[avi]);
                                 }
+                                vfrm[vi] = 1;   /* PB-81：帧地址来源 */
                             }
                         }
                         lx2->peek_valid = 0;

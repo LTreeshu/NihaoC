@@ -97,7 +97,7 @@
 | `ownerof` | `ir: unexpected token '.' in expression`（`&boy.name`）+ `unexpected token 'structof'` / `expected '{', got '('` | **G3**（PB-70 改归，原记 G1「`.()` 后缀链形态」） | **原归类被第一手复测推翻**：真卡点是 `structof` / `holdof` / `unionof` / `bitoffsetof` 四个从属查询内置 + `&聚合体.成员`，全都要成员真实偏移（PB-33 的 P2 当年就明确让 IR 保持拒绝）。与后缀链无关 |
 | `slice_str_infer` | `ir: member 'name' element 8 lies beyond the IR 8-byte slot`（19:27）+ `slice assignment expects { v0, v1, ... }` + `'.()' dereference takes a scalar type or nothing, not 'Say'` | **G3**（PB-70 改归，原记 G1） | 首错就是**数组成员越首槽的专属诊断**（PB-66 立的那道护栏），另卡聚合体 `.(Say)`。不是推断语法缺口 |
 | ~~`stmt_terminators`~~ | ~~`ir: unsupported top-level token ';'`~~（11 条） | G1→放行 | **PB-70 已解**：语句尾终止符 + 空语句 + 顶层空声明 + `return;`，四档输出与 `.expect` 逐字节相同，已入 `IR_SUBSET`。**边界**：本份的 `Cfg struct { a i32 b i32 }` 在 IR 只占 1 槽，产物 C 里 `p.b = 2` 写的是**无关临时槽 `&t1`**，输出恰好为 3 只因 t1 未被复用 ⇒ 进名单是因为输出相同，不是布局已定案（第 23 条） |
-| `type_forms` | 改前 `ir: unexpected token 'i32' in expression`（括号类型）；**PB-70 后能编能跑**，四条断言里 `arrow typed` 仍打 `bad` | **G3**（PB-70 改归，原记 G1） | 括号类型 `(i32)` / `(i32)[3]`、一元 `+`、`q.()` 三处 PB-70 已补齐；**剩下的唯一卡点是 `r->y` / `pt.y`**——聚合体第二成员越出 IR 的 1 个 8 字节槽 ⇒ 第 23 条。**刻意不入名单**（入去就是当场红）。**2026-11-18（PB-76）更新**：聚合体整块连续槽落地后 ir-c / ir-native 已打 `ok` 且与 `.expect` 相同；两交叉档仍 `bad`（帧方向，待裁第 33 条）⇒ 仍不入名单，闸门换成第 33 条 |
+| `type_forms` | 改前 `ir: unexpected token 'i32' in expression`（括号类型）；**PB-70 后能编能跑**，四条断言里 `arrow typed` 仍打 `bad` | **G3**（PB-70 改归，原记 G1） | 括号类型 `(i32)` / `(i32)[3]`、一元 `+`、`q.()` 三处 PB-70 已补齐；**剩下的唯一卡点是 `r->y` / `pt.y`**——聚合体第二成员越出 IR 的 1 个 8 字节槽 ⇒ 第 23 条。**刻意不入名单**（入去就是当场红）。**2026-11-18（PB-76）更新**：聚合体整块连续槽落地后 ir-c / ir-native 已打 `ok` 且与 `.expect` 相同；两交叉档仍 `bad`（帧方向，待裁第 33 条）⇒ 仍不入名单，闸门换成第 33 条。**2026-11-18（PB-81）已解**：第 33 条按 (c) provenance 结案后两交叉档转 `ok`，入 `IR_SUBSET` |
 | `void_slot_infer` | `ir: 'q' is not a pointer to aggregate (assign &var first)` + `unexpected token '->'`（28:8 / 29:8） | **G3**（PB-70 改归，原记 G1） | 真卡点是 `q void = &pt`（pt 是聚合体）的**聚合体指针跟踪**与 `q->x` / `q->y`；`q->y` 是第二成员、越出 1 槽。裸 `.()` / 空下标 `[]` 那几组 PB-68 后已能过 |
 
 **桶分布**：G1 **14**、G2 **5**、G3 **2**（G4 在 pos 侧本轮为 0——两份「看似可提升」的 `alignof_builtin` 与
@@ -199,6 +199,10 @@ G4 在 pos 侧仍为 0（`alignof_builtin` 与 `is_no_fallthrough` 四档输出�
 （各 2 份帧护栏拒），各 **54 份 AGREE**、**2 份 CRASH_139**（`ir_str` / `str_array_init`）。
 把这 2 份用 **HEAD 版 `irparse.c`**（PB-68 之前）重新出码、链接、实跑，**同样 CRASH_139**
 ⇒ 既有缺陷，非本轮引入。扫脚本与产物在 `ncc/build/p68x/`（gitignore）。
+
+**（2026-11-18 结案，PB-81）**：ltree 裁 **选 (c) provenance**——见 §15。前端变量表 `vfrm[]` 区分「帧地址来源」
+与「堆/池来源」，成员偏移对帧来源改用方向感知的 `IR_ELEM_ADDR`；两发射器帧布局与既有交叉基线不动。
+本节隐含的 (a)/(b) 两档随之作废。
 
 ## 6. 计数更正后的排期读数（2026-11-12，PB-69）
 
@@ -425,3 +429,22 @@ C 标量（`int64_t p; int64_t t1;`），`&p + 8` 落到两者之间的栈空隙
 **计数**：`IR_SUBSET` **63** / `IR_ONLY` 3 ⇒ pos **66/72、缺口 6**；err **25/34、缺口 9**。
 **剩余 6 份**：`type_forms` / `void_slot_infer`（待裁 33）、`ownerof` / `slice_str_infer` /
 `str_array_init` / `multi_arr_decl`（第 23 条字节布局家族）。**⇒ `irparse.c` 里不需要裁定的活再次清零。**
+
+## 15. PB-81 实测：帧生长方向结案（第 33 条，ltree 裁 (c) provenance；2026-11-18）
+
+**裁定**：不动两发射器的帧布局（会移动全部交叉 `.s` 基线），改为在 IR 前端区分指针来源。
+
+**落地**：变量表 `vfrm[]`（1 = 指针值来自 `&帧变量`）。置位点：`&聚合体变量` 的赋值路径与声明路径
+（PB-78 那块）、`r = s` 的指针拷贝传播；`malloc` / 字符串池 / 参数来源保持 0。新增
+`ir_ptr_slot_off(vi, base, off)`：帧来源发 `IR_ELEM_ADDR`（idx=槽偏移、宽 8；汇编 `sub`、C `add`），
+堆/池来源仍发字节 `ADD`。五处 `->` 成员偏移（链读、primary 读、语句复合读两处、语句写）全部改道。
+
+**验证**：`type_forms` / `void_slot_infer` 两交叉档 qemu 实跑从 `bad` 变全 `ok` ⇒ 入 `IR_SUBSET`；
+门禁 **57P/0F/13S、0 FAIL**。**交叉变化面**：全 pos × 两档 `.s` 对比，**仅 6 份聚合指针用例变化**
+（`ir_arrow` / `ir_mr` / `ir_nested` / `ir_struct` / `struct_param_prefix` / `type_forms`），其余 120 份
+逐字节不变；变化的 5 份可执行用例两档实跑全 `ok`。新增 6 份产物 = 此前编不过的 `designator_init` /
+`struct_member_default` / `void_slot_infer`。
+
+**计数**：`IR_SUBSET` **65** / `IR_ONLY` 3 ⇒ pos **68/72、缺口 4**；err **25/34、缺口 9**。
+**剩余 4 份全部为第 23 条字节级布局家族**（`ownerof` / `slice_str_infer` / `str_array_init` /
+`multi_arr_decl`），ltree 已对「解锁」表态（2026-11-18），下一轮起按字节级布局推进。
