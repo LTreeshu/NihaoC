@@ -331,6 +331,14 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                         }
                     }
                     break;
+                case IR_ADDR_LO:
+                    /* PB-82：紧凑字节块首地址 = &name[0]（单槽时即 &name） */
+                    cb_put(&b, "    %s = (int64_t)(intptr_t)&%s;
+",
+                           vrid[in->dst],
+                           (arrid && in->a < f->vreg_count && arrid[in->a])
+                               ? arrid[in->a] : vrid[in->a]);
+                    break;
                 case IR_ELEM_ADDR:
                     /* 元素地址 = 基址 + idx*width（imm=宽度，0 兼容=8） */
                     cb_put(&b, "    %s = %s + %s * %d;\n",

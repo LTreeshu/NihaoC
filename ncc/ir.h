@@ -40,6 +40,9 @@ typedef enum {
                      * ir-c 落成一条 C 数组并把成员 vreg 映射到 name[k]，
                      * 汇编后端与 ALLOCA 一样跳过（槽由 vreg 编号自然给出） */
     IR_ADDR,        /* dst = address of local variable vreg a */
+    IR_ADDR_LO,     /* PB-82 紧凑数组块首地址（字节块最低地址）：dst = block_start(a)，
+                     * imm = 块槽数；ir-c = &name[0]，汇编 = 最低槽 s0 - stride*(a+imm)。
+                     * 块内字节一律按 +k 向上寻址（与 C 字符串/数组语义一致，方向无关）。 */
     IR_ELEM_ADDR,   /* dst = &base[idx]（元素地址，后端按自身布局方向） */
     IR_LOAD,        /* dst = *(a)                     */
     IR_STORE,       /* *(a) = b                       */

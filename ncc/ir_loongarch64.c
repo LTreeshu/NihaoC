@@ -209,6 +209,13 @@ static void la_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
                    tb->slot_stride * (in->a + (int)in->imm + 1));
             la_store_a0(b, in->dst, tb);
             break;
+        case IR_ADDR_LO:
+            /* PB-82：紧凑字节块首地址（块最低槽）；块内字节按 +k 向上寻址 */
+            nb_put(b, "  addi.d $a0, $s0, -%d
+",
+                   tb->slot_stride * (in->a + (int)in->imm));
+            la_store_a0(b, in->dst, tb);
+            break;
         case IR_ELEM_ADDR:
             /* 元素地址 = 基址 - idx*width（槽向下；imm=宽度，0 兼容=8） */
             nb_put(b, "  ld.d $a0, ");
