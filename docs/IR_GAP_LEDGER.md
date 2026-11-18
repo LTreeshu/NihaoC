@@ -488,3 +488,19 @@ qemu 实跑同输出；入/升名单后门禁 **62P/0F/9S、0 FAIL**。
 
 **计数**：`IR_SUBSET` **69** / `IR_ONLY` 3 ⇒ **pos IR 可编 72/72、缺口 0**；err **25/34、缺口 9**
 （E-a 3 文案 + E-b 6 依赖 A 侧判据）。**pos 线追平清零；后续工作转向 err 缺口、交叉覆盖与性能项。**
+
+## 18. PB-84 实测：err 缺口清零（2026-11-18）
+
+**9 份逐份复测后分两类**：
+- **已报错、文案不对齐（4）**：`cooking_bare_var`（裸 var-decl 从「引用时才 undeclared」改为即时
+  `unsupported cooking item`，只跳该 item）；`is_dangling_range` / `is_empty_range`（文案对齐既有
+  `.expect`）；`void_member_unknown`（通用 void 指针 `->` 专属文案 + 吞行，消除级联）。
+- **静默通过、补诊断（5）**：`structof_bad_member`（既有 `no member` 直接入名单）；`deref_bounds`
+  （`.()` 显式宽 > 分配宽）；`flow_move_frozen`（冻结指针再转移给 flow/static）；`slice_str_overflow`
+  （切片字符串按常量边界校验容量，数组侧与链侧两路）；`default_init_overflow`（聚合数组默认值展开
+  1024 初始化点守卫，与 A 侧 `DEFAULT_INIT_BUF` 同口径同文案）。
+
+**验证**：9 份 rc=1 / 无产物 / 命中 `.expect`；交叉档抽验同文案；全部入 `IR_ERR_COVERED`。
+**门禁：71P/0F/0S ×2、0 FAIL**（PASS 62→71、SKIP 9→0）⇒ **pos 72/72 + err 34/34，全语料零跳过、
+零失败**。保真口径：`default_init_overflow` 的守卫是**实现资源上限**（A 侧文本缓冲的等价物），
+不是语言语义拒绝——若 ltree 认为 2.0 应支持任意规模展开，需要另裁并调整守卫阈值/文案。

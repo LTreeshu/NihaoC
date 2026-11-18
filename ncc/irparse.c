@@ -122,6 +122,13 @@ static void ir_vis_check_assign(CompilerState *cs, int dst_vi, int src_vi)
                     vn[src_vi]);
         return;
     }
+    if (vstate[src_vi] == IR_VS_FROZEN &&
+        (vvis[dst_vi] == VIS_FLOW || vvis[dst_vi] == VIS_STATIC)) {
+        /* PB-84：被借用的源不能再转移所有权（flow/static 接收） */
+        nihao_error(cs, "cannot transfer ownership of '%s': it is frozen by an active borrow",
+                    vn[src_vi]);
+        return;
+    }
     if (ir_vis_transfer(vvis[src_vi], vvis[dst_vi])) {
         nihao_error(cs, "cannot assign %s (visibility %s) to %s (%s): "
                         "target lifetime shorter than source",
@@ -925,8 +932,15 @@ static void ir_agg_decl(CompilerState *cs, const char *name, int ti, int vis)
         /* PB-79：无初值 → 定义处成员默认值（A 侧 PA-49 / PA-56 同口径）；
          * PB-80：聚合体数组逐元素回填 */
         if (nd > 0) {
-            for (int e = 0; e < total; e++)
-                ir_agg_defaults(cs, vi, ti, e * by);
+            /* PB-84：成员默认值逐项展开的资源守卫（与 A 侧 DEFAULT_INIT_BUF 同口径）——
+             * 超过 1024 个成员初始化点即报错，而不是产出超大展开。 */
+            if ((long long)total * (a->mcount > 0 ? a->mcount : 1) > 1024) {
+                nihao_error(cs, "ir: aggregate initializer is too large to expand "
+                                "its member defaults");
+            } else {
+                for (int e = 0; e < total; e++)
+                    ir_agg_defaults(cs, vi, ti, e * by);
+            }
         } else {
             ir_agg_defaults(cs, vi, ti, 0);
         }
@@ -1628,6 +1642,8 @@ typedef struct {
     int width;
     int is_slice;
     int agg_ti;     /* PB-83：`.(AggType)` 定下的「指向聚合体」类型索引（-1=无） */
+    int slice_lo;   /* PB-84：切片左界（常量；-1=未知） */
+    int slice_hi;   /* PB-84：切片右界（常量；-1=未知） */
 } IrChain;
 
 /* 后缀链分组扫描：数出后缀「组」数，并标记新形态。
@@ -1746,6 +1762,8 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
     ch->width = 8;
     ch->is_slice = 0;
     ch->agg_ti = -1;
+    ch->slice_lo = -1;
+    ch->slice_hi = -1;
 
     int base_vreg = vt[vi];   /* 当前寻址基址 */
     int ptr_base = 0;         /* 1 = 基址取「指针值」，0 = 取帧槽地址 */
@@ -1807,7 +1825,10 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
             if (cur_tok(cs) == TOK_RANGE) {
                 /* arr[..hi]：省略起点的切片 → 基址 */
                 next_tok(cs);
-                ir_expr(cs);
+                int hi_v = ir_expr(cs);
+                long long hv;
+                ch->slice_lo = 0;
+                ch->slice_hi = vreg_const(F, hi_v, &hv) ? (int)hv : -1;
                 expect(cs, TOK_RBRACKET);
                 int addr = ir_elem_addr(cs, vi, base_vreg, 0, ch->width, ptr_base);
                 ch->addr = addr;
@@ -1823,7 +1844,10 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
             if (cur_tok(cs) == TOK_RANGE) {
                 /* 切片 arr[lo..hi] → 元素地址（值即地址） */
                 next_tok(cs);
-                ir_expr(cs);
+                int hi_v = ir_expr(cs);
+                long long lov, hiv;
+                ch->slice_lo = vreg_const(F, idx, &lov) ? (int)lov : -1;
+                ch->slice_hi = vreg_const(F, hi_v, &hiv) ? (int)hiv : -1;
                 expect(cs, TOK_RBRACKET);
                 int addr = ir_elem_addr(cs, vi, base_vreg, idx, ch->width, ptr_base);
                 ch->addr = addr;
@@ -2219,8 +2243,15 @@ static void ir_chain_assign(CompilerState *cs, int vi)
     }
     next_tok(cs);
     if (ch.is_slice && cur_tok(cs) == TOK_STRING_LITERAL) {
-        /* PB-83：切片右值是字符串字面量 → 逐字节复制（含 NUL） */
+        /* PB-83：切片右值是字符串字面量 → 逐字节复制（含 NUL）；PB-84：按容量校验 */
         const char *lit = nihao_strdup(g_cs, cs->parser.lex->tok_str);
+        if (ch.slice_lo >= 0 && ch.slice_hi >= ch.slice_lo) {
+            int cap = ch.slice_hi - ch.slice_lo + 1;
+            int need = (int)strlen(lit) + 1;
+            if (need > cap)
+                nihao_error(cs, "ir: string needs %d bytes with terminator, slice holds %d",
+                            need, cap);
+        }
         next_tok(cs);
         ir_copy_literal(cs, ch.addr, lit);
         skip_newlines(cs);
@@ -2315,6 +2346,17 @@ static int ir_scalar_code_of_token(TokenType tt)
 /* PB-75(b)：指针解引用的窄标量读宽——填进 IR_LOAD 的 imm：
  *   正 w = 零扩展读 w 字节（u8/u16/u32）；负 -w = 符号扩展读 w 字节（i8/i16/i32）；
  *   0 = 8 字节读（i64/f64/f32，保持旧行为）。读后值域已是正确 64 位，后续 ir_coerce 幂等。 */
+/* PB-84：标量类型码 → 字节宽（读越界诊断用） */
+static int ir_code_bytes(int code)
+{
+    switch (code) {
+        case 2: case 5: return 1;
+        case 3: case 6: return 2;
+        case 4: case 7: case 8: return 4;
+        default: return 8;
+    }
+}
+
 static int64_t ir_load_width_imm(int code)
 {
     switch (code) {
@@ -3093,6 +3135,13 @@ static int ir_primary(CompilerState *cs)
                          (PT_IS_SCALAR(pt[vi]) ? PT_SCALAR_CODE(pt[vi]) : -1);
                 ir_emit(F, IR_LOAD, vr, addr, -1, ir_load_width_imm(rc));
             }
+            if (tcode >= 0 && PT_IS_SCALAR(pt[vi])) {
+                int pc0 = PT_SCALAR_CODE(pt[vi]);
+                if (ir_code_bytes(tcode) > ir_code_bytes(pc0)) {
+                    nihao_error(cs, "ir: '.()' dereference reads %d bytes from a %d-byte allocation",
+                                ir_code_bytes(tcode), ir_code_bytes(pc0));
+                }
+            }
             if (tcode >= 0) {
                 /* 宽度按 T：浮点标记照 T，窄整型走 TRUNC（与声明处一致） */
                 if (tcode == 1 || tcode == 8) ir_set_double(vr);
@@ -3110,7 +3159,13 @@ static int ir_primary(CompilerState *cs)
             const char *fname = cs->parser.lex->tok_str;
             next_tok(cs);
             if (pt[vi] < 0) {
-                nihao_error(cs, "ir: '%s' is not a pointer to aggregate (assign &var first)", name);
+                if (vptr[vi])
+                    nihao_error(cs, "ir: cannot access a member of the generic 'void' pointer");
+                else
+                    nihao_error(cs, "ir: '%s' is not a pointer to aggregate (assign &var first)", name);
+                /* 吞掉本行剩余 token，避免 '->' 级联误报 */
+                while (cur_tok(cs) != TOK_NEWLINE && cur_tok(cs) != TOK_RBRACE &&
+                       cur_tok(cs) != TOK_EOF) next_tok(cs);
                 return ir_new_vreg(F);
             }
             int ti = pt[vi];
@@ -3831,7 +3886,10 @@ static void ir_cooking(CompilerState *cs)
                 }
             }
         } else {
-            next_tok(cs);       /* 其他编译期 item（cooking-call 等）跳过 */
+            /* PB-84：不支持的 cooking item（如裸 var-decl）即时报错并只跳过该 item */
+            int cline = cs->parser.lex->line_num;
+            nihao_error(cs, "ir: unsupported cooking item");
+            ir_skip_cooking_item(cs, cline);
         }
         skip_newlines(cs);
     }
@@ -4321,13 +4379,13 @@ static void ir_stmt_impl(CompilerState *cs)
                 long long hi = 0;
                 if (!ir_is_int(cs, &hi)) {
                     /* PB-27.2：畸形模式 `is 5..` 后必须跟整数字面量，否则报错 */
-                    nihao_error(cs, "ir: bad 'is' pattern (expected integer after '..')");
+                    nihao_error(cs, "ir: invalid 'is' range: expected an integer upper bound");
                     skip_newlines(cs);
                     return;
                 }
                 /* PB-27.4：反向范围 `is 5..2` 编译期检查 lo<=hi，否则报错 */
                 if (lo > hi) {
-                    nihao_error(cs, "ir: invalid range in 'is' pattern (%lld..%lld, lo > hi)", lo, hi);
+                    nihao_error(cs, "ir: empty 'is' range (%lld..%lld, lo > hi)", lo, hi);
                     skip_newlines(cs);
                     return;
                 }
@@ -4828,7 +4886,12 @@ static void ir_stmt_impl(CompilerState *cs)
                 return;
             }
             if (pt[vi] < 0) {
-                nihao_error(cs, "ir: '%s' is not a pointer to aggregate (assign &var first)", name);
+                if (vptr[vi])
+                    nihao_error(cs, "ir: cannot access a member of the generic 'void' pointer");
+                else
+                    nihao_error(cs, "ir: '%s' is not a pointer to aggregate (assign &var first)", name);
+                while (cur_tok(cs) != TOK_NEWLINE && cur_tok(cs) != TOK_RBRACE &&
+                       cur_tok(cs) != TOK_EOF) next_tok(cs);
                 skip_newlines(cs);
                 return;
             }
@@ -5402,8 +5465,16 @@ static void ir_stmt_impl(CompilerState *cs)
                 expect(cs, TOK_RBRACKET);
                 expect(cs, TOK_ASSIGN);
                 if (cur_tok(cs) == TOK_STRING_LITERAL) {
-                    /* PB-83：切片字符串赋值（数组侧，逐字节） */
+                    /* PB-83：切片字符串赋值（数组侧，逐字节）；PB-84：容量校验 */
                     const char *lit = nihao_strdup(g_cs, cs->parser.lex->tok_str);
+                    long long lov, hiv;
+                    if (vreg_const(F, idx, &lov) && vreg_const(F, hi, &hiv)) {
+                        int cap = (int)(hiv - lov) + 1;
+                        int need = (int)strlen(lit) + 1;
+                        if (need > cap)
+                            nihao_error(cs, "ir: string needs %d bytes with terminator, "
+                                            "slice holds %d", need, cap);
+                    }
                     next_tok(cs);
                     int d = ir_elem_addr(cs, vi, vt[vi], idx, ir_elem_stride(vi),
                                          vetyp[vi] == 8);

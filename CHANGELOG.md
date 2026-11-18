@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### err 缺口清零（PB-84：九份 err 诊断补齐——cooking/`is` 文案/void 成员/越界读/冻结转移/切片容量/默认值守卫；**门禁 71P/0F/0S**；2026-11-18）
+
+- **已报错但文案不对齐（4 份）**：`cooking_bare_var` 的裸 `<var-decl>` 改为即时报 `unsupported cooking item`（只跳该 item）；`is_dangling_range` / `is_empty_range` 文案对齐为 `invalid 'is' range: expected an integer upper bound` / `empty 'is' range (...)`；`void_member_unknown` 对通用 `void` 指针的 `->` 改报 `cannot access a member of the generic 'void' pointer` 并吞掉本行剩余 token（消除 `->` 级联误报）。
+- **此前静默通过（5 份）**：`structof_bad_member` 既有 `no member` 直接入名单；`deref_bounds` 对 `.()` 显式类型宽大于分配宽给 `reads N bytes from a M-byte allocation`；`flow_move_frozen` 对**被借用的冻结指针**再转移给 flow/static 给 `cannot transfer ownership`；`slice_str_overflow` 切片字符串赋值按常量边界校验容量（`string needs N bytes with terminator, slice holds M`，数组侧与链侧两路）；`default_init_overflow` 给聚合数组的成员默认值展开加 1024 初始化点资源守卫（与 A 侧 `DEFAULT_INIT_BUF` 同口径，同一文案）。
+- **验证**：9 份逐份 `rc=1`、无产物、stderr 命中 `.expect`；两交叉档抽验同文案。全部入 `IR_ERR_COVERED` ⇒ **err 覆盖 34/34**。
+- **门禁**：`ir-c` / `ir-native` **71P/0F/0S、0 FAIL**（PASS 62→71、SKIP 9→0）。**pos 72/72 + err 34/34：全语料零跳过、零失败。**
+
 ### 第 23 条收官（PB-83：聚合体内字节布局 + 四个从属查询内置 + 切片字符串赋值；`ownerof` / `slice_str_infer` 入名单，**pos 覆盖 72/72**；2026-11-18）
 
 - **布局**：`IrAggType` 的成员偏移改为 **C 布局字节偏移**（新增 `align` / `bytes` / `mbit` 位偏移 / `misarr`），`moff` 按成员对齐排布、数组成员占 `len*es` 字节、动态 `char[]` 成员按 8 字节指针、位域按同类型单元打包（`u8:4`+`u8:4` 共用字节 1，`i32` 对齐到 4，`u8:3` 单位到字节 8）。`mslots = ceil(bytes/8)` 只用于帧分配。

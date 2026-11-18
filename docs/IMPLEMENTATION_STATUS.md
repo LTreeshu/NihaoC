@@ -2,7 +2,7 @@
 
 本文档记录 NihaoC 语言规范（Chinese.md / English.md / BNF.md）中各项语义与编译器（`ncc/`）实际实现的对应状态。
 
-> 更新日期：2026-11-18（PB-76 聚合整块连续槽；PB-78 `void` 指针声明处指向类型；PB-79 成员默认值 + 指定式初值；PB-80 聚合体数组；PB-81 第 33 条按 (c) provenance 结案；PB-82 定长 char 数组字节紧凑；PB-83 聚合体内字节布局收官，pos 72/72）。此前本文件含大量 A 线（`parser.c`/`cgen.c`/`native.c`）
+> 更新日期：2026-11-18（PB-76 聚合整块连续槽；PB-78 `void` 指针声明处指向类型；PB-79 成员默认值 + 指定式初值；PB-80 聚合体数组；PB-81 第 33 条按 (c) provenance 结案；PB-82 定长 char 数组字节紧凑；PB-83 聚合体内字节布局收官，pos 72/72；PB-84 err 缺口清零，门禁 71P/0F/0S）。此前本文件含大量 A 线（`parser.c`/`cgen.c`/`native.c`）
 > 实现表与源码行号锚点，随 A 线物理删除全部作废，已整体重写为下方 IR-only 简明版。历史细节见 `CHANGELOG.md`。
 >
 > 本文件是**实现状态层**文档：`BNF.md` / `Chinese.md` / `English.md` / 两份语法元素表只写设计、不写落地；状态一律记在这里或 `TODO.md`。
@@ -13,9 +13,9 @@
 |---|---|
 | 管线 | 单一 IR 管线：`irparse.c`（前端）→ `ir.c`（中间层）→ 出码 |
 | 后端 | `ir-c`（默认）、`ir-native`（本机 x86-64 上等价 `ir-c`）、`ir-riscv64`、`ir-loongarch64`（交叉 `.s`） |
-| 门禁 | `ir-c` **62P/0F/9S**、`ir-native` **62P/0F/9S**、0 FAIL、比对 36 格（2 后端） |
+| 门禁 | `ir-c` **71P/0F/0S**、`ir-native` **71P/0F/0S**、0 FAIL、比对 36 格（2 后端） |
 | pos 覆盖 | IR 可编 **72 / 72**（`IR_SUBSET` 69 + `IR_ONLY` 3）；**缺口 0** |
-| err 覆盖 | IR 覆盖 **25 / 34**（`IR_ERR_COVERED`）；缺口 9 份（E-a 3 文案 + E-b 6 依赖 A 侧判据） |
+| err 覆盖 | IR 覆盖 **34 / 34**（`IR_ERR_COVERED`）；**缺口 0** |
 | 机器码发射器 | `ir-riscv64` / `ir-loongarch64` 两档（交叉验证：60 链接 / 59 AGREE / 2 既有 CRASH）；`ir-riscv32` / `ir-arm` 未开工 |
 
 ## 2. 核心实现锚点
@@ -41,13 +41,13 @@
 仍要真实字节偏移。两交叉档还存在**帧生长方向分歧**（待裁第 33 条）：汇编槽向下生长，`&p + 8*k` 向高地址走，
 `type_forms` 因此在交叉档打 `bad`（ir-c / ir-native 已正确）。明细见 `docs/IR_GAP_LEDGER.md` §11。
 
-**pos 线已清零**；剩余边界：
+**pos 与 err 语料已全覆盖（72/72、34/34）**；剩余边界：
 
 | 项 | 说明 |
 |---|---|
-| err 缺口 9 份 | E-a 3（诊断文案与 A 侧不同源，属历史裁定口径）+ E-b 6（判据依赖 A 后端行为） |
 | 交叉帧护栏 | `deref_slice` / `array_member_default` 的 `main` 帧超 2047，两交叉档出码被拒（既有上限，需寄存器分配/次级基址） |
 | 聚合值跨函数 | sret 与按值参数走字节拷贝/展平；嵌套聚合参数按顶层成员序展平（未做深嵌套递归验证） |
+| 默认值展开守卫 | 聚合数组的成员默认值展开**超过 1024 个初始化点**即拒绝（`default_init_overflow`；等价 A 侧 `DEFAULT_INIT_BUF` 的实现资源上限，可按裁定放宽） |
 
 9 份 err 缺口：E-a 3（诊断文案不同源）、E-b 6（断在解析层、依赖 pos 侧布局）。
 

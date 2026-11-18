@@ -587,6 +587,12 @@
   - **验证**：三份与 `.expect` 相同、两交叉档 qemu 同输出；门禁 **62P/0F/9S、0 FAIL**；`ir_bitfield` 补 `.expect` 升 PASS 档。
   - **计数**：`IR_SUBSET` **69** / `IR_ONLY` 3 ⇒ **pos 72/72、缺口 0**；err 25/34、缺口 9（E-a 3 + E-b 6）。
 
+- [x] **PB-84 err 缺口清零（2026-11-18 完成，第 105 项；九份 err 全部入名单，门禁 71P/0F/0S）**
+  - **文案对齐 4 份**：`cooking_bare_var`（裸 var-decl → `unsupported cooking item`，只跳该 item）、`is_dangling_range` / `is_empty_range`（对齐既有 `.expect` 文案）、`void_member_unknown`（通用 void 指针 `->` 专属文案 + 吞行消级联）。
+  - **补诊断 5 份**：`structof_bad_member`（既有 `no member` 直入）、`deref_bounds`（显式宽 > 分配宽 → `reads N bytes from a M-byte allocation`）、`flow_move_frozen`（冻结指针再转移 → `cannot transfer ownership`）、`slice_str_overflow`（切片字符串常量边界容量校验，两路）、`default_init_overflow`（默认值展开 1024 点守卫，与 A 侧同口径同文案）。
+  - **验证**：9 份逐份 rc=1 / 无产物 / 命中 `.expect`；交叉档抽验同文案；全部入 `IR_ERR_COVERED`，err **34/34**。
+  - **门禁**：**71P/0F/0S ×2、0 FAIL**（PASS 62→71、SKIP 9→0）。pos 72/72 + err 34/34，**全语料零跳过、零失败**。
+
 ## 待 ltree 裁定清单（2026-10-27 汇总，PB-43）
 
 > 汇总动机：PB-33 的 **P13** 卡在 `PA-61`，本分支连续五轮（PB-38 ~ PB-42）都在做「不需要新裁定就能推进」的事，现已推完（两档发射器专属缺陷清零、根因全部定位）。下面把**所有等裁事项集中一处**，每条给出选项、实测代价与证据出处，方便一次批阅定夺；顺序按「卡住的广度」排，不按提出时间。引用一律用符号名与配置标识符（源码行号只写在 `IMPLEMENTATION_STATUS.md`）。

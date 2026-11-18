@@ -310,7 +310,10 @@ local IR_ONLY = {ir_builtin = true, ir_slice = true, ir_sparam = true}
 -- 前缀故与 A 侧不同源、不能进 IR_ERR_COVERED」，本轮复测证伪——前缀在子串**之前**，共用子串
 -- `'is' pattern match only valid inside while loop body` 照样整体命中；`PA` 侧同判据（其
 -- IR_ERR_SKIP 黑名单从未含这两份，即 PA 的 IR 门禁一直真跑它们）
-local IR_ERR_COVERED = {safe_assign_removed = true, safe_dot_removed = true, linkas_not_implemented = true, bracket_attr_unknown = true, is_bad_pattern = true, is_outside_while = true, is_in_do_body = true, m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, m2e_param = true, m2f_retflow = true, m2f_retflow_const_flow = true, m2f_retflow_const_static = true, m2f_retflow_const_var = true, m2f_retflow_static_flow = true, m2f_retflow_static_var = true, str_array_bad_elem = true, str_array_overflow = true, multi_arr_nostr = true, multi_arr_overflow = true, len_unknown = true, void_subscript = true, deref_void_type = true}
+-- PB-84（2026-11-18）：err 缺口 9 份全部补齐——cooking 裸声明即时诊断、两条 is 文案对齐、
+-- void 指针成员访问、`.()` 越界读、冻结指针转移、切片字符串容量、默认值展开守卫；structof_bad_member 直入。
+-- err 覆盖 25→34 / 34，SKIP 9→0。
+local IR_ERR_COVERED = {safe_assign_removed = true, safe_dot_removed = true, linkas_not_implemented = true, bracket_attr_unknown = true, is_bad_pattern = true, is_outside_while = true, is_in_do_body = true, m2a_flow_static = true, m2b_const_flow = true, m2c_frozen = true, m2d_invalid = true, m2e_param = true, m2f_retflow = true, m2f_retflow_const_flow = true, m2f_retflow_const_static = true, m2f_retflow_const_var = true, m2f_retflow_static_flow = true, m2f_retflow_static_var = true, str_array_bad_elem = true, str_array_overflow = true, multi_arr_nostr = true, multi_arr_overflow = true, len_unknown = true, void_subscript = true, deref_void_type = true, cooking_bare_var = true, is_dangling_range = true, is_empty_range = true, structof_bad_member = true, void_member_unknown = true, deref_bounds = true, flow_move_frozen = true, slice_str_overflow = true, default_init_overflow = true}
 
 task("test")
     on_run(function ()
