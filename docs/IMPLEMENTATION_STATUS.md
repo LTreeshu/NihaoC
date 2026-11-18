@@ -45,9 +45,10 @@
 
 | 项 | 说明 |
 |---|---|
-| 交叉帧护栏 | `deref_slice` / `array_member_default` 的 `main` 帧超 2047，两交叉档出码被拒（既有上限，需寄存器分配/次级基址） |
+| 交叉帧护栏 | 5 份 pos 的 `main` 帧 2112–4832 字节 > 2047（`array_capacity_tiers` / `array_member_default` / `deref_slice` / `ir_slice` / `ir_str`），两交叉档出码被拒；其余 64 份可执行用例交叉实跑与 ir-c 逐字相同（PB-86） |
 | 聚合值跨函数 | sret 与按值参数走字节拷贝/展平；嵌套聚合参数按顶层成员序展平（未做深嵌套递归验证） |
 | 默认值展开守卫 | 聚合数组的成员默认值展开**超过 1024 个初始化点**即拒绝（`default_init_overflow`；等价 A 侧 `DEFAULT_INIT_BUF` 的实现资源上限，可按裁定放宽） |
+| `ir_sparam` | `IR_ONLY` 的 PA 结转**非法用例**（成员无类型）；交叉档 `mutate bad`。去留需 ltree 定（补类型转正或删除） |
 
 9 份 err 缺口：E-a 3（诊断文案不同源）、E-b 6（断在解析层、依赖 pos 侧布局）。
 

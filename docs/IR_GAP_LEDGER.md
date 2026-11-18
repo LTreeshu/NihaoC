@@ -515,3 +515,17 @@ qemu 实跑同输出；入/升名单后门禁 **62P/0F/9S、0 FAIL**。
 
 **验证**：`ir_bitfield` 两交叉档 qemu 同输出；**聚合相关 14 份 ir-c 产物 ASan 抽检 14/14 CLEAN**；
 门禁 **71P/0F/0S ×2、0 FAIL** 不变。**全语料（pos 72 + err 34）零跳过、零失败 + 内存安全抽检全绿。**
+
+## 20. PB-86 实测：全语料交叉对照（2026-11-18）
+
+字节布局大改后重跑全 pos 语料 × 两交叉档（zig 静态链接 + qemu 实跑，输出先归一行尾）：
+
+| 类 | 数 | 说明 |
+|---|---|---|
+| **SAME** | **128 / 128** | 64 份可执行用例 × riscv64/loongarch64，与 ir-c 输出逐字相同 |
+| NOC（无 main） | 2 × 2 | `mathmod` / `module_top_forms`（模块型，出 `.s` 但不可链接，与既有口径一致） |
+| 帧护栏拒 | 5 | `array_capacity_tiers`(2288) / `array_member_default`(4832) / `deref_slice`(3808) / `ir_slice`(2656) / `ir_str`(2112) 超 2047 |
+| DIFF | 2 | `ir_sparam`（**IR_ONLY 的非法用例**：成员无类型；交叉档 `mutate bad`）——非回归，随用例去留另行处置 |
+
+**结论**：除「大帧出码能力」与「非法 IR_ONLY 用例」两类既有边界外，**交叉执行面与 ir-c 完全一致**。
+ASan（PB-85）：聚合相关 14 份产物 **14/14 CLEAN**。**全语料门禁 71P/0F/0S、0 FAIL。**
