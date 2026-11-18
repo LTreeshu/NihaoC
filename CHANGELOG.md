@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### P2 语义补齐（PB-78：`void` 指针在声明处记录指向类型——`q void = &pt` 的 `->` 可用；2026-11-18）
+
+- **缺陷与根因**：`q void = &pt`（pt 是聚合体）之后 `q->x` 报 `'q' is not a pointer to aggregate (assign &var first)`。赋值语句路径 `p = &pt` 早已登记 `pt[]` 指向类型，**声明路径 `name type = &var` 漏了这一步**，于是 `->` 拿不到聚合类型索引。
+- **机制**：声明初始化分支补一次前瞻——当前 token 是 `&`、其后是标识符且再后面不是 `.`/`[`（排除 `&agg.member` 这类成员取址）时，按赋值路径同口径登记：`&聚合` → 聚合索引，`&标量` → `PT_SCALAR(type)`。随后仍走 `ir_expr` 的 `&` 分支发 `IR_ADDR`，不新增 IR 操作码，两发射器与 `ir_to_c` 一行未改。
+- **验证**：`void_slot_infer` 八行与 `.expect` 逐字相同（`void arrow ok` 等）；门禁 `ir-c` / `ir-native` **52P/0F/18S、0 FAIL** 不变（`deref_slice` 等既有的声明型 void 指针用例零回归）。**交叉档 7/8 ok，仅 `void arrow bad`**——`q->y` 同样撞待裁第 33 条（帧方向），与 `type_forms` 同因，故该用例仍不入名单。
+- **名单/计数不变**：`IR_SUBSET` 60 / `IR_ONLY` 3，pos 可编 63/72、缺口 9。
+
 ### 2.0 线 P2 真实布局阶段 B 第一刀（PB-76：聚合体整块连续槽 + ir-c 单条 C 数组——修 `r->y` 写到聚合块之外；2026-11-18）
 
 - **缺陷与根因**：`r = &p` 后 `r->y = 44` 写不到 `p.y`。ir-c 产物里聚合体的每个成员是**互不相邻的 C 标量**（`int64_t p; int64_t t1;`），`&p + 8` 落在两者之间的栈空隙，而直接访问 `p.y` 取的是 `&t1` —— 两条路径指向不同存储。探针实测改前：`direct 11 22 / after ptr 33 22 / via ptr 33 44 / mix 55 44`（指针写只改到第一个成员）。

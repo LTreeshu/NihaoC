@@ -4486,6 +4486,29 @@ static void ir_stmt_impl(CompilerState *cs)
                     }
                 }
                 if (!copied) {
+                    /* PB-77：声明处 `p void = &x` / `q void = &pt` 也要记指向类型——
+                     * 赋值语句路径早已登记（供 `->`/`.()`），声明路径此前漏掉，
+                     * 于是 `q->x` 报 "not a pointer to aggregate"。
+                     * 口径与赋值路径相同：&聚合 → 聚合索引；&标量 → PT_SCALAR(code)。 */
+                    if (cur_tok(cs) == TOK_BITWISE_AND) {
+                        LexerState *lx2 = cs->parser.lex;
+                        lx2->peek_valid = 0;
+                        lexer_peek(lx2);
+                        if (lx2->peek_tok == TOK_IDENTIFIER &&
+                            ir_peek_ahead(cs, 2) != TOK_DOT &&
+                            ir_peek_ahead(cs, 2) != TOK_LBRACKET) {
+                            int avi = var_find(lx2->peek_str);
+                            if (avi >= 0) {
+                                if (vty[avi] >= 0 &&
+                                    agg_types[vty[avi]].kind != 2) {
+                                    pt[vi] = vty[avi];
+                                } else if (vty[avi] < 0) {
+                                    pt[vi] = PT_SCALAR(vtype[avi]);
+                                }
+                            }
+                        }
+                        lx2->peek_valid = 0;
+                    }
                     int vr = ir_expr(cs);
                     vr = ir_coerce(vr, vtype[vi]);   /* PB-1：目标类型协调（DTOI/ITOD/TRUNC） */
                     ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);

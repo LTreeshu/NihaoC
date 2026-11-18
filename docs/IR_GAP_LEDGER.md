@@ -368,3 +368,17 @@ C 标量（`int64_t p; int64_t t1;`），`&p + 8` 落到两者之间的栈空隙
 指定式初值 `.field = v`、成员默认值展开。逐份剩余：`array_member_default` / `designator_init` /
 `ownerof` / `slice_str_infer` / `str_array_init` / `struct_member_default` / `void_slot_infer`（7 份）
 + `type_forms`（等第 33 条）+ `multi_arr_decl`（多维读写路径，非布局）。
+
+## 12. PB-78 实测：`void` 指针声明处的指向类型（2026-11-18）
+
+**复测**：`void_slot_infer` 只在 `q void = &pt` 之后报 `'q' is not a pointer to aggregate (assign &var first)`
+（`q->x`），其余七组本来就过。**根因**：`pt[]` 指向类型登记只在**赋值语句**分支（`p = &pt`），
+**声明初始化**分支 `name type = &var` 漏了；`&` 本身由 `ir_expr` 一元分支正常发 `IR_ADDR`。
+
+**修法**：声明初始化分支加前瞻——`&` 后是标识符、且其后不是 `.`/`[`（排除 `&agg.member`）时，
+按赋值路径同口径登记 `pt[vi]`（`&聚合`→聚合索引，`&标量`→`PT_SCALAR(code)`）。不新增 IR 操作码。
+
+**验证**：`void_slot_infer` 八行与 `.expect` 逐字节相同；门禁 52P/0F/18S ×2、0 FAIL 不变
+（`deref_slice` 等既有声明型 void 指针零回归）；**交叉两档 7/8 行 ok，仅 `void arrow bad`**
+——`q->y` 与 `type_forms` 同因（第 33 条帧方向），故两者继续留在名单外。
+**计数不变**：`IR_SUBSET` 60 / `IR_ONLY` 3 ⇒ pos 63/72、缺口 9；err 25/34、缺口 9。

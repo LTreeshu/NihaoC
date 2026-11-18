@@ -43,13 +43,12 @@
 
 | 用例 | 卡点 |
 |---|---|
-| `type_forms` | ir-c/ir-native 已对；交叉档因帧方向（待裁 33）仍 `bad` |
-| `void_slot_infer` | `q void = &pt` 的聚合体指针跟踪（`q->y`） |
-| `struct_member_default` / `array_member_default` | 成员默认值需真实偏移 |
+| `type_forms` / `void_slot_infer` | ir-c/ir-native 已对（PB-76 / PB-78）；交叉档因帧方向（待裁 33）仍 `bad` |
+| `struct_member_default` / `array_member_default` | 成员默认值需真实偏移（浮点默认值尚未支持） |
 | `designator_init` | 指定式初值 `.field = v` 需真实偏移 |
 | `ownerof` | `structof`/`holdof`/`unionof`/`bitoffsetof` 四内置需真实偏移 |
 | `slice_str_infer` / `str_array_init` | 数组成员越首槽（`char[9]` 成员），需数组成员真实宽 |
-| `multi_arr_decl` | 多维数组读写降级路径 |
+| `multi_arr_decl` | 动态 `char[]` 多变量声明的 `len()` 未登记（PB-79 起处理） |
 
 9 份 err 缺口：E-a 3（诊断文案不同源）、E-b 6（断在解析层、依赖 pos 侧布局）。
 
