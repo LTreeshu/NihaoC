@@ -406,3 +406,22 @@ C 标量（`int64_t p; int64_t t1;`），`&p + 8` 落到两者之间的栈空隙
 **剩余 7 份**：`type_forms` / `void_slot_infer`（交叉档待裁 33）、`array_member_default`（聚合数组）、
 `ownerof`（四内置）、`slice_str_infer` / `str_array_init`（数组成员真实宽）、`multi_arr_decl`（char 数组成员字节布局）——
 后五份均属第 23 条家族。
+
+## 14. PB-80 实测：聚合体数组（2026-11-18）
+
+**复测**：`a P[3]` 后 `a[0].x` 报 `unexpected token '[' in expression`；另两处次生卡点：`[...]`
+（TOK_ELLIPSIS）不被聚合容量解析接受、`S union {…}` 写在 `main` 体内不被认（IR 只有顶层类型定义）。
+
+**落地**：`ir_agg_decl` 支持 `[N]` / `[...]`（默认 8）/ 多维（总槽 = 元素数 × `mslots`，`vndim` 标形态、
+`ve` 记元素数）；新增 `ir_agg_elem_read`（`flat*mslots` 经 `ELEM_ADDR` + 成员偏移，方向由后端处理）；
+新增 `ir_aggarr_init`（内层花括号逐元素 `ir_agg_init` + 尾数默认；扁平写法按 C 省略规则写槽、剩余补 0）；
+`ir_type_decl` 拆 `ir_type_decl_named` 供语句层复用。
+
+**验证**：`array_member_default` 七行与 `.expect` 逐字节相同 ⇒ 入 `IR_SUBSET`；门禁 **55P/0F/15S、0 FAIL**。
+**交叉边界**：本份 `main` 帧 3456 > 2047，两档出码即被帧护栏拒（既有上限，同 `deref_slice`）；
+语义用缩小探针（`P[2]` 三组：默认值 / 部分位置初值 / 指定式）在两档 zig 链接 + qemu 实跑，
+输出 `7 8 9 2 / 5 9 8 / 7 1 7 2` 与 ir-c 逐字相同。
+
+**计数**：`IR_SUBSET` **63** / `IR_ONLY` 3 ⇒ pos **66/72、缺口 6**；err **25/34、缺口 9**。
+**剩余 6 份**：`type_forms` / `void_slot_infer`（待裁 33）、`ownerof` / `slice_str_infer` /
+`str_array_init` / `multi_arr_decl`（第 23 条字节布局家族）。**⇒ `irparse.c` 里不需要裁定的活再次清零。**

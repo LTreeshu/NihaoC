@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### P2 聚合体数组落地（PB-80：`P arr[N]` 声明 / 逐元素默认值 / 指定式与扁平初值 / 元素成员寻址；`array_member_default` 入名单；2026-11-18）
+
+- **缺陷**：`a P[3]` 之后 `a[0].x` 直接报 `unexpected token '[' in expression`——IR 只支持「单个聚合体变量」，聚合体数组既没有声明路径、也没有元素成员寻址；用例里的函数内类型定义（`S union {…}` 写在 `main` 里）同样不认。
+- **机制**：① 声明路径 `ir_agg_decl` 支持 `[N]` / `[...]`（默认 8）/ 多维后缀，总槽数 = 元素数 × `mslots`，`vndim` 标记数组形态、`ve` 记元素个数（`len()`）；② 元素成员寻址 `ir_agg_elem_read`：`flat` 下标 × `mslots` 经 `ELEM_ADDR`（方向由后端处理）+ `ADDR(成员偏移)` 求址，读宽按成员类型码；③ 初值 `ir_aggarr_init`：内层花括号逐元素走 `ir_agg_init`（含元素内默认值与指定式），尾数元素补默认值；外层扁平写法（`{1,2,3}`）按 C 花括号省略语义按槽序写入，**剩余槽补 0 而非成员默认值**（与 PA-56 口径一致）；④ 函数体内类型定义：`ir_type_decl` 拆出 `ir_type_decl_named`，语句层识别 `Name struct/union/enum {…}`。
+- **验证**：`array_member_default` 七行与 `.expect` 逐字节相同 ⇒ 入名单，**ir-c / ir-native 55P/0F/15S、0 FAIL**（PASS 54→55、SKIP 16→15）。**交叉档边界**：该用例 `main` 帧 3456 > 2047，两交叉档出码即被帧护栏拒（既有上限）；语义用缩小探针（`P[2]` 三组：默认值 / 部分位置初值 / 指定式）在两交叉档 zig 链接 + qemu 实跑，输出与 ir-c 逐字相同。
+- **计数**：`IR_SUBSET` **63** / `IR_ONLY` 3 ⇒ pos IR 可编 **66 / 72、缺口 6**；err 覆盖 **25 / 34、缺口 9**。剩余 6 份：`type_forms` / `void_slot_infer`（待裁 33）、`ownerof` / `slice_str_infer` / `str_array_init` / `multi_arr_decl`（第 23 条字节布局家族）。
+
 ### P2 聚合初始化补齐（PB-79：成员默认值 + 指定式初值 `.field = v`；两份用例入名单；2026-11-18）
 
 - **缺陷与根因**：IR 前端对成员默认值一直是「解析后忽略」，`designator_init` 的 `.field = v` 也解析不了（`ir_agg_init` 只认位置式）。`struct_member_default` 还额外卡在 `ratio f64 = 1.5`——默认值解析只接受整型/标识符/字符串。

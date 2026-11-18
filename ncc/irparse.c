@@ -369,6 +369,7 @@ static int ir_expr(CompilerState *cs);
 static int ir_scalar_code_of_token(TokenType tt);
 static int64_t ir_load_width_imm(int code);   /* PB-75(b) */
 static int ir_store_width(int code);           /* PB-75(b) */
+static void ir_type_decl_named(CompilerState *cs, const char *tname);  /* PB-80 */
 
 /* ---- struct/union/enum 类型表 ---- */
 #define IR_MAX_AGG 16
@@ -682,17 +683,99 @@ static void ir_agg_init(CompilerState *cs, int vi, int ti, int base)
     }
 }
 
-/* 聚合类型声明：name Type [= {...}|= expr]
- * struct: elems=成员数（顺序槽）；union: 共享槽 0；enum: 单槽 */
+/* 聚合体数组初值（PB-80）：`P arr[N] = { ... }`。
+ * 内层花括号逐个元素走 ir_agg_init（元素内默认值/指定式照常）；未给初值的尾数元素补默认值。
+ * 外层无花括号（`{1,2,3}`）按 C 的花括号省略规则、按槽序跨元素写入，**不补尾数默认**。
+ * 平坦写入按「元素槽号 % mslots」取成员宽——嵌套聚合成员按整槽写（8 字节），属已知边界。 */
+static void ir_aggarr_init(CompilerState *cs, int vi, int ti, int mslots, int total)
+{
+    next_tok(cs);           /* { */
+    int flat = (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_LBRACE);
+    if (flat) {
+        int slot = 0;
+        while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF &&
+               slot < total * mslots) {
+            int v = ir_expr(cs);
+            int addr = ir_new_vreg(F);
+            ir_emit(F, IR_ADDR, addr, vt[vi], -1, slot);
+            int mi = slot % mslots;
+            ir_emit(F, IR_STORE, -1, addr, v,
+                    ir_store_width(agg_types[ti].mscode[mi]));
+            slot++;
+            if (cur_tok(cs) != TOK_COMMA) break;
+            next_tok(cs);
+        }
+        /* C 的聚合初值语义：未给出的槽补 0（不是成员默认值——PA-56 的扁平档口径） */
+        for (; slot < total * mslots; slot++) {
+            int zv = ir_new_vreg(F);
+            ir_emit(F, IR_CONST, zv, -1, -1, 0);
+            int addr = ir_new_vreg(F);
+            ir_emit(F, IR_ADDR, addr, vt[vi], -1, slot);
+            ir_emit(F, IR_STORE, -1, addr, zv, 0);
+        }
+    } else {
+        int e = 0;
+        while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF && e < total) {
+            if (cur_tok(cs) == TOK_LBRACE) {
+                ir_agg_init(cs, vi, ti, e * mslots);
+            } else {
+                /* 内层花括号省略：该值落到元素首成员 */
+                int v = ir_expr(cs);
+                int addr = ir_new_vreg(F);
+                ir_emit(F, IR_ADDR, addr, vt[vi], -1, e * mslots);
+                ir_emit(F, IR_STORE, -1, addr, v, 0);
+            }
+            e++;
+            if (cur_tok(cs) != TOK_COMMA) break;
+            next_tok(cs);
+        }
+        /* 尾数元素全默认值（PA-56 口径） */
+        for (; e < total; e++) ir_agg_defaults(cs, vi, ti, e * mslots);
+    }
+    expect(cs, TOK_RBRACE);
+}
+
+/* 聚合类型声明：name Type [N]... [= {...}|= expr]
+ * struct: elems=成员数（顺序槽）；union: 共享槽 0；enum: 单槽。
+ * PB-80：聚合体数组——总槽数 = 元素数 × mslots，元素 k 的槽起点 = k*mslots。 */
 static void ir_agg_decl(CompilerState *cs, const char *name, int ti, int vis)
 {
     IrAggType *a = &agg_types[ti];
-    int elems = (a->kind == 2) ? 1 : a->mslots;
+    int mslots = (a->kind == 2) ? 1 : a->mslots;
+    int dims[IR_MAX_DIMS];
+    int nd = 0, total = 1;
+    while (cur_tok(cs) == TOK_LBRACKET && nd < IR_MAX_DIMS) {
+        next_tok(cs);
+        int n = 8;      /* `[...]` 默认容量 8（与 PB-67 同口径） */
+        if (cur_tok(cs) == TOK_INT_CONST) {
+            n = (int)cs->parser.lex->tok_val.i;
+            next_tok(cs);
+        } else if (cur_tok(cs) == TOK_ELLIPSIS) {
+            next_tok(cs);           /* `...` = 默认容量 8 */
+        }
+        expect(cs, TOK_RBRACKET);
+        dims[nd++] = n;
+        total *= n;
+    }
+    int elems = mslots * total;
     int vi = var_declare(name, elems, ti, vis);
+    if (nd > 0) {
+        /* 聚合体数组：vndim 标记数组形态（表达式路径据此走元素成员寻址），
+         * ve 记「元素个数」供 len()（var_declare 记的是槽数） */
+        vndim[vi] = nd;
+        for (int k = 0; k < nd; k++) vdim[vi][k] = dims[k];
+        ve[vi] = total;
+        vlen_known[vi] = 1;
+    }
     if (cur_tok(cs) == TOK_ASSIGN) {
         next_tok(cs);
         if (cur_tok(cs) == TOK_LBRACE) {
-            ir_agg_init(cs, vi, ti, 0);
+            if (nd > 0) ir_aggarr_init(cs, vi, ti, mslots, total);
+            else ir_agg_init(cs, vi, ti, 0);
+        } else if (nd > 0) {
+            nihao_error(cs, "ir: aggregate array '%s' must be initialized from "
+                            "'{ ... }'", name);
+            ir_expr(cs);
         } else {
             int v = ir_expr(cs);
             /* sret 调用（struct 返回函数）：缓冲地址是"值"（last_mr_buf），
@@ -715,8 +798,14 @@ static void ir_agg_decl(CompilerState *cs, const char *name, int ti, int vis)
             }
         }
     } else {
-        /* PB-79：无初值 → 定义处成员默认值（A 侧 PA-49 / PA-56 同口径） */
-        ir_agg_defaults(cs, vi, ti, 0);
+        /* PB-79：无初值 → 定义处成员默认值（A 侧 PA-49 / PA-56 同口径）；
+         * PB-80：聚合体数组逐元素回填 */
+        if (nd > 0) {
+            for (int e = 0; e < total; e++)
+                ir_agg_defaults(cs, vi, ti, e * mslots);
+        } else {
+            ir_agg_defaults(cs, vi, ti, 0);
+        }
     }
 }
 
@@ -1056,6 +1145,66 @@ static int ir_flat_index(CompilerState *cs, int vi, const int *idx, int nidx)
         flat = sum;
     }
     return flat;
+}
+
+/* 聚合体数组元素的成员读：a[i].x / e[i][j].y（PB-80）。
+ * 元素槽起点 = flat * mslots；成员再按 moff 加。地址用
+ * ELEM_ADDR(ADDR(成员偏移), flat*mslots, 8)——方向由后端处理（C 向上 / 汇编向下）。 */
+static int ir_agg_elem_read(CompilerState *cs, int vi)
+{
+    int ti = vty[vi];
+    int mslots = (agg_types[ti].kind == 2) ? 1 : agg_types[ti].mslots;
+    int idxs[IR_MAX_DIMS];
+    int nidx = 0;
+    while (cur_tok(cs) == TOK_LBRACKET && nidx < IR_MAX_DIMS) {
+        next_tok(cs);       /* [ */
+        idxs[nidx++] = ir_expr(cs);
+        expect(cs, TOK_RBRACKET);
+    }
+    int flat = ir_flat_index(cs, vi, idxs, nidx);
+    if (cur_tok(cs) != TOK_DOT) {
+        nihao_error(cs, "ir: aggregate array element needs a member access ('.member')");
+        return ir_new_vreg(F);
+    }
+    int off = 0;
+    int last_fi = -1;
+    int cur_ti = ti;
+    for (;;) {
+        next_tok(cs);       /* . */
+        if (cur_tok(cs) != TOK_IDENTIFIER) {
+            nihao_error(cs, "ir: expected member name after '.'");
+            return ir_new_vreg(F);
+        }
+        int fi = agg_member_find(cur_ti, cs->parser.lex->tok_str);
+        if (fi < 0) {
+            nihao_error(cs, "ir: no member '%s' in type '%s'",
+                        cs->parser.lex->tok_str, agg_types[cur_ti].name);
+            return ir_new_vreg(F);
+        }
+        last_fi = fi;
+        off += (agg_types[cur_ti].kind == 1) ? 0 : agg_types[cur_ti].moff[fi];
+        int mt = agg_types[cur_ti].mtype[fi];
+        next_tok(cs);       /* field */
+        if (mt >= 0 && cur_tok(cs) == TOK_DOT) {
+            cur_ti = mt;
+            continue;
+        }
+        break;
+    }
+    int base = ir_new_vreg(F);
+    ir_emit(F, IR_ADDR, base, vt[vi], -1, off);
+    int sc = ir_new_vreg(F);
+    ir_emit(F, IR_CONST, sc, -1, -1, (long long)mslots);
+    int scaled = ir_new_vreg(F);
+    ir_emit(F, IR_MUL, scaled, flat, sc, 0);
+    int addr = ir_new_vreg(F);
+    ir_emit(F, IR_ELEM_ADDR, addr, base, scaled, 8);
+    int vr = ir_new_vreg(F);
+    int mcode = (agg_types[cur_ti].mbits[last_fi] > 0) ? 0
+              : agg_types[cur_ti].mscode[last_fi];
+    ir_emit(F, IR_LOAD, vr, addr, -1, ir_load_width_imm(mcode));
+    if (mcode == 1 || mcode == 8) ir_set_double(vr);
+    return vr;
 }
 
 /* 数组初始化列表（PB-67 支持多维）：按维度递归填槽。
@@ -2313,6 +2462,9 @@ static int ir_primary(CompilerState *cs)
             nihao_error(cs, "ir: undeclared variable '%s'", name);
             return ir_new_vreg(F);
         }
+        /* PB-80：聚合体数组元素成员读 a[i].x / e[i][j].y（vndim>0 且带聚合类型） */
+        if (vty[vi] >= 0 && vndim[vi] >= 1 && cur_tok(cs) == TOK_LBRACKET)
+            return ir_agg_elem_read(cs, vi);
         /* PB-68：多步后缀链与新形态（空下标 p[]、数组型后缀 .(T[N])）走链式求值；
          * 单组旧形态仍走下面各自的旧路径（行为不变）。 */
         if ((cur_tok(cs) == TOK_LBRACKET || cur_tok(cs) == TOK_DOT_PAREN ||
@@ -4299,6 +4451,13 @@ static void ir_stmt_impl(CompilerState *cs)
             nihao_error(cs, "ir: unexpected '%s %s' in statement", name, tname);
             skip_newlines(cs);
             return;
+        } else if (nt == TOK_STRUCT || nt == TOK_UNION || nt == TOK_ENUM) {
+            /* PB-80：函数体内的类型定义（用例把 `S union { ... }` 写在 main 里） */
+            const char *tname2 = cs->parser.lex->tok_str;   /* 类型名（当前 token） */
+            next_tok(cs);           /* name → struct/union/enum */
+            ir_type_decl_named(cs, tname2);
+            skip_newlines(cs);
+            return;
         } else if (is_type_token(nt) ||
                    (nt == TOK_LPAREN && is_type_token(ir_peek_ahead(cs, 2)) &&
                     ir_peek_ahead(cs, 3) == TOK_RPAREN)) {
@@ -5085,10 +5244,9 @@ static void ir_top_decl(CompilerState *cs, int vis, int attrs)
 }
 
 /* 顶层类型定义：Name struct { fields } / Name union { fields } / Name enum { A, B } */
-static void ir_type_decl(CompilerState *cs)
+/* PB-80：名字已消费、cur_tok 停在 struct/union/enum 上（顶层与函数体内共用） */
+static void ir_type_decl_named(CompilerState *cs, const char *tname)
 {
-    const char *tname = cs->parser.lex->tok_str;
-    next_tok(cs);
     TokenType kw = cur_tok(cs);
     next_tok(cs);   /* struct/union/enum */
     if (agg_count >= IR_MAX_AGG) {
@@ -5232,6 +5390,13 @@ static void ir_type_decl(CompilerState *cs)
     }
     agg_compute_offsets(agg_count);   /* 嵌套：递归算成员偏移/总槽数 */
     agg_count++;
+}
+
+static void ir_type_decl(CompilerState *cs)
+{
+    const char *tname = cs->parser.lex->tok_str;
+    next_tok(cs);   /* name */
+    ir_type_decl_named(cs, tname);
 }
 
 static void ir_parse_top_level(CompilerState *cs);
