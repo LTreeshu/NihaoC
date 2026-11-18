@@ -1,8 +1,8 @@
 # NihaoC 项目路线图
 
-> 更新日期：2026-09-21
-> 本文件为跨分支共享层（里程碑、架构概览、通用待办、推荐下一步），所有分支保持一致。
-> 分支特有待办见 `TODO-PA.md`（1.0 冻结线）和 `TODO-PB.md`（2.0 IR 演进）。
+> 更新日期：2026-11-17
+> 本文件为项目共享层（里程碑、架构概览、通用待办、推荐下一步）。现行分支模型见 `docs/GIT_CONVENTIONS.md` §一：**`PB` 开发 + `main` 发布镜像**（`PA` 已冻结只读）。
+> 分支特有待办见 `TODO-PB.md`（唯一开发主线，IR-only 0.2.x）；`TODO-PA.md` 为 1.x 冻结期历史记录。
 
 ---
 
@@ -61,9 +61,11 @@ NihaoC/                            仓库根
     ├── cgen.c                         [后端] C 文本生成 → -backend=c（默认，外部 tcc 编译）
     ├── native.c                       [后端] libtcc 进程内编译 → -backend=native
     ├── ir.c / ir.h / ir_to_c.c        [后端] IR 中间层与 IR→C → -backend=ir-c
-    ├── ir_backend.c / ir_backend.h    [后端] 多架构后端注册表 + 统一骨架（TargetBackend 抽象）
-    ├── ir_x86_64.c / ir_riscv64.c / ir_arm64.c / ir_loongarch64.c
-    │                                  [后端] 四架构汇编发射（ir-native 与三个交叉架构）
+    ├── ir_backend.c / ir_backend.h    [后端] 架构后端注册表 + 统一骨架（TargetBackend 抽象）
+    ├── ir_riscv64.c / ir_loongarch64.c
+    │                                  [后端] 汇编发射（交叉 `.s`；`ir-native` 在这两档宿主上出本机码，其余
+    │                                    宿主回退 IR→C）。`PB` 分支 2026-09-26 起删去 ir_x86_64.c /
+    │                                    ir_arm64.c（见 TODO-PB 的 PB-34），`PA` 侧四档发射器仍在
     ├── linker.c                       链接辅助
     ├── ncc.c / ncc.h                  CLI 入口：init/build/run/debug/lex + 后端选择 + 版本宏
     ├── xmake.lua                      官方构建与测试驱动（tcc 工具链；版本号单一真源在此）
@@ -80,7 +82,8 @@ NihaoC/                            仓库根
 ### P0 — 核心功能缺口
 
 - [ ] **统一后端管线**：当前存在"parser→C 文本"与"irparse→IR→C/asm"两条并行管线，需决策最终走向——若以 IR 为长期架构，则 parser.c 逐步替换为 irparse.c 的全量版本，避免两套 C 生成（cgen.c / ir_to_c.c）长期并存。（早期第三套 codegen.c 直通后端已于 2026-09-01 删除，见 docs/LEGACY_CODEGEN.md）
-- [ ] **IR native 后端寄存器分配**：native 汇编后端（ir_x86_64.c 等，TargetBackend 骨架 ir_backend.c）目前虚拟寄存器全部映射为 rbp 栈槽（无寄存器分配，PB-15 决策保底），性能与调用约定（Windows x64 shadow space / SysV）需完善，浮点调用已在 PB-13/16 覆盖。
+- [ ] **IR 汇编后端寄存器分配**：riscv64 / loongarch64 两档发射器（TargetBackend 骨架 ir_backend.c；x86-64 / arm64 发射器已随 PB-34 删除）目前虚拟寄存器全部映射为帧指针栈槽（无寄存器分配，PB-15 决策保底），性能与调用约定需完善，浮点调用已在 PB-13/16 覆盖。**2026-09-26 PB-35 追记**：① 本条原文写的「rbp 栈槽」是已删 x86 发射器留下的措辞，两档现分别用 `$s0` / `s0`；② 全栈槽的直接后果是帧大小随 vreg 线性增长，而两档都用**帧指针 ±12 位立即数**寻址槽位，`pos/ir_slice.nc` 实测帧 2208 字节即越界——本轮先加集中式 `max_frame = 2047` 护栏把它变成**可读拒绝**，真正的解法（次级基址寄存器或寄存器分配）与本条同属一项；③ 两档产物已逐份过外部汇编器与链接器，仍缺执行环境（本机无 `qemu-user`）才能转正。
+
 
 ### P1 — 工程质量
 

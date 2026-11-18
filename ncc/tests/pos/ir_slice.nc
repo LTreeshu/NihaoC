@@ -18,7 +18,7 @@ func main() {
 
     /* 切片：arr[lo..hi] → 返回 &arr[lo]（指针） */
     p void = arr[1..4]
-    v i32 = *p
+    v i32 = p.()
     if v == 20 {
         puts("slice ok")
     } else {
@@ -26,7 +26,7 @@ func main() {
     }
     /* 省略起始切片 arr[..2] → &arr[0] */
     p2 void = arr[..2]
-    v2 i32 = *p2
+    v2 i32 = p2.()
     if v2 == 10 {
         puts("slice2 ok")
     } else {
@@ -42,7 +42,7 @@ func main() {
     }
     /* 切片读取（写回后） */
     p3 void = arr[2..4]
-    v3 i32 = *p3
+    v3 i32 = p3.()
     if v3 == 3 {
         puts("slice read2 ok")
     } else {
@@ -56,8 +56,11 @@ func main() {
     } else {
         puts("slice narrow bad")
     }
-    /* len()：数组容量 / 动态字符串长 / 切片逻辑长度（常量边界） */
-    if len(arr) == 5 {
+    /* len()：数组容量 / 动态字符串长 / 切片逻辑长度（常量边界）
+     * 2026-09-01 修正：len(arr) 是容量 6（声明 i32[6...]），此前误写 5；
+     * 该断言此前一直输出 "len arr bad"，因本用例无 .expect 只做跨后端一致性
+     * 检查而被掩盖（两后端错得一样也算 PASS）。现已补 .expect。 */
+    if len(arr) == 6 {
         puts("len arr ok")
     } else {
         puts("len arr bad")
@@ -69,7 +72,9 @@ func main() {
         puts("len str bad")
     }
     sl = arr[1..4]
-    if len(sl) == 3 && sl.() == 20 {
+    /* 2026-09-01 修正：上面 arr[1..4] = {2,3,4,5} 已把 arr[1] 从 20 覆写为 2，
+     * 故 sl.() 应为 2 而非 20（原断言同样被一致性检查掩盖） */
+    if len(sl) == 3 && sl.() == 2 {
         puts("len slice ok")
     } else {
         puts("len slice bad")

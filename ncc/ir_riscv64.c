@@ -80,10 +80,21 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             nb_put(b, "\n");
             break;
         case IR_DTOI:
-            /* double → int64 截断（D 扩展 fcvt.l.d，向零舍入） */
+            /* double → int64：必须显式 rtz。不带舍入模式时走**动态舍入**（musl 起始为
+             * 就近取偶），于是 3.7→4、-3.7→-4，与 C 的向零截断相反（实测见 TODO-PB 的 PB-39）。 */
             nb_put(b, "  fld fa0, ");
             rv_slot(b, in->a, tb);
-            nb_put(b, "\n  fcvt.l.d a0, fa0\n  sd a0, ");
+            nb_put(b, "\n  fcvt.l.d a0, fa0, rtz\n  sd a0, ");
+            rv_slot(b, in->dst, tb);
+            nb_put(b, "\n");
+            break;
+        case IR_FTRUNC:
+            /* f32 严格宽度：double → float 截断再回 double。本档此前没有这条 case，指令
+             * 落到 default 静默发空——既不截断也不写目的槽，后续从目的槽读出的是未初始化
+             * 值（loongarch64 一侧早有对应实现，故同一用例只在 riscv64 出坏值；见 TODO-PB 的 PB-41）。 */
+            nb_put(b, "  fld fa0, ");
+            rv_slot(b, in->a, tb);
+            nb_put(b, "\n  fcvt.s.d fa0, fa0\n  fcvt.d.s fa0, fa0\n  fsd fa0, ");
             rv_slot(b, in->dst, tb);
             nb_put(b, "\n");
             break;
@@ -176,6 +187,13 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
                    tb->slot_stride * (in->a + (int)in->imm + 1));
             rv_store_a0(b, in->dst, tb);
             break;
+        case IR_ADDR_LO:
+            /* PB-82：紧凑字节块首地址（块最低槽）；块内字节按 +k 向上寻址 */
+            nb_put(b, "  addi a0, s0, -%d
+",
+                   tb->slot_stride * (in->a + (int)in->imm));
+            rv_store_a0(b, in->dst, tb);
+            break;
         case IR_ELEM_ADDR:
             /* 元素地址 = 基址 - idx*width（槽向下；imm=宽度，0 兼容=8） */
             nb_put(b, "  ld a0, ");
@@ -190,7 +208,15 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
         case IR_LOAD:
             nb_put(b, "  ld a0, ");
             rv_slot(b, in->a, tb);
-            nb_put(b, "\n  ld a0, 0(a0)\n");
+            nb_put(b, "\n  ");
+            /* PB-75(b)：imm 承载字节宽（0=8；±w=窄读，负=符号扩展） */
+            if (in->imm < 0) {
+                long long w = -in->imm;
+                nb_put(b, "%s a0, 0(a0)\n", w == 1 ? "lb" : w == 2 ? "lh" : "lw");
+            } else {
+                nb_put(b, "%s a0, 0(a0)\n",
+                       in->imm == 1 ? "lbu" : in->imm == 2 ? "lhu" : in->imm == 4 ? "lwu" : "ld");
+            }
             rv_store_a0(b, in->dst, tb);
             break;
         case IR_STORE:
@@ -198,7 +224,8 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             rv_slot(b, in->a, tb);
             nb_put(b, "\n  ld a1, ");
             rv_slot(b, in->b, tb);
-            nb_put(b, "\n  sd a1, 0(a0)\n");
+            nb_put(b, "\n  %s a1, 0(a0)\n",
+                   in->imm == 1 ? "sb" : in->imm == 2 ? "sh" : in->imm == 4 ? "sw" : "sd");
             break;
         case IR_LOAD8:
             nb_put(b, "  ld a0, ");
@@ -243,9 +270,11 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             if (in->op == IR_CALL) {
                 nb_put(b, "  call %s\n", in->sym);
             } else {
-                nb_put(b, "  ld a0, ");
+                /* 目标地址不能落进 a0——a0 同时是第一整数实参，装载它会把刚摆好的
+                 * 参数覆盖掉（实测见 TODO-PB 的 PB-39，改暂存寄存器 t0）。 */
+                nb_put(b, "  ld t0, ");
                 rv_slot(b, in->a, tb);
-                nb_put(b, "\n  jalr ra, a0\n");
+                nb_put(b, "\n  jalr ra, t0\n");
             }
             /* 返回值存储：目标函数浮点返回 → fa0（fsd），否则 a0（sd） */
             if (in->op == IR_CALL) {
@@ -340,11 +369,11 @@ static const char *rv_fp_arg_regs[]  = { "fa0", "fa1", "fa2", "fa3", "fa4", "fa5
 
 const TargetBackend riscv64_backend = {
     .name         = "riscv64",
-    .asm_syntax   = "att",
     .slot_stride  = 8,
     .stack_dir    = -1,
     .callee_align = 16,
     .frame_extra  = 16,           /* ra + s0 保存 */
+    .max_frame    = 2047,         /* addi/sd/ld 只用 12 位带符号立即数寻址（PB-35） */
     .int_arg_regs = rv_int_arg_regs,
     .int_arg_count = 8,
     .fp_arg_regs  = rv_fp_arg_regs,

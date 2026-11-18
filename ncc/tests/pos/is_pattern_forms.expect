@@ -1,0 +1,7 @@
+is negative lit ok
+is signed lit ok
+is negative range ok
+is enum variant ok
+is ident by value ok
+is wildcard ok
+is first match only ok

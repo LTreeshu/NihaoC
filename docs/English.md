@@ -40,8 +40,10 @@ NiHao is a new statically compiled language designed for system-level programmin
   constants; returns a compile-time value)
 
 > `sizeof` / `typeof` / `alignof` / `offsetof` / `bitoffsetof` / `structof` / `unionof` / `holdof` / `visof` are
-> keywords; `len` / `malloc` / `print` / `puts` / `static_assert` are **built-in names** — neither kind takes part
+> keywords; `len` / `malloc` / `static_assert` are **built-in names** — they take no part
 > in user scope resolution, so a user declaration cannot shadow them.
+> `print` / `puts` are not built-in names: they are ordinary functions provided by the **stdio
+> standard library** (`use stdio`).
 > The ownership built-ins (`structof` / `unionof` / `holdof`) take three arguments `(type, member, ptr)`: a type
 > plus member name alone yields no offset, so the owner's base address is recovered from the member address;
 > `structof` accepts only `struct`, `unionof` only `union`, `holdof` both.
@@ -49,24 +51,26 @@ NiHao is a new statically compiled language designed for system-level programmin
 > known (a scalar, a slice with non-literal bounds, …) it is a front-end error.
 > Which backend provides what is tracked in `docs/IMPLEMENTATION_STATUS.md`.
 
-#### 2.3.1 Output Built-ins (`print` / `puts`)
+#### 2.3.1 Output (`print` / `puts`, provided by the stdio standard library)
+
+`print` / `puts` are provided by the stdio standard-library module and must be brought in via
+`use stdio`; they are ordinary functions, not compiler built-ins.
 
 - `puts(s)` — prints a NUL-terminated string and appends a newline; the argument **must be a string
   pointer** (`char*` / `char[]`). It is not "print any value": handing an integer (e.g. `p.(i32)`)
   to `puts` makes the C library dereference that number as an address, crashing or emitting garbage.
 - `print(x)` — when the argument is **not** a string literal: prints the value as a decimal integer
   followed by a newline (the value, not the address).
-- `print("fmt", a, b, ...)` — when the argument **is** a string literal: forwarded verbatim to C
-  `printf`. The first argument is the C format string, so the conversions (`%d` / `%s` / `%lld` …),
+- `print("fmt", a, b, ...)` — when the argument **is** a string literal: output follows the format
+  string given as the first argument, so the conversions (`%d` / `%s` / `%lld` …),
   their count and their types are the caller's responsibility; extra arguments are **not**
   concatenated and no newline is added. Hence `print("[LOG] ", msg)` emits only `[LOG] ` (the `msg`
   is dropped); the correct form is `print("[LOG] %s\n", msg)`.
 
-> The two forms are distinguished statically by the first argument token (literal → `printf`
-> passthrough, otherwise → integer print), so `print(buf)` with `buf` a string variable prints its
+> The two forms are distinguished statically by the first argument token (literal → format-string
+> output, otherwise → integer print), so `print(buf)` with `buf` a string variable prints its
 > address as an integer, not its contents — use `puts` to print strings.
-> `puts` is a plain C library passthrough. Availability of `print` per backend is tracked in
-> `docs/IMPLEMENTATION_STATUS.md`.
+> `print` / `puts` are provided by the stdio library.
 
 ### 2.4 Keyword Reference
 
@@ -92,7 +96,7 @@ NiHao is a new statically compiled language designed for system-level programmin
 - `[[local]]` — internal-linkage function attribute
 - `[[used]]` — force-keep function attribute
 - `[[unused]]` — deprecation function attribute
-- `[[export] ".my_section"]` — export to a specific section
+- `[[export ".my_section"]]` — export to a specific section
 
 > The complete keyword set and where each keyword sits in the grammar are defined by [`BNF.md`](./BNF.md) §1.2
 > (40 grammar keywords + 8 lexically reserved words + 16 primitive type names).
@@ -761,7 +765,7 @@ while opt {
 | `[[weak]]`               | weak symbol, overridable      | library default implementations|
 | `[[used]]`               | keep symbol even if unused    | functions called from asm/debuggers |
 | `[[unused]]`             | deprecated, emit a warning    | legacy transitional APIs       |
-| `[[export] ".section"]`  | export to a specific section  | special sections for linker scripts |
+| `[[export ".section"]]`  | export to a specific section  | special sections for linker scripts |
 
 **Combination rule:** bracket attributes and the return attribute may coexist; bracket attributes come first.
 
@@ -782,7 +786,7 @@ while opt {
 | inline, dynamic pointer   | `[[inline]] flow create_small() void { ... }`      | suggest inline |
 | weak, static pointer      | `[[weak]] static get_default() void { ... }`       | overridable default |
 | deprecated, dynamic pointer | `[[unused]] flow old_api() void { ... }`         | deprecation warning |
-| export-to-section, static pointer | `[[export]".init"] static init_data() void { ... }` | place into a specific section |
+| export-to-section, static pointer | `[[export ".init"]] static init_data() void { ... }` | place into a specific section |
 
 ---
 
@@ -947,7 +951,7 @@ flow old_create() void {
 }
 
 // export to .init section + static pointer
-[[export] ".init"] 
+[[export ".init"]] 
 static get_init_data() void {
     static data InitData = {.magic = 0xDEADBEEF}
     return &data

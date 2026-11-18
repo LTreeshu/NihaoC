@@ -1,0 +1,12 @@
+fx32 add ok
+fx32 sub ok
+fx32 mul ok
+fx32 div ok
+fx32 decl trunc ok
+fx32 assign trunc ok
+fx64 wide ok
+fx32 size ok
+fx64 size ok
+fx int mix ok
+fx32 call ok
+fx64 call ok

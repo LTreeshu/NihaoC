@@ -1,0 +1,5 @@
+goto forward ok
+goto backward ok
+goto block ok
+goto from case ok
+case auto-exit ok

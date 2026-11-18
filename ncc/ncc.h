@@ -38,6 +38,10 @@
 #define MAX_MODULES         256
 #define MAX_LINK_LIBS       64
 #define MAX_MULTIRETURN     16
+#define MAX_INIT_DESIGATORS 32
+/* 成员默认值展开的缓冲上限（§3.1 × §5.1.2：聚合类型数组按元素逐项展开）；
+ * 超出时前端即时报错，不生成截断的初始化器 */
+#define DEFAULT_INIT_BUF 8192
 
 #define match(a,b)  (strcmp(a,b) == 0)
 
@@ -65,15 +69,26 @@ typedef enum {
     TYPE_ALIAS,
 } TypeKind;
 
-/* Visibility attributes */
+/* Visibility attributes
+ * 与 cgen 端 enum nihao_vis 数值对齐（cgen.c:270：NH_UNDEF=0, NH_CONST, NH_FLOW, NH_STATIC, NH_VAR）：
+ *   VIS_UNDEF=0  VIS_CONST=1  VIS_FLOW=2  VIS_STATIC=3  VIS_VAR=4
+ * PB-27.9 补 VIS_VAR（替换原 VIS_DEFAULT=0 的语义重复），PB-27.3 统一数值。 */
 typedef enum {
-    VIS_DEFAULT = 0,    /* local scope */
+    VIS_UNDEF = 0,      /* undefined visibility */
     VIS_CONST,          /* read-only global */
     VIS_FLOW,           /* dynamically tracked heap */
-    VIS_STATIC,          /* static lifetime */
-    VIS_UNDEF           /* undefined visibility */
+    VIS_STATIC,         /* static lifetime */
+    VIS_VAR             /* default "new value" semantics（无前缀声明 / 默认返回） */
 } Visibility;
 
+
+/* ============================================================
+ * 以下 CType / Symbol / SymKind / TokenSym / Module / LinkLib 及
+ * ParserState、CompilerState 中引用它们字段，均为 2026-11-12 已物理删除的
+ * A 线的遗留类型（IR 线不再使用）。extern 函数声明与 -run 字段已清理；
+ * 这些类型定义因与两大状态结构体互相引用、删除需连带重写结构体，风险大于
+ * 收益，暂保留并在此标注为 dead-code 遗留，待后续专项清理。
+ * ============================================================ */
 
 /* Forward declarations */
 typedef struct CType CType;
@@ -120,7 +135,8 @@ struct Symbol {
     int hash;
     CType *type;
     Visibility vis;
-    
+    int ret_vis;          /* 仅 SYM_FUNCTION：返回值可见性前缀（PB-27）；VIS_VAR=4 默认 / VIS_CONST=1 / VIS_FLOW=2 / VIS_STATIC=3 */
+
     /* Storage info */
     int is_defined;             /* has body been defined */
     int is_extern;              /* external symbol */
@@ -136,6 +152,9 @@ struct Symbol {
     Symbol *borrow_source;      /* who this var borrows from (for unfreeze) */
     /* 指针当前所指对象的字节数，`.()` 越界检查用；0 = 静态未知（不检查） */
     unsigned int pointee_bytes;
+    /* 通用 `void` 槽位在声明处由 `malloc(T)` / `&x` 定下的所指类型，供省略类型的
+       裸 `.()` / `p[]` / `->` 还原成 `(*(T*)(p))`；NULL = 静态未知 */
+    CType *pointee_type;
     /* len(x) 内置函数的逻辑长度：数组=元素个数、动态字符串 char[]=字面量长度、
        切片变量=边界差 hi-lo；len_known = 0 表示静态不可知（len() 报错） */
     int len_known;
@@ -159,6 +178,8 @@ struct Symbol {
     int member_count;
     int total_size;
     int total_align;
+    /* 成员默认值（`x i32 = 7`）的 C 初值文本，仅成员 Symbol 用；NULL = 无默认值 */
+    char *def_init;
     
     /* For modules */
     Symbol *module_symbols;
@@ -232,6 +253,10 @@ typedef struct {
     Symbol *cur_func;
     Symbol *cur_struct;
     Symbol *last_ident;         /* last identifier referenced in an expr */
+    /* 刚解析的后缀链是裸标识符（无任何后缀步），赋值即整变量重绑定 */
+    int lhs_bare_ident;
+    /* 本语句自身转移出去的 flow 源：右值取值仍须放行，语句结束即失效（§12.1） */
+    Symbol *moved_src;
     int scope_depth;
     
     /* Parsing flags */
@@ -243,13 +268,12 @@ typedef struct {
     int *macro_ptr;
     int unget_buffer_enabled;
     unsigned int malloc_bytes;  /* 本次 malloc(T) 请求的字节数，供声明初始化记录 pointee_bytes */
+    CType *init_pointee;        /* 本次初值静态已知的所指类型（malloc(T) / &x），供声明记录 pointee_type */
     int lhs_was_deref;          /* 赋值左侧是解引用链（`p.(T) = v`）而非对 p 本身赋值 */
     int rhs_was_slice;          /* 刚解析的表达式以切片读 `[a..b]` 结尾（数组声明据此走复制） */
     int slice_lmark;            /* 该切片读文本在 cgen 缓冲里的起点，用于确认它是赋值左侧整体 */
     int slice_len_known;        /* 最近一次切片读的上下界是否都是字面量（`len(切片变量)` 据此求值） */
     long long slice_len;        /* 该切片的逻辑长度 hi-lo */
-    int lhs_bare_ident;         /* 刚解析的后缀链是裸标识符（无任何后缀步），赋值即整变量重绑定 */
-    Symbol *moved_src;          /* 本语句自身转移出去的 flow 源：右值取值仍须放行，语句结束即失效（§12.1） */
     
     /* Error handling */
     int error_count;
@@ -287,10 +311,7 @@ struct CompilerState {
     int debug_mode;
     int test_mode;              /* -lexertest: dump token stream only */
     int output_type;            /* 0=exec, 1=object, 2=shared, 3=static */
-    int backend;                /* 0=c (default, external tcc), 1=native (libtcc in-process) */
-    int run_mode;               /* -run: with native backend, compile to memory and execute */
-    int run_argc;               /* -run 透传的程序参数 */
-    char **run_argv;
+    int backend;                /* 2=ir-c (default) 3=ir-native 4=ir-riscv64 5=ir-loongarch64 */
     char *output_file;
     char *input_file;
     int argc;
@@ -355,84 +376,14 @@ int is_keyword(const char *str, int len);
 int is_type_token(TokenType tok);
 int is_visibility_token(TokenType tok);
 
-/* cgen.c - C backend */
-void cgen_init(void);
-void cgen_raw(const char *fmt, ...);
-void cgen_line(const char *fmt, ...);
-void cgen_blank(void);
-void cgen_indent(void);
-void cgen_dedent(void);
-const char *cgen_result(void);
-int cgen_mark(void);                /* 分段缓冲：mark/slice/truncate */
-const char *cgen_slice(int mark);
-void cgen_truncate(int mark);
-const char *c_type_name(CType *t);
-const char *c_type_suffix(CType *t);
-void c_type_params(const CType *t, char *out, int sz);   /* 函数指针参数列表 */
-void cgen_header(void);
-
-/* native.c - libtcc machine-code backend (-backend=native) */
-int native_backend_available(void);
-int native_memory_available(void);
-int native_compile_string(const char *csrc, const char *outfile, int verbose, int debug);
-int native_run_string(const char *csrc, int argc, char **argv, int verbose, int debug);
-
-/* parser.c */
-void parser_init(CompilerState *cs);
+/* token 访问器（实现在 lexer.c——原在 parser.c，2026-11-12 A 线删除后移来） */
 TokenType cur_tok(CompilerState *cs);
 void next_tok(CompilerState *cs);
 void expect(CompilerState *cs, TokenType tok);
 void skip_newlines(CompilerState *cs);
-void parse_type(CompilerState *cs, CType *type);
-void parse_module(CompilerState *cs);
-void parse_declaration(CompilerState *cs);
-void parse_function(CompilerState *cs, Symbol *func_sym);
-void parse_statement(CompilerState *cs);
-void parse_expression(CompilerState *cs);
 
-/* irparse.c / ir.c / ir_to_c.c / ir_to_native.c - IR middle layer (backend=ir-*) */
+/* irparse.c / ir.c / ir_to_c.c / ir_backend.c + ir_<arch>.c - IR middle layer (backend=ir-*) */
 int ir_compile(CompilerState *cs, const char *filename, int backend, int verbose);
-
-/* linker.c */
-void linker_init(CompilerState *cs);
-void link_add_library(CompilerState *cs, char *path, char *alias, char *lib_path);
-
-/* sym.c */
-Symbol *sym_find(CompilerState *cs, const char *tok_str);
-Symbol *sym_push(CompilerState *cs, SymKind kind, const char *tok_str, CType *type);
-Symbol *sym_add_member(CompilerState *cs, Symbol *sym, const char *name, CType *type);
-Symbol *sym_push_local(CompilerState *cs, Symbol *func_sym, const char *name, CType *type);
-Symbol *sym_pop_locals(CompilerState *cs, Symbol *func_sym);
-Symbol *sym_register_builtins(CompilerState *cs);
-
-/* type.c */
-CType *type_new(CompilerState *cs, TypeKind kind);
-CType *type_array(CompilerState *cs, void *elem_type, int size);
-CType *type_check_statement(CompilerState *cs);
-unsigned int type_align(CType *t);
-
-/* vis.c */
-void visibility_init(CompilerState *cs);
-void vis_scope_enter(CompilerState *cs);
-void vis_scope_exit(CompilerState *cs);
-void verify_types(CompilerState *cs);
-int vis_is_pointer_type(CType *t);
-int vis_check_transfer(Visibility src, Visibility dst);
-void vis_update_source(Visibility src, Visibility dst, Symbol *src_sym);
-int vis_check_usable(CompilerState *cs, Symbol *s);
-int vis_check_writable(CompilerState *cs, Symbol *s);
-void vis_check_assign(CompilerState *cs, Visibility dst_vis, Symbol *src_sym,
-                      Symbol *dst_sym, const char *dst_name);
-void vis_unfreeze_borrows(Symbol *borrow_head, Symbol *scope_start);
-
-/* module.c */
-Module *module_add(CompilerState *cs, const char *tok_str, char *input_file);
-Module *module_import(CompilerState *cs, const char *name);
-
-/* stdlib.c */
-void stdlib_register_all(CompilerState *cs);
-void stdlib_resolve_link_libraries(CompilerState *cs);
-void stdlib_generate_runtime_stubs(CompilerState *cs);
 
 extern CompilerState *g_cs;
 

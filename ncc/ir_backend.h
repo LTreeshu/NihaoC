@@ -37,22 +37,24 @@ typedef void (*FnEpilogue)(NBuf *b, const struct TargetBackend *tb,
                            const IrFn *f, int need_ret);
 
 struct TargetBackend {
-    const char *name;         /* "x86-64" | "riscv64" | "arm64" */
-    const char *asm_syntax;   /* "att"（GAS/AT&T） */
+    const char *name;         /* "riscv64" | "loongarch64"（IR 线只留这两档） */
 
     /* ---- 栈帧布局 ---- */
     int slot_stride;          /* 槽间距（字节）：8 */
-    int stack_dir;            /* -1 向下（x86-64/riscv64/arm64 均向下） */
+    int stack_dir;            /* -1 向下（riscv64/loongarch64 均向下） */
     int callee_align;         /* 栈对齐：16 */
-    int frame_extra;          /* 额外帧开销（影子空间等） */
+    int frame_extra;          /* 额外帧开销（两档都是 ra + fp 各 8 字节） */
+    /* 单帧可寻址上限（字节）。两档发射器都用「帧指针 ±12 位立即数」寻址槽位，
+     * 超界会发出发汇编器拒绝的指令；0 = 不限（发射器自己能处理超界偏移）。 */
+    int max_frame;
 
     /* ---- 调用约定（参数寄存器表，超出走栈） ---- */
-    const char **int_arg_regs;   /* {"rcx","rdx","r8","r9",NULL} / {"a0",...} */
+    const char **int_arg_regs;   /* riscv "a0"… / loongarch "$a0"… */
     int int_arg_count;
-    const char **fp_arg_regs;    /* {"xmm0",...} / {"fa0",...} */
+    const char **fp_arg_regs;    /* riscv "fa0"… / loongarch "$fa0"… */
     int fp_arg_count;
-    const char *ret_reg;         /* "rax" / "a0" */
-    const char *fp_ret_reg;      /* "xmm0" / "fa0" */
+    const char *ret_reg;         /* "a0" / "$a0" */
+    const char *fp_ret_reg;      /* "fa0" / "$fa0" */
 
     /* ---- 指令发射钩子 ---- */
     FnPrologue fn_prologue;      /* 函数序言（帧 + 参数装载） */
@@ -70,9 +72,7 @@ const char *backend_name(int idx);
 int irgen_backend_emit(IrProg *p, const char *outfile, const char *backend);
 
 /* 各后端实例（定义于各自 .c） */
-extern const TargetBackend x86_64_backend;
-extern const TargetBackend riscv64_backend;   /* 阶段 3 */
-extern const TargetBackend arm64_backend;      /* PB-20 */
-extern const TargetBackend loongarch64_backend; /* 阶段 4 */
+extern const TargetBackend riscv64_backend;      /* 阶段 3 */
+extern const TargetBackend loongarch64_backend;  /* 阶段 4 */
 
 #endif /* IR_BACKEND_H */

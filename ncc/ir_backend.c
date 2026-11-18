@@ -44,11 +44,10 @@ void nb_put(NBuf *b, const char *fmt, ...)
     b->len += (size_t)need;
 }
 
-/* 后端注册表（阶段 1：x86-64；阶段 3：+riscv64/arm64；阶段 4：+loongarch64） */
+/* 后端注册表：IR 线只保留 riscv64 与 loongarch64 两档机器码发射器；
+ * x86-64 / arm64 已删除，那些平台上由 C 路线（ir-c / ir-native 的回退）出可执行文件 */
 static const TargetBackend *g_backends[] = {
-    &x86_64_backend,
     &riscv64_backend,
-    &arm64_backend,
     &loongarch64_backend,
 };
 
@@ -91,7 +90,18 @@ int irgen_backend_emit(IrProg *p, const char *outfile, const char *backend)
         nb_put(&b, ".section .rodata\n");
         for (int i = 0; i < p->str_count; i++) {
             nb_put(&b, "%s:\n", p->str_syms[i]);
-            nb_put(&b, "  .string \"%s\"\n", p->str_data[i]);
+            nb_put(&b, "  .string \"%s\"\n", ir_str_escaped(p->str_data[i]));
+        }
+        nb_put(&b, ".text\n");
+    }
+
+    /* 全局变量池（顶层 var/const 声明）：8 字节定长槽，浮点初值存位模式 */
+    if (p->glb_count > 0) {
+        nb_put(&b, ".data\n");
+        for (int i = 0; i < p->glb_count; i++) {
+            nb_put(&b, ".align 3\n");
+            nb_put(&b, "%s:\n", p->glb_syms[i]);
+            nb_put(&b, "  .quad %lld\n", (long long)p->glb_init[i]);
         }
         nb_put(&b, ".text\n");
     }
@@ -104,6 +114,17 @@ int irgen_backend_emit(IrProg *p, const char *outfile, const char *backend)
         if (frame % tb->callee_align != 0)
             frame += tb->callee_align - (frame % tb->callee_align);
 
+        /* 槽位靠帧指针的 12 位立即数寻址，超界会发出汇编器拒绝的指令（PB-35）：
+         * 宁可在这里拒绝出码，也不产出一份编不过的 .s */
+        if (tb->max_frame > 0 && frame > tb->max_frame) {
+            fprintf(stderr,
+                    "ir-backend: %s: frame of %d bytes exceeds the %d-byte addressing "
+                    "limit of the %s emitter (too many values in one function)\n",
+                    f->name, frame, tb->max_frame, tb->name);
+            if (b.buf) free(b.buf);
+            return -1;
+        }
+
         if (f->is_main) {
             nb_put(&b, ".globl main\n");
         }
@@ -113,16 +134,21 @@ int irgen_backend_emit(IrProg *p, const char *outfile, const char *backend)
 
         /* 指令循环。label 编号 per-function 从 0 起，多函数同一汇编文件会重名
          * （.L0 跨函数重复）→ 发射前把本函数 label 加上全局基数（lbl_base） */
+        int lbl_max = -1;
         for (int i = 0; i < f->ins_count; i++) {
             IrIns *in = &f->ins[i];
-            if (in->op == IR_ALLOCA || in->op == IR_PARAM) continue;
+            if (in->op == IR_ALLOCA || in->op == IR_AGG_ALLOCA ||
+                in->op == IR_PARAM) continue;
             if (in->op == IR_LABEL || in->op == IR_JMP ||
                 in->op == IR_JZ || in->op == IR_JNZ) {
+                if (in->label > lbl_max) lbl_max = in->label;
                 in->label += lbl_base;
             }
             if (tb->emit_ins) tb->emit_ins(&b, in, tb, p, f, i);
         }
-        lbl_base += f->label_count;
+        /* 基数要越过本函数实际用到的最大 label id：label_count 只记 ir_new_label 那一档，
+         * goto/label 走 IR_GOTO_LABEL_BASE 独立编号，只按 label_count 前进会撞名（PB-59） */
+        if (lbl_max >= 0) lbl_base += lbl_max + 1;
 
         /* 函数尾：无显式 return 时补隐式返回 */
         int need_ret = 1;

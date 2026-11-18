@@ -34,24 +34,27 @@ NiHao 是一种新型静态编译语言，专为系统级编程和高性能应�
 - `visof(var)` 可见性判断 返回可见属性
 
 > `sizeof` / `typeof` / `alignof` / `offsetof` / `bitoffsetof` / `structof` / `unionof` / `holdof` / `visof` 是关键字，
-> `len` / `malloc` / `print` / `puts` / `static_assert` 是**内置名**——两类都不参与用户作用域解析，用户声明同名符号不能遮蔽它们。
+> `len` / `malloc` / `static_assert` 是**内置名**——它们不参与用户作用域解析，用户声明同名符号不能遮蔽它们。
+> `print` / `puts` 不是内置名：由 **stdio 标准库**（`use stdio`）提供，是普通函数。
 > 从属查询内置函数（`structof` / `unionof` / `holdof`）统一为三参 `(type, member, ptr)`：只有"类型 + 成员名"无法给出偏移，
 > 必须由成员地址反推首地址；`structof` 仅接受 `struct`、`unionof` 仅接受 `union`、`holdof` 两者通用。
 > `len(x)` 的三类取值均为编译期常量；实参的逻辑长度静态不可知（标量、非字面量边界的切片等）时为前端错误。
 > 各后端对这些内置的落地情况见 `docs/IMPLEMENTATION_STATUS.md`。
 
-#### 2.3.1 输出内建（`print` / `puts`）
+#### 2.3.1 输出（`print` / `puts`，stdio 标准库）
+
+`print` / `puts` 由 stdio 标准库模块提供，须经 `use stdio` 引入；它们是普通函数，不是编译器内置。
 
 - `puts(s)` 输出以 `\0` 结尾的字符串并自动换行；实参**必须是字符串指针**（`char*` / `char[]`）。
   它不是"打印任意值"——把整型（如 `p.(i32)`）传给 `puts` 会被按地址解引用，运行期崩溃或输出乱码。
 - `print(x)` 实参**不是**字符串字面量时：按十进制整数输出该值并换行（打印数值，非打印地址）。
-- `print("fmt", a, b, ...)` 实参**是**字符串字面量时：直接转发给 C 的 `printf`——第一个参数就是 C 格式串，
+- `print("fmt", a, b, ...)` 实参**是**字符串字面量时：按第一个参数的格式串约定输出——
   格式符（`%d` / `%s` / `%lld` ...）与参数个数、类型须自行匹配，**不会**自动拼接多余参数、**不会**自动换行。
   因此 `print("[LOG] ", msg)` 只输出 `[LOG] `（`msg` 被丢弃），正确写法是 `print("[LOG] %s\n", msg)`。
 
-> 两种形态由实参首 token 静态区分（字面量→ `printf` 直通，否则→整型打印），故 `print(buf)` 中
+> 两种形态由实参首 token 静态区分（字面量→格式串输出，否则→整型打印），故 `print(buf)` 中
 > `buf` 为字符串变量时**不会**输出字符串内容，只会输出其地址整数值——打印字符串一律用 `puts`。
-> `puts` 是 C 库直通。`print` 在各后端的可用性见 `docs/IMPLEMENTATION_STATUS.md`。
+> `print` / `puts` 由 stdio 标准库提供。
 
 ### 2.4 关键字说明
 
@@ -77,7 +80,7 @@ NiHao 是一种新型静态编译语言，专为系统级编程和高性能应�
 - `[[local]]` 内部链接函数属性修饰
 - `[[used]]` 强制保留函数属性修饰
 - `[[unused]]` 强制弃用函数属性修饰
-- `[[export] ".my_section"]` 导出到指定段函数属性修饰
+- `[[export ".my_section"]]` 导出到指定段函数属性修饰
 
 > 关键字全集与产生式位置以 [`BNF.md`](./BNF.md) §1.2 为准（语法关键字 40 个 + 词法保留 8 个 + 基本类型名 16 个）。
 > 其中 **`register` / `restrict` / `volatile` 与 `short` / `int` / `long` / `float` / `double` 仅词法保留**：本版没有任何产生式使用它们，写进源码只会得到保留字冲突。
@@ -732,7 +735,7 @@ while opt {
 | `[[weak]]`             | 弱符号定义，可被同名强符号覆盖 | 库提供的默认实现     |
 | `[[used]]`             | 强制保留符号，即使未被引用   | 被调试器或汇编调用的函数 |
 | `[[unused]]`           | 标记为已弃用，触发编译警告   | 过渡期旧接口       |
-| `[[export] ".section"]` | 导出到指定的段         | 链接器脚本控制的特殊段  |
+| `[[export ".section"]]` | 导出到指定的段         | 链接器脚本控制的特殊段  |
 
 **组合规则**：方括号属性与返回值属性**可共存**，方括号属性在前。
 
@@ -753,7 +756,7 @@ while opt {
 | 内联，返回动态指针   | `[[inline]] flow create_small() void { ... }`       | 建议内联          |
 | 弱符号，返回静态指针  | `[[weak]] static get_default() void { ... }`        | 允许覆盖的默认实现     |
 | 弃用，返回动态指针   | `[[unused]] flow old_api() void { ... }`            | 触发弃用警告        |
-| 导出到段，返回静态指针 | `[[export]".init"] static init_data() void { ... }` | 放入指定段         |
+| 导出到段，返回静态指针 | `[[export ".init"]] static init_data() void { ... }` | 放入指定段        |
 
 ---
 
@@ -918,7 +921,7 @@ flow old_create() void {
 }
 
 // 导出到初始化段 + 返回静态指针
-[[export] ".init"] 
+[[export ".init"]] 
 static get_init_data() void {
     static data InitData = {.magic = 0xDEADBEEF}
     return &data

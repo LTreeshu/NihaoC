@@ -1,0 +1,4 @@
+paren type ok
+signed literal ok
+paren deref ok
+arrow typed ok

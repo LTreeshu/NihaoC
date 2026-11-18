@@ -258,7 +258,12 @@ static void parse_number(LexerState *lex, int first_char)
         lex->tok_val.f = strtod(buf, NULL);
     } else {
         lex->tok = TOK_INT_CONST;
-        lex->tok_val.i = strtoll(buf, NULL, 0);
+        if (is_binary) {
+            /* base 0 只自动识别 `0x`，`0b` 会被截断成 0；二进制档显式按基 2 解析 */
+            lex->tok_val.i = strtoll(buf + 2, NULL, 2);
+        } else {
+            lex->tok_val.i = strtoll(buf, NULL, 0);
+        }
     }
 }
 
@@ -692,3 +697,33 @@ void lexer_peek(LexerState *lex)
     }
 }
 
+
+/* ============================================================
+ * Token 访问器（原在 parser.c，A 线删除后移至词法层——ir 前端与词法测试共用）
+ * ============================================================ */
+
+TokenType cur_tok(CompilerState *cs)
+{
+    return cs->parser.lex->tok;
+}
+
+void next_tok(CompilerState *cs)
+{
+    lexer_next(cs->parser.lex);
+}
+
+void expect(CompilerState *cs, TokenType tok)
+{
+    if (cur_tok(cs) != tok) {
+        nihao_error(cs, "expected '%s', got '%s'",
+                   token_name(tok), token_name(cur_tok(cs)));
+    }
+    next_tok(cs);
+}
+
+void skip_newlines(CompilerState *cs)
+{
+    while (cur_tok(cs) == TOK_NEWLINE) {
+        next_tok(cs);
+    }
+}

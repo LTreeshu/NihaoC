@@ -149,6 +149,7 @@ static CompilerState *nihao_new(void)
     cs->output_type = 0;        /* executable */
     cs->verbose = 0;
     cs->debug_mode = 0;
+    cs->backend = 2;            /* ir-c（A 线删除后唯一默认，2026-11-12） */
 
     /* Initialize subsystems */
     cs->allocated_ptrs = NULL;
@@ -204,8 +205,9 @@ static void print_usage(void)
         "  -c              Compile only (object file)\n"
         "  -shared         Generate shared library\n"
         "  -static         Generate static library\n"
-        "  -backend <be>   Backend: c (default, external tcc) | native (libtcc)\n"
-        "  -run            Native backend: compile to memory and run (Linux only)\n"
+        "  -backend <be>   Backend: ir-c (default) | ir-native (riscv64/loongarch64 hosts\n"
+        "                    emit asm, other hosts take the IR->C route) | ir-riscv64\n"
+        "                    | ir-loongarch64 (cross asm, .s only, not assembled)\n"
         "  -v, --verbose   Verbose output\n"
         "  -g              Generate debug information\n"
         "  -I <dir>        Add include directory\n"
@@ -223,6 +225,34 @@ static void print_usage(void)
 }
 
 static void lexer_test(CompilerState *cs, const char *filename);
+
+/* 后端名 -> cs->backend；-backend=<be> 与 -backend <be> 两种写法共用，
+ * 避免两条分派链各自漂移（错误文案里的后端集合必须与实际接受的一致） */
+static int set_backend(CompilerState *cs, const char *be)
+{
+    if (strcmp(be, "ir-c") == 0) {
+        cs->backend = 2;
+    } else if (strcmp(be, "ir-native") == 0) {
+        cs->backend = 3;
+    } else if (strcmp(be, "ir-riscv64") == 0) {
+        cs->backend = 4;
+    } else if (strcmp(be, "ir-loongarch64") == 0) {
+        cs->backend = 5;
+    } else if (strcmp(be, "c") == 0 || strcmp(be, "native") == 0 ||
+               strcmp(be, "ir-arm64") == 0 || strcmp(be, "ir-x86_64") == 0) {
+        /* 2026-11-12：A 线（c/native）与已删的 x86-64/arm64 发射器一律报 removed；
+         * NihaoC 2.0 只保留 IR 管线四档。 */
+        fprintf(stderr, "Error: backend '%s' was removed; NihaoC 2.0 keeps only the "
+                        "IR pipeline (ir-c | ir-native | ir-riscv64 | ir-loongarch64)\n", be);
+        return -1;
+    } else {
+        fprintf(stderr, "Error: unknown backend '%s' "
+                "(ir-c|ir-native|ir-riscv64|ir-loongarch64)\n", be);
+        return -1;
+    }
+    return 0;
+}
+
 static int parse_args(CompilerState *cs, int argc, char **argv)
 {
     int i;
@@ -264,58 +294,22 @@ static int parse_args(CompilerState *cs, int argc, char **argv)
             else if (strcmp(arg, "-g") == 0) {
                 cs->debug_mode = 1;
             }
-            /* Run in memory (native backend only): compile and execute main */
+            /* Run in memory：随 native 后端删除（2026-11-12），不再支持 */
             else if (strcmp(arg, "-run") == 0) {
-                cs->run_mode = 1;
-                cs->backend = 1;
-                /* -run 之后的剩余参数透传给 main(argc, argv)（PA-6） */
-                if (i + 1 < argc) {
-                    cs->run_argc = argc - i - 1;
-                    cs->run_argv = argv + i + 1;
-                }
+                fprintf(stderr, "Error: -run (in-memory execution) was removed with the "
+                                "native backend; use -backend=ir-native and run the binary\n");
+                return -1;
             }
-            /* Backend: c | native | ir-c (IR->C) | ir-native (IR->x86-64 asm) */
+            /* Backend: c | native | IR 线 ir-c / ir-native / ir-riscv64 / ir-loongarch64 */
             else if (strncmp(arg, "-backend=", 9) == 0) {
-                const char *be = arg + 9;
-                if (strcmp(be, "native") == 0) {
-                    cs->backend = 1;
-                } else if (strcmp(be, "c") == 0) {
-                    cs->backend = 0;
-                } else if (strcmp(be, "ir-c") == 0) {
-                    cs->backend = 2;
-                } else if (strcmp(be, "ir-native") == 0) {
-                    cs->backend = 3;
-                } else if (strcmp(be, "ir-riscv64") == 0) {
-                    cs->backend = 4;
-                } else if (strcmp(be, "ir-arm64") == 0) {
-                    cs->backend = 5;
-                } else if (strcmp(be, "ir-loongarch64") == 0) {
-                    cs->backend = 6;
-                } else {
-                    fprintf(stderr, "Error: unknown backend '%s' "
-                            "(c|native|ir-c|ir-native)\n", be);
-                    return -1;
-                }
+                if (set_backend(cs, arg + 9) != 0) return -1;
             }
             else if (strcmp(arg, "-backend") == 0) {
                 if (i + 1 < argc) {
-                    const char *be = argv[++i];
-                    if (strcmp(be, "native") == 0) {
-                        cs->backend = 1;
-                    } else if (strcmp(be, "c") == 0) {
-                        cs->backend = 0;
-                    } else if (strcmp(be, "ir-c") == 0) {
-                        cs->backend = 2;
-                    } else if (strcmp(be, "ir-native") == 0) {
-                        cs->backend = 3;
-                    } else {
-                        fprintf(stderr, "Error: unknown backend '%s' "
-                                "(c|native|ir-c|ir-native)\n", be);
-                        return -1;
-                    }
+                    if (set_backend(cs, argv[++i]) != 0) return -1;
                 } else {
                     fprintf(stderr, "Error: -backend requires an argument "
-                                    "(c|native|ir-c|ir-native)\n");
+                                    "(c|native|ir-c|ir-native|ir-riscv64|ir-loongarch64)\n");
                     return -1;
                 }
             }
@@ -470,126 +464,9 @@ char *load_source_file(const char *filename, size_t *size_out)
 
 static int compile_file(CompilerState *cs, const char *filename)
 {
-    char *source;
-    size_t source_size;
-
-    /* IR middle-layer pipeline: -backend=ir-c (2) / ir-native (3) */
-    if (cs->backend >= 2) {
-        return ir_compile(cs, filename, cs->backend, cs->verbose);
-    }
-
-    /* Load source file */
-    source = load_source_file(filename, &source_size);
-    if (!source) return -1;
-
-    if (cs->verbose) {
-        printf("Compiling: %s (%zu bytes)\n", filename, source_size);
-    }
-
-    /* Initialize lexer */
-    LexerState *lex = nihao_malloc(cs, sizeof(LexerState));
-    cs->parser.lex = lex;
-    lexer_init(cs, filename, source);
-
-    /* Initialize subsystems */
-    parser_init(cs);
-    visibility_init(cs);
-    linker_init(cs);
-    stdlib_register_all(cs);
-    stdlib_resolve_link_libraries(cs);
-    stdlib_generate_runtime_stubs(cs);
-
-    /* Initialize C backend */
-    cgen_init();
-    cgen_header();
-
-    /* Parse module (emits C source via cgen) */
-    parse_module(cs);
-
-    /* Check for errors */
-    if (cs->error_count > 0) {
-        fprintf(stderr, "Compilation failed with %d error(s), %d warning(s)\n",
-                cs->error_count, cs->warning_count);
-        return -1;
-    }
-
-    if (cs->verbose) {
-        printf("Compilation successful (%d warnings)\n", cs->warning_count);
-    }
-
-    /* Write the generated C source to <output>.c */
-    char cpath[1024];
-    snprintf(cpath, sizeof(cpath), "%s.c", cs->output_file ? cs->output_file : "a.out");
-    ensure_parent_dir(cpath);
-    FILE *cfp = fopen(cpath, "wb");
-    if (!cfp) {
-        nihao_error(cs, "cannot open C output file '%s'", cpath);
-        return -1;
-    }
-    fputs(cgen_result(), cfp);
-    fclose(cfp);
-    if (cs->verbose) {
-        printf("C source written to %s (%d bytes)\n", cpath,
-               (int)strlen(cgen_result()));
-    }
-
-    /* Produce the final executable: -backend=c -> external tcc,
-     * -backend=native -> libtcc in-process machine code,
-     * -run (native) -> compile to memory and execute main directly */
-    if (cs->output_type == 0) {
-        const char *out = cs->output_file ? cs->output_file : "a.out";
-        if (cs->backend == 1) {
-            if (cs->run_mode) {
-                if (!native_memory_available()) {
-                    fprintf(stderr, "Error: -run (in-memory execution) is not supported "
-                                    "by the Windows libtcc build; use -backend=native "
-                                    "with an output file instead\n");
-                    return -1;
-                }
-                if (cs->verbose) {
-                    printf("native backend: compiling %d bytes of C to memory\n",
-                           (int)strlen(cgen_result()));
-                }
-                int rargc = cs->run_argc > 0 ? cs->run_argc : 1;
-                char *def_argv[] = { "nihao-run", NULL };
-                char **rargv = cs->run_argv ? cs->run_argv : def_argv;
-                return native_run_string(cgen_result(), rargc, rargv,
-                                         cs->verbose, cs->debug_mode);
-            }
-            if (cs->verbose) {
-                printf("native backend: libtcc compiling %d bytes of C\n",
-                       (int)strlen(cgen_result()));
-            }
-            if (native_compile_string(cgen_result(), out,
-                                      cs->verbose, cs->debug_mode) != 0) {
-                fprintf(stderr, "native backend failed\n");
-                return -1;
-            }
-        } else {
-            char cmd[1600];
-            int cmdlen = snprintf(cmd, sizeof(cmd), "tcc \"%s\" -o \"%s\"",
-                                  cpath, out);
-            /* link 库声明：link "lib" alias -> 外部 tcc 加 -l<name>（与 native 对齐） */
-            for (int i = 0; i < cs->link_lib_count; i++) {
-                LinkLib *ll = &cs->link_libs[i];
-                if (ll->name && ll->name[0] &&
-                    cmdlen > 0 && cmdlen < (int)sizeof(cmd) - 64) {
-                    cmdlen += snprintf(cmd + cmdlen, sizeof(cmd) - (size_t)cmdlen,
-                                       " -l%s", ll->name);
-                }
-            }
-            if (cs->verbose) {
-                printf("Invoking: %s\n", cmd);
-            }
-            int rc = system(cmd);
-            if (rc != 0) {
-                fprintf(stderr, "tcc backend failed (exit %d)\n", rc);
-                return -1;
-            }
-        }
-    }
-
-    return 0;
+    /* 唯一管线：IR 前端 → IR 中间层 → 出码（ir-c / ir-native / 交叉 asm）
+     * （2026-11-12 A 线 parser.c/cgen.c/native.c 物理删除，无 c/native 后端） */
+    return ir_compile(cs, filename, cs->backend, cs->verbose);
 }
 
 static void lexer_test(CompilerState *cs, const char *filename)

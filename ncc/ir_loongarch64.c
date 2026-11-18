@@ -4,24 +4,36 @@
 #include <string.h>
 
 /* ============================================================
- * loongarch64 后端（阶段 4：只验汇编生成，本机不汇编/运行）
+ * loongarch64 后端（阶段 4；2026-09-27 起本机用 LLVM 的 LoongArch MC 层
+ * 汇编验证，见 TODO-PB 的 PB-35——之前只验「生成了文本」，从未验过语法）
  *
- * 约定（LoongArch64 基础指令集，GAS 语法，寄存器带 $ 前缀）：
- *  - 全栈槽：vreg N 在 s0-stride*(N+1)（槽向下生长）
+ * 约定（LoongArch64 基础指令集 + D 扩展，GAS 语法，寄存器带 $ 前缀）：
+ *  - 全栈槽：vreg N 在 $s0 负偏移 stride*(N+1)（槽向下生长）
+ *  - 访存操作数是「基址在前」的三操作数形式：`ld.d $a0, $s0, -8`，
+ *    不是 AT&T 的 `-8($s0)`；偏移量必须在 ±2047 之内（超界的发射路径未实现）
  *  - 帧指针 $s0（fp）；$ra 保存在 8(sp)、$s0 在 0(sp)
  *  - 调用约定：$a0-$a7 整数参数/返回（$a0 返回），$fa0-$fa7 浮点参数
  *  - 立即数：li.d 伪指令（汇编器展开，支持任意 64 位）
- *  - 浮点：64 位 D 扩展（fadd.d 等）；int→double ffint.d.l；
- *    double→int ftintrz.l.d（向零舍入）；比较 fcmp.cond.d（结果 1.0/0.0）
+ *  - 取静态符号地址：发 `pcalau12i $rD, %pc_hi20(sym)` + `addi.d $rD, $rD, %pc_lo12(sym)`
+ *    这一对（clang 就是这么发的），**不要发 `la sym`**——MC 层把 `la` 展开成经 GOT 的
+ *    pcalau12i + ld.d，而 -static 下 ld.lld 只给第一个站点建槽，第二个站点起就读到 0
+ *  - 浮点：int→double 是 movgr2fr.d 再 ffint.d.l（两个操作数都是浮点寄存器）；
+ *    double→int 是 ftintrz.l.d（向零舍入，同样 f→f）再 movfr2gr.d；
+ *    比较是 fcmp.<cnd>.d $fcc0, $fa0, $fa1 写条件码，再 movcf2gr + andi 取 0/1；
+ *    gt/ge 通过交换操作数用 clt/cle 表达
  *  - LA64 无 neg/not 单指令：sub.d/nor 组合
+ *  - 整数逻辑与移位无 .d 后缀的写法分两套：and/or/xor/nor/slt/sltui 不带 .d，
+ *    移位 slli.d/srli.d/srai.d 与算术 add.d/sub.d/mul.d/div.d/mod.d 带 .d
  * ============================================================ */
 
 /* 当前函数帧大小（prologue 设置，IR_RET/epilogue 恢复 sp 用） */
 static int g_la_frame = 0;
 
+/* 槽操作数：LoongArch 是「基址在前」的三操作数语法（`st.d $a0, $s0, -8`），
+ * 不是 AT&T 的 `-8($s0)` 形式——后者 GAS 与 LLVM 都拒绝，实测见 TODO-PB 的 PB-35。 */
 static void la_slot(NBuf *b, int vreg, const TargetBackend *tb)
 {
-    nb_put(b, "-%d($s0)", tb->slot_stride * (vreg + 1));
+    nb_put(b, "$s0, -%d", tb->slot_stride * (vreg + 1));
 }
 
 /* 装载 a=slot(x)，a1=slot(y) 到 $a0/$a1 */
@@ -75,18 +87,18 @@ static void la_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             la_store_a0(b, in->dst, tb);
             break;
         case IR_ITOD:
-            /* int64 槽 → $a0 → ffint.d.l → $fa0 → fsd.d 槽（D 扩展） */
+            /* int64 槽 → $a0 → movgr2fr.d → $fa0 → ffint.d.l（f→f）→ fst.d 槽 */
             nb_put(b, "  ld.d $a0, ");
             la_slot(b, in->a, tb);
-            nb_put(b, "\n  ffint.d.l $fa0, $a0\n  fst.d $fa0, ");
+            nb_put(b, "\n  movgr2fr.d $fa0, $a0\n  ffint.d.l $fa0, $fa0\n  fst.d $fa0, ");
             la_slot(b, in->dst, tb);
             nb_put(b, "\n");
             break;
         case IR_DTOI:
-            /* double → int64 截断（ftintrz.l.d，向零舍入） */
+            /* double → int64 截断：ftintrz.l.d 仍是 f→f，再 movfr2gr.d 回整数 */
             nb_put(b, "  fld.d $fa0, ");
             la_slot(b, in->a, tb);
-            nb_put(b, "\n  ftintrz.l.d $a0, $fa0\n");
+            nb_put(b, "\n  ftintrz.l.d $fa0, $fa0\n  movfr2gr.d $a0, $fa0\n");
             la_store_a0(b, in->dst, tb);
             break;
         case IR_FTRUNC:
@@ -123,17 +135,27 @@ static void la_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             nb_put(b, "\n");
             break;
         case IR_FCMP:
-            /* 浮点比较：fcmp.cond.d → $fa0=1.0/0.0 → ftintrz.l.d 转整数 */
+            /* 浮点比较：fcmp.<cnd>.d 写 $fcc0 → movcf2gr 取回整数 → andi 保 0/1。
+             * gt/ge 无独立条件码，交换两个操作数用 clt/cle 表达。 */
             nb_put(b, "  fld.d $fa0, ");
             la_slot(b, in->a, tb);
             nb_put(b, "\n  fld.d $fa1, ");
             la_slot(b, in->b, tb);
-            nb_put(b, "\n  fcmp.cond.d $fa0, $fa0, $fa1, %s\n",
-                   in->imm == 0 ? "eq" : in->imm == 1 ? "ne" :
-                   in->imm == 2 ? "lt" : in->imm == 3 ? "le" :
-                   in->imm == 4 ? "gt" : "ge");
-            nb_put(b, "  ftintrz.l.d $a0, $fa0\n");
-            la_store_a0(b, in->dst, tb);
+            switch (in->imm) {
+                case 0: nb_put(b, "\n  fcmp.ceq.d $fcc0, $fa0, $fa1\n"); break;
+                case 1: nb_put(b, "\n  fcmp.ceq.d $fcc0, $fa0, $fa1\n  movcf2gr $a0, $fcc0\n"
+                                   "  xori $a0, $a0, 1\n  andi $a0, $a0, 1\n");
+                        la_store_a0(b, in->dst, tb);
+                        break;
+                case 2: nb_put(b, "\n  fcmp.clt.d $fcc0, $fa0, $fa1\n"); break;
+                case 3: nb_put(b, "\n  fcmp.cle.d $fcc0, $fa0, $fa1\n"); break;
+                case 4: nb_put(b, "\n  fcmp.clt.d $fcc0, $fa1, $fa0\n"); break;
+                default: nb_put(b, "\n  fcmp.cle.d $fcc0, $fa1, $fa0\n"); break;
+            }
+            if (in->imm != 1) {
+                nb_put(b, "  movcf2gr $a0, $fcc0\n  andi $a0, $a0, 1\n");
+                la_store_a0(b, in->dst, tb);
+            }
             break;
         case IR_NEG:
             nb_put(b, "  ld.d $a0, ");
@@ -151,12 +173,13 @@ static void la_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
         case IR_CMP_LE: case IR_CMP_GT: case IR_CMP_GE:
             la_ld2(b, in, tb);
             switch (in->op) {
-                case IR_CMP_EQ: nb_put(b, "  xor.d $a0, $a0, $a1\n  sltui $a0, $a0, 1\n"); break;
-                case IR_CMP_NE: nb_put(b, "  xor.d $a0, $a0, $a1\n  sltui $a0, $zero, $a0\n"); break;
-                case IR_CMP_LT: nb_put(b, "  slt.d $a0, $a0, $a1\n"); break;
-                case IR_CMP_LE: nb_put(b, "  slt.d $a0, $a1, $a0\n  xori $a0, $a0, 1\n"); break;
-                case IR_CMP_GT: nb_put(b, "  slt.d $a0, $a1, $a0\n"); break;
-                case IR_CMP_GE: nb_put(b, "  slt.d $a0, $a0, $a1\n  xori $a0, $a0, 1\n"); break;
+                /* 逻辑与比较类指令在 LoongArch 无 .d 后缀（64 位即默认宽度） */
+                case IR_CMP_EQ: nb_put(b, "  xor $a0, $a0, $a1\n  sltui $a0, $a0, 1\n"); break;
+                case IR_CMP_NE: nb_put(b, "  xor $a0, $a0, $a1\n  sltu $a0, $zero, $a0\n"); break;
+                case IR_CMP_LT: nb_put(b, "  slt $a0, $a0, $a1\n"); break;
+                case IR_CMP_LE: nb_put(b, "  slt $a0, $a1, $a0\n  xori $a0, $a0, 1\n"); break;
+                case IR_CMP_GT: nb_put(b, "  slt $a0, $a1, $a0\n"); break;
+                case IR_CMP_GE: nb_put(b, "  slt $a0, $a0, $a1\n  xori $a0, $a0, 1\n"); break;
                 default: break;
             }
             la_store_a0(b, in->dst, tb);
@@ -174,13 +197,23 @@ static void la_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             nb_put(b, ".L%d:\n", (int)in->label);
             break;
         case IR_LD_ADDR:
-            nb_put(b, "  la $a0, %s\n", in->sym);
+            /* `la sym` 会被 MC 层展开成经 GOT 的 ld.d，-static 下第二个站点起读到 0，
+             * puts 拿到空指针即在 musl strlen 里崩（实测 38/51，见 TODO-PB 的 PB-39）。 */
+            nb_put(b, "  pcalau12i $a0, %%pc_hi20(%s)\n  addi.d $a0, $a0, %%pc_lo12(%s)\n",
+                   in->sym, in->sym);
             la_store_a0(b, in->dst, tb);
             break;
         case IR_ADDR:
             /* 地址 = $s0 - stride*(a+imm+1)（槽向下生长，槽号偏移 imm） */
             nb_put(b, "  addi.d $a0, $s0, -%d\n",
                    tb->slot_stride * (in->a + (int)in->imm + 1));
+            la_store_a0(b, in->dst, tb);
+            break;
+        case IR_ADDR_LO:
+            /* PB-82：紧凑字节块首地址（块最低槽）；块内字节按 +k 向上寻址 */
+            nb_put(b, "  addi.d $a0, $s0, -%d
+",
+                   tb->slot_stride * (in->a + (int)in->imm));
             la_store_a0(b, in->dst, tb);
             break;
         case IR_ELEM_ADDR:
@@ -197,7 +230,15 @@ static void la_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
         case IR_LOAD:
             nb_put(b, "  ld.d $a0, ");
             la_slot(b, in->a, tb);
-            nb_put(b, "\n  ld.d $a0, $a0, 0\n");
+            nb_put(b, "\n  ");
+            /* PB-75(b)：imm 承载字节宽（0=8；±w=窄读，负=符号扩展） */
+            if (in->imm < 0) {
+                long long w = -in->imm;
+                nb_put(b, "%s $a0, $a0, 0\n", w == 1 ? "ld.b" : w == 2 ? "ld.h" : "ld.w");
+            } else {
+                nb_put(b, "%s $a0, $a0, 0\n",
+                       in->imm == 1 ? "ld.bu" : in->imm == 2 ? "ld.hu" : in->imm == 4 ? "ld.wu" : "ld.d");
+            }
             la_store_a0(b, in->dst, tb);
             break;
         case IR_STORE:
@@ -205,7 +246,8 @@ static void la_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             la_slot(b, in->a, tb);
             nb_put(b, "\n  ld.d $a1, ");
             la_slot(b, in->b, tb);
-            nb_put(b, "\n  st.d $a1, $a0, 0\n");
+            nb_put(b, "\n  %s $a1, $a0, 0\n",
+                   in->imm == 1 ? "st.b" : in->imm == 2 ? "st.h" : in->imm == 4 ? "st.w" : "st.d");
             break;
         case IR_LOAD8:
             nb_put(b, "  ld.d $a0, ");
@@ -250,9 +292,10 @@ static void la_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             if (in->op == IR_CALL) {
                 nb_put(b, "  bl %s\n", in->sym);
             } else {
-                nb_put(b, "  ld.d $a0, ");
+                /* 同 riscv64：目标地址落进 $a0 会覆盖第一整数实参，改用暂存 $t0 */
+                nb_put(b, "  ld.d $t0, ");
                 la_slot(b, in->a, tb);
-                nb_put(b, "\n  jirl $ra, $a0, 0\n");
+                nb_put(b, "\n  jirl $ra, $t0, 0\n");
             }
             /* 返回值存储：目标函数浮点返回 → $fa0（fst.d），否则 $a0（st.d） */
             if (in->op == IR_CALL) {
@@ -333,7 +376,8 @@ static void la_fn_epilogue(NBuf *b, const TargetBackend *tb,
     (void)tb;
     if (need_ret) {
         if (f->ret_is_double) {
-            nb_put(b, "  mov.d $fa0, $zero\n");   /* 浮点隐式返回 0.0 */
+            /* $zero 的 64 位全零按 IEEE754 即 +0.0，经 movgr2fr.d 送进 $fa0 */
+            nb_put(b, "  ori $a0, $zero, 0\n  movgr2fr.d $fa0, $a0\n");
         } else {
             nb_put(b, "  ori $a0, $zero, 0\n");
         }
@@ -347,11 +391,11 @@ static const char *la_fp_arg_regs[]  = { "$fa0", "$fa1", "$fa2", "$fa3", "$fa4",
 
 const TargetBackend loongarch64_backend = {
     .name         = "loongarch64",
-    .asm_syntax   = "att",
     .slot_stride  = 8,
     .stack_dir    = -1,
     .callee_align = 16,
     .frame_extra  = 16,           /* $ra + $s0 保存 */
+    .max_frame    = 2047,         /* addi.d/ld.d/st.d 只用 12 位带符号立即数寻址（PB-35） */
     .int_arg_regs = la_int_arg_regs,
     .int_arg_count = 8,
     .fp_arg_regs  = la_fp_arg_regs,

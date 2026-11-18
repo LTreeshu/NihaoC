@@ -24,5 +24,29 @@ func main() {
             break
         }
     }
+    /* 负数模式（块形式；规范 2026-09-01 移除 => 箭头形式，此处以块形式保留覆盖） */
+    c i32 = 0
+    while c -= 1 {
+        is -1 {
+            puts("is neg2 ok")
+            break
+        }
+    }
+    /* 区间模式（块形式） */
+    d i32 = 2
+    while d -= 1 {
+        is 0..2 {
+            puts("is range2 ok")
+            break
+        }
+    }
+    /* 通配符模式：is _ 匹配任意 __is_val（恒真），每次循环都进入 */
+    e i32 = 0
+    while e < 3 {
+        e += 1
+        is _ {
+            puts("is wild ok")
+        }
+    }
     return
 }

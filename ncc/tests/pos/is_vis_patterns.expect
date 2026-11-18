@@ -1,0 +1,10 @@
+vis const ok
+vis static ok
+vis var ok
+vis wild ok
+vis undef end
+pat neg ok
+pat int ok
+pat range ok
+pat ident ok
+pat enum ok

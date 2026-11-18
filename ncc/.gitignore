@@ -10,3 +10,7 @@ test/*.c
 myapp/
 test/f1b
 test/f4
+
+# Test runner build artifacts (ir-native -> a.out, ir-c -> a.out.c)
+a.out
+a.out.c

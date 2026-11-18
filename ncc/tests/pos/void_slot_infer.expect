@@ -1,0 +1,8 @@
+void deref write ok
+void deref read ok
+void empty subscript ok
+void subscript write ok
+void arrow ok
+void malloc deref ok
+void array elem ok
+void array elem write ok

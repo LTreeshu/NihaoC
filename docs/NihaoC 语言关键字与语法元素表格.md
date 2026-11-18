@@ -40,6 +40,7 @@
 - `continue` 继续下一次循环
 - `default` 分支默认选项
 - `goto` 跳转关键字
+- `name:` 标签定义（语句级，与 `goto` 配套；标签名在函数内唯一，先定义或后定义均可）
 - `true` / `false` 布尔字面量
 - `bitoffsetof` 位域成员位偏移（`bitoffsetof(type, member)`，声明序位布局，编译期常量）
 - `holdof` 变量持有者查询（`holdof(type, member, ptr)`，struct/union 通用）
@@ -237,5 +238,7 @@
 - `;` 语句终止符
 
 - `#` 兼容语句终止符（规范写法是 `;` 或换行）
+
+- `:` 标签定义标记（`<identifier> :`），亦用于引导 `case` / `default` 分支体
 
 - `::` 词法保留（作用域解析预留），当前语法不使用

@@ -21,7 +21,7 @@ typedef enum {
     IR_NOT,         /* dst = ~a（按位取反）            */
     IR_CMP_EQ, IR_CMP_NE, IR_CMP_LT, IR_CMP_LE,
     IR_CMP_GT, IR_CMP_GE,
-    IR_FADD, IR_FSUB, IR_FMUL, IR_FDIV,   /* dst = a op b（double，xmm） */
+    IR_FADD, IR_FSUB, IR_FMUL, IR_FDIV,   /* dst = a op b（double） */
     IR_FCMP,        /* dst = (a cmp b) double 比较；imm: 0=EQ 1=NE 2=LT 3=LE 4=GT 5=GE */
     IR_ITOD,        /* dst = (double)a（int64 → double 符号转换，混合类型提升） */
     IR_DTOI,        /* dst = (int64)a（double → int64 截断，配 ITOD 的反向转换） */
@@ -36,10 +36,19 @@ typedef enum {
     IR_RET,         /* return dst (-1 = bare return)  */
     IR_LABEL,
     IR_ALLOCA,      /* dst = address of a stack slot of size imm */
+    IR_AGG_ALLOCA,  /* PB-76(b) 聚合体分配：dst..dst+imm/8-1 是连续成员槽；
+                     * ir-c 落成一条 C 数组并把成员 vreg 映射到 name[k]，
+                     * 汇编后端与 ALLOCA 一样跳过（槽由 vreg 编号自然给出） */
     IR_ADDR,        /* dst = address of local variable vreg a */
+    IR_ADDR_LO,     /* PB-82 紧凑数组块首地址（字节块最低地址）：dst = block_start(a)，
+                     * imm = 块槽数；ir-c = &name[0]，汇编 = 最低槽 s0 - stride*(a+imm)。
+                     * 块内字节一律按 +k 向上寻址（与 C 字符串/数组语义一致，方向无关）。 */
     IR_ELEM_ADDR,   /* dst = &base[idx]（元素地址，后端按自身布局方向） */
     IR_LOAD,        /* dst = *(a)                     */
     IR_STORE,       /* *(a) = b                       */
+    /* PB-74(b)：IR_LOAD / IR_STORE 的 imm 承载字节宽（0 或未用 = 8 字节，兼容旧出码）：
+     *   LOAD  imm = 1/2/4  → 零扩展读 w 字节；imm = -w → 符号扩展读 w 字节（i8/i16/i32）；
+     *   STORE imm = 1/2/4  → 写低 w 字节。两档发射器与 ir_to_c 按此分派窄 ld/st。 */
     IR_LOAD8,       /* dst = *(uint8_t*)(a)（字节读，动态字符串元素） */
     IR_STORE8,      /* *(uint8_t*)(a) = b（字节写）    */
     IR_LD_ADDR,     /* dst = address of global sym    */
@@ -56,10 +65,19 @@ typedef struct {
     const char *sym;    /* LD_ADDR / 字符串字面量符号 */
 } IrIns;
 
+/* <bracket-attr-list>（BNF §7）的属性位；与 A 后端 parse_declaration 的 attr 串同判据。
+ * export 只带一个可选段名字面量，对本骨架的出码没有影响，故解析后不落位。 */
+#define IR_ATTR_LOCAL  1   /* 内部链接 -> static */
+#define IR_ATTR_INLINE 2   /* 建议内联 -> inline */
+#define IR_ATTR_WEAK   4   /* 弱定义 -> __attribute__((weak)) */
+#define IR_ATTR_USED   8   /* 强制保留 -> __attribute__((used)) */
+#define IR_ATTR_UNUSED 16  /* 标记弃用 -> __attribute__((unused)) */
+
 typedef struct {
     char *name;
     int is_main;
     int is_mr;          /* struct 返回（sret）：返回聚合值（隐藏 out-param 缓冲） */
+    int attrs;          /* <bracket-attr-list>（BNF §7）的 IR_ATTR_* 位掩码 */
     int param_count;
     int vreg_count;     /* 函数内使用的最大 vreg + 1 */
     int label_count;
@@ -67,10 +85,13 @@ typedef struct {
     int ins_cap;
     IrIns *ins;
     int *vreg_type;     /* vreg -> 0=int 1=double（随 vreg_count 动态增长） */
+    const char **vreg_name; /* vreg -> 源码变量名（有名用名，无名 NULL；ir_to_c 输出可读化，PB 阶段3 C 项） */
     int ret_is_double;  /* 返回值为 f64/f32（PB-浮点 ABI） */
     int ret_agg_ti;     /* 返回聚合类型索引（struct 返回 = sret；-1=非聚合） */
+    int ret_vis;        /* 返回值可见性前缀（flow/var/const/static），默认 VIS_VAR；M2 调用点赋值检查用（PB-27） */
     int param_types[32];/* 参数类型 0=int 1=double（param_count <= 32，与 pnames 对齐） */
     int param_agg_ti[32];/* 参数聚合类型（struct 参数按值展开；-1=标量；按展开后索引） */
+    int param_vis[32];  /* 参数可见性前缀（flow/var/const/static），按声明序对齐 param；M2 调用点检查用 */
 } IrFn;
 
 typedef struct {
@@ -82,6 +103,12 @@ typedef struct {
     int str_cap;
     char **str_data;
     char **str_syms;
+    /* 全局变量池（顶层 var/const 声明）：符号名 + 初值位模式 + 是否 double */
+    int glb_count;
+    int glb_cap;
+    char **glb_syms;
+    int64_t *glb_init;
+    int *glb_is_double;
 } IrProg;
 
 IrProg *ir_prog_new(void);
@@ -91,9 +118,13 @@ int ir_emit(IrFn *f, IrOp op, int dst, int a, int b, int64_t imm);
 int ir_new_vreg(IrFn *f);
 int ir_new_label(IrFn *f);
 int ir_add_string(IrProg *p, const char *data);   /* 返回符号名序号 */
+/* 全局变量入池（顶层 var/const）：返回符号名序号 */
+int ir_add_global(IrProg *p, int64_t init, int is_double);
+/* 池里的字节落到 C 文本或汇编 .string 前必须过这个转义（实现见 ir.c 内注释） */
+const char *ir_str_escaped(const char *s);
 
-/* 后端入口（由 ncc 的 -backend=ir-c / ir-native 调用） */
+/* 后端入口（由 ncc 的 -backend=ir-c / ir-native / ir-riscv64 / ir-loongarch64 调用；
+ * 机器码发射器统一走 ir_backend.h 的 irgen_backend_emit） */
 int irgen_c_emit(IrProg *p, const char *outfile);        /* IR -> C */
-int irgen_native_emit(IrProg *p, const char *outfile);   /* IR -> x86-64 asm */
 
 #endif
