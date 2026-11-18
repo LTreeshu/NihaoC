@@ -59,6 +59,11 @@ static int *vfrm;
 /* 数组元素字节步长（PB-82）：0=默认 8 字节槽；1/2/4/8 = 紧凑存储（char[9] 占 9 字节，
  * 块按 ceil(N*es/8) 槽分配）。动态字符串（vetyp=8）另按 1 字节指针寻址。 */
 static int *velemsz;
+/* PB-83：聚合体/紧凑数组的块槽数（ADDR_LO 用；0=标量槽） */
+static int *vblk;
+/* PB-83：聚合体**参数**（按值展平）——成员按「参数槽序号 base+fi」访问，
+ * 不走字节布局（调用方按成员序传值，被调方把它们当参数槽本地副本）。 */
+static int *vaparam;
 
 /* PB-72：逻辑长度是否静态可知（A 侧 Symbol.len_known）。ve[] 的 0 既表示「标量」
  * 也表示「空动态字符串」，光看 ve>0 会把后者误判成不可知 ⇒ 单开一张标志表。
@@ -379,6 +384,16 @@ static int64_t ir_load_width_imm(int code);   /* PB-75(b) */
 static int ir_store_width(int code);           /* PB-75(b) */
 static void ir_type_decl_named(CompilerState *cs, const char *tname);  /* PB-80 */
 static long long type_size_token(TokenType t);   /* PB-82（链求值先于定义处使用） */
+static void ir_block_copy_bytes(int dst_val, int src_val, int bytes);  /* PB-83 */
+static int ir_block_slots(int vi);
+static int ir_agg_base(int vi);
+static int ir_ptr_byte_off(int base, int off);
+static int ir_member_addr(CompilerState *cs, int vi, int ti, int fi, int off);
+static int ir_member_vcode(int ti, int fi);
+static int ir_member_swidth(int ti, int fi);
+static int ir_bf_unit(int ti, int fi);
+static int ir_bf_shift(int ti, int fi);
+static void ir_copy_literal(CompilerState *cs, int dst, const char *str);
 
 /* ---- struct/union/enum 类型表 ---- */
 #define IR_MAX_AGG 16
@@ -388,10 +403,12 @@ typedef struct {
     int kind;               /* 0=struct 1=union 2=enum */
     const char *mnames[IR_MAX_MEMB];   /* 成员名（enum 为 variant 名） */
     long long mvals[IR_MAX_MEMB];      /* enum variant 值 */
-    int mbits[IR_MAX_MEMB];            /* 位域宽度（0=非位域；槽内低 N 位） */
+    int mbits[IR_MAX_MEMB];            /* 位域宽度（0=非位域） */
     int mtype[IR_MAX_MEMB];            /* 成员聚合类型索引（-1=标量；嵌套用） */
-    int moff[IR_MAX_MEMB];             /* 成员起始槽偏移（递归展开） */
-    int marr_len[IR_MAX_MEMB];         /* 成员是数组时的元素数（0=非数组成员） */
+    int moff[IR_MAX_MEMB];             /* 成员起始字节偏移（PB-83，C 布局；位域=存储单元起点） */
+    int mbit[IR_MAX_MEMB];             /* 位域绝对位偏移（-1=非位域）（PB-83） */
+    int misarr[IR_MAX_MEMB];           /* 成员带 `[...]` 后缀（含动态 `char[]`，PB-83） */
+    int marr_len[IR_MAX_MEMB];         /* 数组成员的元素数（0=动态字符串成员） */
     int marr_esize[IR_MAX_MEMB];       /* 数组成员的元素字节宽（1/2/4/8） */
     int msize[IR_MAX_MEMB];            /* 标量成员的字节宽（1/2/4/8；0=聚合成员）（PB-74 补） */
     int mscode[IR_MAX_MEMB];           /* 标量成员类型码（0=i64 1=f64 2=i8 … 8=f32；-1=聚合成员）（PB-76 补） */
@@ -400,36 +417,103 @@ typedef struct {
     double mdef_dbl[IR_MAX_MEMB];
     const char *mdef_str[IR_MAX_MEMB];
     int mcount;
-    int mslots;                        /* 类型总槽数（递归；union=1 enum=1） */
+    int bytes;                         /* 实际字节大小（C 布局，PB-83） */
+    int align;                         /* 类型对齐（成员最大对齐） */
+    int mslots;                        /* 占用槽数 = ceil(bytes/8)（帧分配用） */
 } IrAggType;
 static IrAggType agg_types[IR_MAX_AGG];
 static int agg_count;
 
 /* 递归计算成员起始槽偏移与总槽数（嵌套 struct；union=最大成员槽数，enum=1 槽；
  * mslots>0 表示已计算（memset 清零后首次计算）） */
+static int agg_align_up(int v, int al)
+{
+    if (al <= 1) return v;
+    return (v + al - 1) / al * al;
+}
+
+/* 成员的大小与对齐（字节）：嵌套聚合取其 bytes/align；数组成员 len*es；
+ * `[` 但无长度的动态字符串成员 = 指针（8/8）；标量取 msize。 */
+static void agg_member_shape(int ti, int i, int *sz, int *al)
+{
+    IrAggType *a = &agg_types[ti];
+    if (a->mtype[i] >= 0) {
+        agg_compute_offsets(a->mtype[i]);
+        *sz = agg_types[a->mtype[i]].bytes;
+        *al = agg_types[a->mtype[i]].align;
+        if (*al < 1) *al = 1;
+        return;
+    }
+    if (a->misarr[i]) {
+        if (a->marr_len[i] <= 0) {
+            *sz = 8; *al = 8;          /* 动态字符串成员：指针 */
+        } else {
+            int es = a->marr_esize[i] > 0 ? a->marr_esize[i] : 1;
+            *sz = a->marr_len[i] * es;
+            *al = es > 8 ? 8 : es;
+        }
+        return;
+    }
+    int s = a->msize[i] > 0 ? a->msize[i] : 8;
+    *sz = s;
+    *al = s > 8 ? 8 : s;
+}
+
+/* PB-83：C 布局——struct 按成员对齐顺序排布（位域按同类型单元打包），
+ * union 全部偏移 0、大小取最大成员；mslots 仅用于帧分配（ceil(bytes/8)）。 */
 static int agg_compute_offsets(int ti)
 {
     IrAggType *a = &agg_types[ti];
-    if (a->mslots > 0 || a->kind == 2) return a->kind == 2 ? 1 : a->mslots;
+    if (a->mslots > 0) return a->mslots;
+    if (a->kind == 2) {
+        a->bytes = 8; a->align = 8; a->mslots = 1;
+        return 1;
+    }
     if (a->kind == 1) {
-        /* union：成员共享起始槽 0；总槽数 = 最大成员槽数（嵌套聚合成员，
-         * 如 union { a Point b Point } = 2 槽——防链式访问越界） */
-        int mx = 1;
+        int mx = 1, ma = 1;
         for (int i = 0; i < a->mcount; i++) {
-            int ms = (a->mtype[i] >= 0) ? agg_compute_offsets(a->mtype[i]) : 1;
-            if (ms > mx) mx = ms;
+            int sz = 0, al = 1;
+            agg_member_shape(ti, i, &sz, &al);
+            a->moff[i] = 0;
+            a->mbit[i] = -1;
+            if (sz > mx) mx = sz;
+            if (al > ma) ma = al;
         }
-        a->mslots = mx;
-        return mx;
+        a->align = ma;
+        a->bytes = agg_align_up(mx, ma);
+        a->mslots = (a->bytes + 7) / 8;
+        return a->mslots;
     }
-    int off = 0;
+    int cur = 0, malign = 1;
+    int bf_start = -1, bf_sz = 0, bf_used = 0;   /* 当前位域单元 */
     for (int i = 0; i < a->mcount; i++) {
-        a->moff[i] = off;
-        int ms = (a->mtype[i] >= 0) ? agg_compute_offsets(a->mtype[i]) : 1;
-        off += ms;
+        if (a->mbits[i] > 0) {
+            int usize = a->msize[i] > 0 ? a->msize[i] : 1;
+            if (bf_start < 0 || bf_sz != usize ||
+                bf_used + a->mbits[i] > usize * 8) {
+                cur = agg_align_up(cur, usize);
+                bf_start = cur; bf_sz = usize; bf_used = 0;
+                cur += usize;
+            }
+            a->moff[i] = bf_start;
+            a->mbit[i] = bf_start * 8 + bf_used;
+            bf_used += a->mbits[i];
+            if (usize > malign) malign = usize;
+            continue;
+        }
+        bf_start = -1;
+        int sz = 1, al = 1;
+        agg_member_shape(ti, i, &sz, &al);
+        cur = agg_align_up(cur, al);
+        a->moff[i] = cur;
+        a->mbit[i] = -1;
+        cur += sz;
+        if (al > malign) malign = al;
     }
-    a->mslots = off;
-    return off;
+    a->align = malign;
+    a->bytes = agg_align_up(cur, malign);
+    a->mslots = (a->bytes + 7) / 8;
+    return a->mslots;
 }
 
 /* enum 常量查找 */
@@ -513,12 +597,40 @@ static int ir_bitmask(int bits)
     ir_emit(F, IR_CONST, v, -1, -1, m);
     return v;
 }
-/* 读位域：LOAD → AND mask（bits<=0 时原样 LOAD） */
-static int ir_bf_load(int addr, int bits)
+/* 位域存储单元与位内偏移（PB-83：moff=单元字节起点、mbit=绝对位偏移） */
+static int ir_bf_unit(int ti, int fi)
 {
+    int u = agg_types[ti].msize[fi];
+    return (u == 1 || u == 2 || u == 4 || u == 8) ? u : 1;
+}
+static int ir_bf_shift(int ti, int fi)
+{
+    return agg_types[ti].mbit[fi] - agg_types[ti].moff[fi] * 8;
+}
+static int ir_bf_maskv(int bits, int shift)
+{
+    if (bits <= 0) return 0;
+    if (bits >= 64) return shift == 0 ? -1 : ((-1LL) << shift);
+    return (int)((((long long)1 << bits) - 1) << shift);
+}
+
+/* 读位域：按单元宽零扩展读 → 右移 → 掩码 */
+static int ir_bf_load(int addr, int ti, int fi)
+{
+    int bits = agg_types[ti].mbits[fi];
+    int unit = ir_bf_unit(ti, fi);
+    int sh = ir_bf_shift(ti, fi);
     int vr = ir_new_vreg(F);
-    ir_emit(F, IR_LOAD, vr, addr, -1, 0);
-    if (bits > 0) {
+    if (unit == 8) ir_emit(F, IR_LOAD, vr, addr, -1, 0);
+    else ir_emit(F, IR_LOAD, vr, addr, -1, unit);
+    if (sh > 0) {
+        int sc = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, sc, -1, -1, sh);
+        int r1 = ir_new_vreg(F);
+        ir_emit(F, IR_SHR, r1, vr, sc, 0);
+        vr = r1;
+    }
+    if (bits > 0 && bits < 64) {
         int mv = ir_bitmask(bits);
         int r2 = ir_new_vreg(F);
         ir_emit(F, IR_AND, r2, vr, mv, 0);
@@ -526,25 +638,35 @@ static int ir_bf_load(int addr, int bits)
     }
     return vr;
 }
-/* 写位域（RMW）：读槽 → AND ~mask → OR (v & mask) → STORE；bits<=0 直接 STORE */
-static void ir_bf_store(int addr, int v, int bits)
+
+/* 写位域（RMW，按单元宽读写）：clear mask → or (v<<shift)&mask → STORE 单元 */
+static void ir_bf_store(int addr, int v, int ti, int fi)
 {
-    if (bits <= 0) {
-        ir_emit(F, IR_STORE, -1, addr, v, 0);
-        return;
-    }
+    int bits = agg_types[ti].mbits[fi];
+    int unit = ir_bf_unit(ti, fi);
+    int sh = ir_bf_shift(ti, fi);
+    int w = (unit == 8) ? 0 : unit;
     int cur = ir_new_vreg(F);
-    ir_emit(F, IR_LOAD, cur, addr, -1, 0);
-    int mask = ir_bitmask(bits);
+    ir_emit(F, IR_LOAD, cur, addr, -1, w);
+    int maskv = ir_bf_maskv(bits, sh);
+    int mv = ir_new_vreg(F);
+    ir_emit(F, IR_CONST, mv, -1, -1, maskv);
     int notm = ir_new_vreg(F);
-    ir_emit(F, IR_NOT, notm, mask, -1, 0);
+    ir_emit(F, IR_NOT, notm, mv, -1, 0);
     int c1 = ir_new_vreg(F);
     ir_emit(F, IR_AND, c1, cur, notm, 0);
+    int vv = v;
+    if (sh > 0) {
+        int sc = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, sc, -1, -1, sh);
+        vv = ir_new_vreg(F);
+        ir_emit(F, IR_SHL, vv, v, sc, 0);
+    }
     int v1 = ir_new_vreg(F);
-    ir_emit(F, IR_AND, v1, v, mask, 0);
+    ir_emit(F, IR_AND, v1, vv, mv, 0);
     int r = ir_new_vreg(F);
     ir_emit(F, IR_OR, r, c1, v1, 0);
-    ir_emit(F, IR_STORE, -1, addr, r, 0);
+    ir_emit(F, IR_STORE, -1, addr, r, w);
 }
 
 /* 聚合初始化列表（嵌套递归）：{e0, e1, ...} 或 {{...}, {...}}
@@ -567,7 +689,7 @@ static void ir_member_default_store(CompilerState *cs, int vi, int ti, int fi, i
 {
     IrAggType *a = &agg_types[ti];
     int v = -1;
-    int w = ir_store_width(a->mscode[fi]);
+    int w = ir_member_swidth(ti, fi);
     if (a->mdef_kind[fi] == 1) {
         v = ir_new_vreg(F);
         ir_emit(F, IR_CONST, v, -1, -1, a->mdef_int[fi]);
@@ -588,7 +710,7 @@ static void ir_member_default_store(CompilerState *cs, int vi, int ti, int fi, i
         return;
     }
     int addr = ir_new_vreg(F);
-    ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
+    addr = ir_ptr_byte_off(ir_agg_base(vi), off);
     ir_emit(F, IR_STORE, -1, addr, v, w);
     (void)cs;
 }
@@ -647,10 +769,9 @@ static void ir_agg_init(CompilerState *cs, int vi, int ti, int base)
                     ir_agg_init(cs, vi, a->mtype[fi], off);
                 } else {
                     int v = ir_expr(cs);
-                    int addr = ir_new_vreg(F);
-                    ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
+                    int addr = ir_ptr_byte_off(ir_agg_base(vi), off);
                     ir_emit(F, IR_STORE, -1, addr, v,
-                            ir_store_width(a->mscode[fi]));
+                            ir_member_swidth(ti, fi));
                 }
                 seen[fi] = 1;
             } else {
@@ -661,10 +782,9 @@ static void ir_agg_init(CompilerState *cs, int vi, int ti, int base)
                     ir_agg_init(cs, vi, mt, off);
                 } else {
                     int v = ir_expr(cs);
-                    int addr = ir_new_vreg(F);
-                    ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
+                    int addr = ir_ptr_byte_off(ir_agg_base(vi), off);
                     ir_emit(F, IR_STORE, -1, addr, v,
-                            ir_store_width(a->mscode[k]));
+                            ir_member_swidth(ti, k));
                 }
                 seen[k] = 1;
                 k++;
@@ -696,50 +816,52 @@ static void ir_agg_init(CompilerState *cs, int vi, int ti, int base)
  * 内层花括号逐个元素走 ir_agg_init（元素内默认值/指定式照常）；未给初值的尾数元素补默认值。
  * 外层无花括号（`{1,2,3}`）按 C 的花括号省略规则、按槽序跨元素写入，**不补尾数默认**。
  * 平坦写入按「元素槽号 % mslots」取成员宽——嵌套聚合成员按整槽写（8 字节），属已知边界。 */
-static void ir_aggarr_init(CompilerState *cs, int vi, int ti, int mslots, int total)
+static void ir_aggarr_init(CompilerState *cs, int vi, int ti, int total)
 {
+    IrAggType *a = &agg_types[ti];
+    int by = a->bytes > 0 ? a->bytes : 8;
     next_tok(cs);           /* { */
     int flat = (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_LBRACE);
     if (flat) {
-        int slot = 0;
+        /* 扁平位置初值：按成员序跨元素展开（C 花括号省略），不补默认值，剩余成员清 0 */
+        int g = 0;
         while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF &&
-               slot < total * mslots) {
+               g < total * a->mcount) {
             int v = ir_expr(cs);
-            int addr = ir_new_vreg(F);
-            ir_emit(F, IR_ADDR, addr, vt[vi], -1, slot);
-            int mi = slot % mslots;
+            int e = g / a->mcount, mi = g % a->mcount;
+            int addr = ir_ptr_byte_off(ir_agg_base(vi), e * by + a->moff[mi]);
             ir_emit(F, IR_STORE, -1, addr, v,
-                    ir_store_width(agg_types[ti].mscode[mi]));
-            slot++;
+                    ir_member_swidth(ti, mi));
+            g++;
             if (cur_tok(cs) != TOK_COMMA) break;
             next_tok(cs);
         }
-        /* C 的聚合初值语义：未给出的槽补 0（不是成员默认值——PA-56 的扁平档口径） */
-        for (; slot < total * mslots; slot++) {
+        for (; g < total * a->mcount; g++) {
+            int e = g / a->mcount, mi = g % a->mcount;
             int zv = ir_new_vreg(F);
             ir_emit(F, IR_CONST, zv, -1, -1, 0);
-            int addr = ir_new_vreg(F);
-            ir_emit(F, IR_ADDR, addr, vt[vi], -1, slot);
-            ir_emit(F, IR_STORE, -1, addr, zv, 0);
+            int addr = ir_ptr_byte_off(ir_agg_base(vi), e * by + a->moff[mi]);
+            ir_emit(F, IR_STORE, -1, addr, zv, ir_member_swidth(ti, mi));
         }
     } else {
         int e = 0;
         while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF && e < total) {
             if (cur_tok(cs) == TOK_LBRACE) {
-                ir_agg_init(cs, vi, ti, e * mslots);
+                ir_agg_init(cs, vi, ti, e * by);
             } else {
                 /* 内层花括号省略：该值落到元素首成员 */
                 int v = ir_expr(cs);
-                int addr = ir_new_vreg(F);
-                ir_emit(F, IR_ADDR, addr, vt[vi], -1, e * mslots);
-                ir_emit(F, IR_STORE, -1, addr, v, 0);
+                int addr = ir_ptr_byte_off(ir_agg_base(vi),
+                                           e * by + (a->mcount ? a->moff[0] : 0));
+                ir_emit(F, IR_STORE, -1, addr, v,
+                        a->mcount ? ir_member_swidth(ti, 0) : 0);
             }
             e++;
             if (cur_tok(cs) != TOK_COMMA) break;
             next_tok(cs);
         }
         /* 尾数元素全默认值（PA-56 口径） */
-        for (; e < total; e++) ir_agg_defaults(cs, vi, ti, e * mslots);
+        for (; e < total; e++) ir_agg_defaults(cs, vi, ti, e * by);
     }
     expect(cs, TOK_RBRACE);
 }
@@ -766,8 +888,10 @@ static void ir_agg_decl(CompilerState *cs, const char *name, int ti, int vis)
         dims[nd++] = n;
         total *= n;
     }
-    int elems = mslots * total;
+    int by = a->bytes > 0 ? a->bytes : 8;
+    int elems = (int)(((long long)by * total + 7) / 8);
     int vi = var_declare(name, elems, ti, vis, 0);
+    vblk[vi] = elems;
     if (nd > 0) {
         /* 聚合体数组：vndim 标记数组形态（表达式路径据此走元素成员寻址），
          * ve 记「元素个数」供 len()（var_declare 记的是槽数） */
@@ -779,7 +903,7 @@ static void ir_agg_decl(CompilerState *cs, const char *name, int ti, int vis)
     if (cur_tok(cs) == TOK_ASSIGN) {
         next_tok(cs);
         if (cur_tok(cs) == TOK_LBRACE) {
-            if (nd > 0) ir_aggarr_init(cs, vi, ti, mslots, total);
+            if (nd > 0) ir_aggarr_init(cs, vi, ti, total);
             else ir_agg_init(cs, vi, ti, 0);
         } else if (nd > 0) {
             nihao_error(cs, "ir: aggregate array '%s' must be initialized from "
@@ -789,18 +913,9 @@ static void ir_agg_decl(CompilerState *cs, const char *name, int ti, int vis)
             int v = ir_expr(cs);
             /* sret 调用（struct 返回函数）：缓冲地址是"值"（last_mr_buf），
              * 缓冲值 + k*8 → LOAD → 聚合槽 k（与 sret 声明同逻辑） */
-            if (elems > 1 && last_mr_buf >= 0) {
-                int base = ir_new_vreg(F);
-                ir_emit(F, IR_MOV, base, last_mr_buf, -1, 0);
-                for (int k = 0; k < elems; k++) {
-                    int off = ir_new_vreg(F);
-                    ir_emit(F, IR_CONST, off, -1, -1, (long long)k * 8);
-                    int addr = ir_new_vreg(F);
-                    ir_emit(F, IR_ADD, addr, base, off, 0);
-                    int lv = ir_new_vreg(F);
-                    ir_emit(F, IR_LOAD, lv, addr, -1, 0);
-                    ir_emit(F, IR_MOV, vt[vi] + k, lv, -1, 0);
-                }
+            if (last_mr_buf >= 0) {
+                /* PB-83：sret 缓冲（堆，向上）→ 聚合块（低地址起，向上）按字节复制 */
+                ir_block_copy_bytes(ir_agg_base(vi), last_mr_buf, by);
                 last_mr_buf = -1;
             } else {
                 ir_emit(F, IR_MOV, vt[vi], v, -1, 0);
@@ -811,7 +926,7 @@ static void ir_agg_decl(CompilerState *cs, const char *name, int ti, int vis)
          * PB-80：聚合体数组逐元素回填 */
         if (nd > 0) {
             for (int e = 0; e < total; e++)
-                ir_agg_defaults(cs, vi, ti, e * mslots);
+                ir_agg_defaults(cs, vi, ti, e * by);
         } else {
             ir_agg_defaults(cs, vi, ti, 0);
         }
@@ -912,6 +1027,8 @@ static void var_reset(void)
         vmode = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vfrm = nihao_malloc(g_cs, vn_cap * sizeof(int));
         velemsz = nihao_malloc(g_cs, vn_cap * sizeof(int));
+        vblk = nihao_malloc(g_cs, vn_cap * sizeof(int));
+        vaparam = nihao_malloc(g_cs, vn_cap * sizeof(int));
         vlen_known = nihao_malloc(g_cs, vn_cap * sizeof(int));
     }
 }
@@ -960,6 +1077,8 @@ static int var_declare(const char *name, int elems, int type_idx, int vis,
         vmode = nihao_realloc(g_cs, vmode, vn_cap * sizeof(int));
         vfrm = nihao_realloc(g_cs, vfrm, vn_cap * sizeof(int));
         velemsz = nihao_realloc(g_cs, velemsz, vn_cap * sizeof(int));
+        vblk = nihao_realloc(g_cs, vblk, vn_cap * sizeof(int));
+        vaparam = nihao_realloc(g_cs, vaparam, vn_cap * sizeof(int));
         vlen_known = nihao_realloc(g_cs, vlen_known, vn_cap * sizeof(int));
     }
     vn[vn_count] = name;
@@ -973,6 +1092,8 @@ static int var_declare(const char *name, int elems, int type_idx, int vis,
     vmode[vn_count] = VM_SLOT;
     vfrm[vn_count] = 0;
     velemsz[vn_count] = 0;
+    vblk[vn_count] = 0;
+    vaparam[vn_count] = 0;
     vlen_known[vn_count] = (elems > 0) ? 1 : 0;
     for (int k = 0; k < IR_MAX_DIMS; k++) vdim[vn_count][k] = 0;
     int base = -1;
@@ -1083,6 +1204,96 @@ static int ir_arr_slots(int vi)
     return (ve[vi] * es + 7) / 8;
 }
 
+/* PB-83：变量的块槽数（聚合体用 vblk；紧凑数组按 ve*es 算；标量 0） */
+static int ir_block_slots(int vi)
+{
+    if (vblk[vi] > 0) return vblk[vi];
+    if (ve[vi] > 0) return ir_arr_slots(vi);
+    return 1;
+}
+
+/* 聚合体块首地址（低地址端） */
+static int ir_agg_base(int vi)
+{
+    int a = ir_new_vreg(F);
+    ir_emit(F, IR_ADDR_LO, a, vt[vi], -1, ir_block_slots(vi));
+    return a;
+}
+
+/* 块首 + 字节偏移（向上） */
+static int ir_ptr_byte_off(int base, int off)
+{
+    if (off == 0) return base;
+    int c = ir_new_vreg(F);
+    ir_emit(F, IR_CONST, c, -1, -1, off);
+    int r = ir_new_vreg(F);
+    ir_emit(F, IR_ADD, r, base, c, 0);
+    return r;
+}
+
+/* PB-83：按字节复制块（8 字节块优先，尾字节逐个）。src/dst 都是地址值 */
+static void ir_block_copy_bytes(int dst_val, int src_val, int bytes)
+{
+    int o = 0;
+    while (o + 8 <= bytes) {
+        int so = ir_ptr_byte_off(src_val, o);
+        int t = ir_new_vreg(F);
+        ir_emit(F, IR_LOAD, t, so, -1, 0);
+        int dof = ir_ptr_byte_off(dst_val, o);
+        ir_emit(F, IR_STORE, -1, dof, t, 0);
+        o += 8;
+    }
+    for (; o < bytes; o++) {
+        int so = ir_ptr_byte_off(src_val, o);
+        int t = ir_new_vreg(F);
+        ir_emit(F, IR_LOAD8, t, so, -1, 0);
+        int dof = ir_ptr_byte_off(dst_val, o);
+        ir_emit(F, IR_STORE8, -1, dof, t, 0);
+    }
+}
+
+/* PB-83：把字符串字面量（含结尾 NUL）逐字节写入 addr（切片字符串赋值） */
+static void ir_copy_literal(CompilerState *cs, int dst, const char *str)
+{
+    int n = (int)strlen(str);
+    for (int i = 0; i <= n; i++) {
+        int c = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, c, -1, -1, (unsigned char)(i < n ? str[i] : 0));
+        int a = ir_ptr_byte_off(dst, i);
+        ir_emit(F, IR_STORE8, -1, a, c, 0);
+    }
+    (void)cs;
+}
+
+/* 聚合体成员地址：普通变量按字节布局；聚合参数按参数槽（base+fi） */
+static int ir_member_addr(CompilerState *cs, int vi, int ti, int fi, int off)
+{
+    (void)cs; (void)ti;
+    if (vaparam[vi]) {
+        int a = ir_new_vreg(F);
+        ir_emit(F, IR_ADDR, a, vt[vi], -1, fi);
+        return a;
+    }
+    return ir_ptr_byte_off(ir_agg_base(vi), off);
+}
+
+/* PB-83：成员的类型码（动态字符串/嵌套聚合成员按“无标量类型”-1 → 整 8 字节） */
+static int ir_member_vcode(int ti, int fi)
+{
+    IrAggType *a = &agg_types[ti];
+    if (a->misarr[fi] && a->marr_len[fi] <= 0) return -1;   /* char[] 成员 = 指针 */
+    if (a->mtype[fi] >= 0) return -1;
+    return a->mscode[fi];
+}
+
+/* PB-83：成员写宽（动态字符串成员按 8 字节指针写） */
+static int ir_member_swidth(int ti, int fi)
+{
+    int c = ir_member_vcode(ti, fi);
+    if (c < 0) return 0;
+    return ir_store_width(c);
+}
+
 /* 块首地址（字节块最低地址）：汇编取最低槽、C 取 &name[0]。
  * 紧凑块内一律 +k 向上寻址，与 C 字符串/数组语义一致（方向在后端内消化）。 */
 static int ir_arr_lo(int vi)
@@ -1179,6 +1390,57 @@ static int ir_elem_addr(CompilerState *cs, int vi, int base_vreg, int idx_vreg,
     return addr;
 }
 
+/* PB-83：从属查询内置实现（cur_tok = 内置名，随后是 '('）
+ *   bits_mode=0：structof/holdof/unionof(Type, m, ptr) → ptr - 成员字节偏移
+ *   bits_mode=1：bitoffsetof(Type, m) → 成员位偏移 */
+static int ir_ownerof(CompilerState *cs, int bits_mode)
+{
+    next_tok(cs);           /* 内置名 */
+    expect(cs, TOK_LPAREN);
+    if (cur_tok(cs) != TOK_IDENTIFIER) {
+        nihao_error(cs, "ir: %s: expected an aggregate type name",
+                    bits_mode ? "bitoffsetof" : "structof");
+        return ir_new_vreg(F);
+    }
+    int ti = agg_type_find(cs->parser.lex->tok_str);
+    if (ti < 0) {
+        nihao_error(cs, "ir: unknown aggregate type '%s'", cs->parser.lex->tok_str);
+        ti = 0;
+    }
+    next_tok(cs);
+    expect(cs, TOK_COMMA);
+    if (cur_tok(cs) != TOK_IDENTIFIER) {
+        nihao_error(cs, "ir: expected a member name");
+        return ir_new_vreg(F);
+    }
+    int fi = agg_member_find(ti, cs->parser.lex->tok_str);
+    if (fi < 0) {
+        nihao_error(cs, "ir: no member '%s' in type '%s'",
+                    cs->parser.lex->tok_str, agg_types[ti].name);
+        fi = 0;
+    }
+    next_tok(cs);
+    if (bits_mode) {
+        expect(cs, TOK_RPAREN);
+        long long bo = (agg_types[ti].mbit[fi] >= 0)
+                       ? agg_types[ti].mbit[fi]
+                       : (long long)agg_types[ti].moff[fi] * 8;
+        int vr = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, vr, -1, -1, bo);
+        return vr;
+    }
+    expect(cs, TOK_COMMA);
+    int p = ir_expr(cs);
+    expect(cs, TOK_RPAREN);
+    int off = (agg_types[ti].kind == 1) ? 0 : agg_types[ti].moff[fi];
+    if (off == 0) return p;
+    int c = ir_new_vreg(F);
+    ir_emit(F, IR_CONST, c, -1, -1, off);
+    int r = ir_new_vreg(F);
+    ir_emit(F, IR_SUB, r, p, c, 0);
+    return r;
+}
+
 /* 数组成员的元素寻址：p.name[0] → 成员首槽地址 + idx*元素宽。
  * IR 槽模型下数组成员只占 1 个 8 字节槽（真实布局待裁定），越出首槽的元素
  * 没有地址可寻 → 常量下标越界时给专属诊断。返回元素地址 vreg（失败 -1）。
@@ -1200,14 +1462,9 @@ static int ir_member_elem_addr(CompilerState *cs, int vi, int ti, int fi, int of
         if (iv < 0 || iv >= elen) {
             nihao_error(cs, "ir: array index %lld is out of range for member '%s' "
                             "(%d elements)", iv, mname, elen);
-        } else if (iv * esize >= 8) {
-            nihao_error(cs, "ir: member '%s' element %lld lies beyond the IR 8-byte slot "
-                            "(only the first 8 bytes of an array member are addressable)",
-                        mname, iv);
         }
     }
-    int base = ir_new_vreg(F);
-    ir_emit(F, IR_ADDR, base, vt[vi], -1, off);
+    int base = ir_ptr_byte_off(ir_agg_base(vi), off);
     int iv2 = ir_new_vreg(F);
     ir_emit(F, IR_MOV, iv2, idx, -1, 0);
     int wv = ir_new_vreg(F);
@@ -1259,7 +1516,6 @@ static int ir_flat_index(CompilerState *cs, int vi, const int *idx, int nidx)
 static int ir_agg_elem_read(CompilerState *cs, int vi)
 {
     int ti = vty[vi];
-    int mslots = (agg_types[ti].kind == 2) ? 1 : agg_types[ti].mslots;
     int idxs[IR_MAX_DIMS];
     int nidx = 0;
     while (cur_tok(cs) == TOK_LBRACKET && nidx < IR_MAX_DIMS) {
@@ -1297,17 +1553,17 @@ static int ir_agg_elem_read(CompilerState *cs, int vi)
         }
         break;
     }
-    int base = ir_new_vreg(F);
-    ir_emit(F, IR_ADDR, base, vt[vi], -1, off);
+    int aggb = ir_agg_base(vi);
     int sc = ir_new_vreg(F);
-    ir_emit(F, IR_CONST, sc, -1, -1, (long long)mslots);
+    ir_emit(F, IR_CONST, sc, -1, -1, (long long)agg_types[ti].bytes);
     int scaled = ir_new_vreg(F);
     ir_emit(F, IR_MUL, scaled, flat, sc, 0);
-    int addr = ir_new_vreg(F);
-    ir_emit(F, IR_ELEM_ADDR, addr, base, scaled, 8);
+    int base = ir_new_vreg(F);
+    ir_emit(F, IR_ADD, base, aggb, scaled, 0);
+    int addr = ir_ptr_byte_off(base, off);
     int vr = ir_new_vreg(F);
     int mcode = (agg_types[cur_ti].mbits[last_fi] > 0) ? 0
-              : agg_types[cur_ti].mscode[last_fi];
+              : ir_member_vcode(cur_ti, last_fi);
     ir_emit(F, IR_LOAD, vr, addr, -1, ir_load_width_imm(mcode));
     if (mcode == 1 || mcode == 8) ir_set_double(vr);
     return vr;
@@ -1371,6 +1627,7 @@ typedef struct {
     int addr;
     int width;
     int is_slice;
+    int agg_ti;     /* PB-83：`.(AggType)` 定下的「指向聚合体」类型索引（-1=无） */
 } IrChain;
 
 /* 后缀链分组扫描：数出后缀「组」数，并标记新形态。
@@ -1473,20 +1730,10 @@ static int ir_chain_needs_new(CompilerState *cs, int vi)
  * 用方向感知的 IR_ELEM_ADDR（idx=off、宽 8）；堆/池来源两侧都向上，仍用字节 ADD。 */
 static int ir_ptr_slot_off(int vi, int base, int off)
 {
-    if (off == 0) return base;
-    int addr;
-    if (vfrm[vi]) {
-        int c = ir_new_vreg(F);
-        ir_emit(F, IR_CONST, c, -1, -1, off);
-        addr = ir_new_vreg(F);
-        ir_emit(F, IR_ELEM_ADDR, addr, base, c, 8);
-    } else {
-        int ov = ir_new_vreg(F);
-        ir_emit(F, IR_CONST, ov, -1, -1, (long long)off * 8);
-        addr = ir_new_vreg(F);
-        ir_emit(F, IR_ADD, addr, base, ov, 0);
-    }
-    return addr;
+    /* PB-83：聚合体/数组统一从块首（低地址）向上按字节排布，指针成员偏移
+     * 一律“指针值 + 字节偏移”——不再依赖帧生长方向/来源（vfrm 仅留作登记）。 */
+    (void)vi;
+    return ir_ptr_byte_off(base, off);
 }
 
 static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
@@ -1498,6 +1745,7 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
     ch->addr = -1;
     ch->width = 8;
     ch->is_slice = 0;
+    ch->agg_ti = -1;
 
     int base_vreg = vt[vi];   /* 当前寻址基址 */
     int ptr_base = 0;         /* 1 = 基址取「指针值」，0 = 取帧槽地址 */
@@ -1643,6 +1891,27 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
             int tcode = -1;
             TokenType ttype = TOK_EOF;
             int arr_len = -1;
+            if (cur_tok(cs) != TOK_RPAREN && cur_tok(cs) == TOK_IDENTIFIER) {
+                int ati = agg_type_find(cs->parser.lex->tok_str);
+                if (ati >= 0) {
+                    next_tok(cs);
+                    expect(cs, TOK_RPAREN);
+                    if (ch->kind != 1) {
+                        nihao_error(cs, "ir: '.()' with an aggregate type needs a pointer value");
+                        return 0;
+                    }
+                    ch->agg_ti = ati;
+                    ch->elem = -1;
+                    ch->elem_ptr = 0;
+                    ch->addr = -1;
+                    ch->is_slice = 0;
+                    ch->width = 8;
+                    base_vreg = ch->val;
+                    ptr_base = 1;
+                    step++;
+                    continue;
+                }
+            }
             if (cur_tok(cs) != TOK_RPAREN) {
                 ttype = cur_tok(cs);
                 if (ttype == TOK_VOID && ir_peek_ahead(cs, 1) == TOK_RPAREN) {
@@ -1758,11 +2027,19 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
             /* PB-76(b)：标量成员按成员类型窄读（符号扩展）；位域保持 8 字节 + AND */
             {
                 int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
-                          : agg_types[ti].mscode[last_fi];
+                          : ir_member_vcode(ti, last_fi);
                 ir_emit(F, IR_LOAD, v, addr, -1, ir_load_width_imm(mcode));
                 if (mcode == 1 || mcode == 8) ir_set_double(v);   /* PB-79：浮点成员读值标记 */
             }
             if (agg_types[ti].mbits[last_fi] > 0) {
+                int sh = ir_bf_shift(ti, last_fi);
+                if (sh > 0) {
+                    int sc = ir_new_vreg(F);
+                    ir_emit(F, IR_CONST, sc, -1, -1, sh);
+                    int r1 = ir_new_vreg(F);
+                    ir_emit(F, IR_SHR, r1, v, sc, 0);
+                    v = r1;
+                }
                 int mv = ir_bitmask(agg_types[ti].mbits[last_fi]);
                 int r2 = ir_new_vreg(F);
                 ir_emit(F, IR_AND, r2, v, mv, 0);
@@ -1771,17 +2048,20 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
             ch->addr = addr;
             ch->val = v;
             ch->kind = 0;
-            ch->elem = -1;
+            ch->elem = (agg_types[ti].misarr[last_fi] &&
+                        agg_types[ti].marr_len[last_fi] <= 0)
+                           ? -1 : agg_types[ti].mscode[last_fi];
             ch->elem_ptr = 0;
             ch->is_slice = 0;
+            ch->agg_ti = -1;
             base_vreg = v;
             ptr_base = 0;
             step++;
             continue;
         }
         if (t == TOK_DOT) {
-            /* 成员访问 s.field：链上只在首步支持（聚合类型取 vty[]） */
-            if (step != 0 || vty[vi] < 0) {
+            /* 成员访问 s.field（首步）或 `.(AggType).field`（PB-83） */
+            if (vty[vi] < 0 && ch->agg_ti < 0) {
                 nihao_error(cs, "ir: member access is only supported on an aggregate "
                                 "variable");
                 return 0;
@@ -1789,7 +2069,8 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
             next_tok(cs);
             const char *fname = cs->parser.lex->tok_str;
             next_tok(cs);
-            int ti = vty[vi];
+            int from_ptr = (ch->agg_ti >= 0);
+            int ti = from_ptr ? ch->agg_ti : vty[vi];
             int off = 0;
             int last_fi = -1;
             for (;;) {
@@ -1813,23 +2094,58 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
             }
             int esize = 0;
             int addr;
-            if (cur_tok(cs) == TOK_LBRACKET) {
+            int had_bracket = (cur_tok(cs) == TOK_LBRACKET);
+            if (from_ptr) {
+                if (cur_tok(cs) == TOK_LBRACKET) {
+                    nihao_error(cs, "ir: array member through '.(AggType)' is not supported");
+                    return 0;
+                }
+                addr = ir_ptr_byte_off(ch->val, off);
+            } else if (cur_tok(cs) == TOK_LBRACKET) {
                 addr = ir_member_elem_addr(cs, vi, ti, last_fi, off, fname, &esize);
                 if (addr < 0) return 0;
             } else {
-                addr = ir_new_vreg(F);
-                ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
+                addr = ir_member_addr(cs, vi, ti, last_fi, off);
+            }
+            if (!from_ptr && !had_bracket &&
+                agg_types[ti].misarr[last_fi] && agg_types[ti].marr_len[last_fi] > 0) {
+                /* PB-83：数组成员名退化为首元素地址（char[9] 成员 → 指针） */
+                ch->addr = addr;
+                ch->val = addr;
+                ch->kind = 1;
+                ch->elem = agg_types[ti].marr_esize[last_fi];
+                ch->elem_ptr = 0;
+                ch->width = agg_types[ti].marr_esize[last_fi];
+                ch->is_slice = 0;
+                ch->agg_ti = -1;
+                base_vreg = addr;
+                ptr_base = 1;
+                step++;
+                continue;
+            }
+            if (cur_tok(cs) != TOK_LBRACKET &&
+                agg_types[ti].misarr[last_fi] && agg_types[ti].marr_len[last_fi] > 0) {
+                /* PB-83：数组成员名退化为首元素地址 */
+                return addr;
             }
             int v = ir_new_vreg(F);
             if (esize == 1) ir_emit(F, IR_LOAD8, v, addr, -1, 0);
             else {
                 /* PB-76(b)：标量成员按成员类型窄读（符号扩展）；位域保持 8 字节 + AND */
                 int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
-                          : agg_types[ti].mscode[last_fi];
+                          : ir_member_vcode(ti, last_fi);
                 ir_emit(F, IR_LOAD, v, addr, -1, ir_load_width_imm(mcode));
                 if (mcode == 1 || mcode == 8) ir_set_double(v);   /* PB-79：浮点成员读值标记 */
             }
             if (agg_types[ti].mbits[last_fi] > 0) {
+                int sh = ir_bf_shift(ti, last_fi);
+                if (sh > 0) {
+                    int sc = ir_new_vreg(F);
+                    ir_emit(F, IR_CONST, sc, -1, -1, sh);
+                    int r1 = ir_new_vreg(F);
+                    ir_emit(F, IR_SHR, r1, v, sc, 0);
+                    v = r1;
+                }
                 int mv = ir_bitmask(agg_types[ti].mbits[last_fi]);
                 int r2 = ir_new_vreg(F);
                 ir_emit(F, IR_AND, r2, v, mv, 0);
@@ -1838,9 +2154,12 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
             ch->addr = addr;
             ch->val = v;
             ch->kind = 0;
-            ch->elem = -1;
+            ch->elem = (agg_types[ti].misarr[last_fi] &&
+                        agg_types[ti].marr_len[last_fi] <= 0)
+                           ? -1 : agg_types[ti].mscode[last_fi];
             ch->elem_ptr = 0;
             ch->is_slice = 0;
+            ch->agg_ti = -1;
             base_vreg = v;
             ptr_base = 0;
             step++;
@@ -1899,6 +2218,14 @@ static void ir_chain_assign(CompilerState *cs, int vi)
         return;
     }
     next_tok(cs);
+    if (ch.is_slice && cur_tok(cs) == TOK_STRING_LITERAL) {
+        /* PB-83：切片右值是字符串字面量 → 逐字节复制（含 NUL） */
+        const char *lit = nihao_strdup(g_cs, cs->parser.lex->tok_str);
+        next_tok(cs);
+        ir_copy_literal(cs, ch.addr, lit);
+        skip_newlines(cs);
+        return;
+    }
     int b = ir_expr(cs);
     int v;
     if (!is_compound) {
@@ -2149,6 +2476,11 @@ static int ir_primary(CompilerState *cs)
         next_tok(cs);
         return ir_new_vreg(F);
     }
+    if (t == TOK_STRUCTOF || t == TOK_HOLDOF || t == TOK_UNIONOF ||
+        t == TOK_BITOFFSETOF) {
+        /* PB-83：从属查询三关键字（holdof 是标识符，走 identifier 分支） */
+        return ir_ownerof(cs, t == TOK_BITOFFSETOF);
+    }
     if (t == TOK_BITWISE_AND) {
         /* 取地址 &x -> ADDR（当前仅支持局部变量） */
         next_tok(cs);
@@ -2160,8 +2492,39 @@ static int ir_primary(CompilerState *cs)
                 return ir_new_vreg(F);
             }
             next_tok(cs);
+            if (cur_tok(cs) == TOK_DOT && vty[vi] >= 0) {
+                /* PB-83：&聚合体.成员 → 成员字节地址（ownerof / 动态字符串成员取址） */
+                int ti2 = vty[vi];
+                int off2 = 0, lfi = -1;
+                for (;;) {
+                    next_tok(cs);   /* . */
+                    if (cur_tok(cs) != TOK_IDENTIFIER) {
+                        nihao_error(cs, "ir: expected member name after '.'");
+                        return ir_new_vreg(F);
+                    }
+                    int fi2 = agg_member_find(ti2, cs->parser.lex->tok_str);
+                    if (fi2 < 0) {
+                        nihao_error(cs, "ir: no member '%s' in type '%s'",
+                                    cs->parser.lex->tok_str, agg_types[ti2].name);
+                        return ir_new_vreg(F);
+                    }
+                    lfi = fi2;
+                    off2 += (agg_types[ti2].kind == 1) ? 0
+                                                        : agg_types[ti2].moff[fi2];
+                    int mt2 = agg_types[ti2].mtype[fi2];
+                    next_tok(cs);   /* field */
+                    if (mt2 >= 0 && cur_tok(cs) == TOK_DOT) {
+                        ti2 = mt2;
+                        continue;
+                    }
+                    break;
+                }
+                (void)lfi;
+                return ir_member_addr(cs, vi, ti2, lfi, off2);
+            }
             if (ve[vi] > 0 && ir_elem_stride(vi) != 8)   /* PB-82：紧凑数组 = 块首 */
                 return ir_arr_lo(vi);
+            if (vty[vi] >= 0) return ir_agg_base(vi);    /* PB-83：聚合体 = 块首 */
             int vr = ir_new_vreg(F);
             ir_emit(F, IR_ADDR, vr, vt[vi], -1, 0);
             return vr;
@@ -2356,6 +2719,15 @@ static int ir_primary(CompilerState *cs)
             }
             lx0->peek_valid = 0;
         }
+        /* PB-83：holdof 是标识符形态的从属查询（structof/unionof/bitoffsetof 是关键字） */
+        if (strcmp(name, "holdof") == 0) {
+            LexerState *lx0 = cs->parser.lex;
+            lx0->peek_valid = 0;
+            lexer_peek(lx0);
+            if (lx0->peek_tok == TOK_LPAREN)
+                return ir_ownerof(cs, 0);
+            lx0->peek_valid = 0;
+        }
         /* enum 常量优先（编译期值） */
         {
             long long eval;
@@ -2439,25 +2811,43 @@ static int ir_primary(CompilerState *cs)
                         lx->peek_valid = 0;
                         if (avi >= 0 && vty[avi] >= 0 && nxt != TOK_LPAREN) {
                             next_tok(cs);
-                            int mc = agg_types[vty[avi]].mcount;
-                            for (int k = 0; k < mc && argn < 64; k++) {
-                                arglist[argn++] = vt[avi] + k;
+                            IrAggType *aa = &agg_types[vty[avi]];
+                            for (int k = 0; k < aa->mcount && argn < 64; k++) {
+                                int lv = ir_new_vreg(F);
+                                if (vaparam[avi]) {
+                                    int a2 = ir_new_vreg(F);
+                                    ir_emit(F, IR_ADDR, a2, vt[avi], -1, k);
+                                    ir_emit(F, IR_LOAD, lv, a2, -1, 0);
+                                } else {
+                                    int a2 = ir_ptr_byte_off(ir_agg_base(avi),
+                                                             aa->moff[k]);
+                                    if (aa->misarr[k] && aa->marr_len[k] <= 0) {
+                                        ir_emit(F, IR_LOAD, lv, a2, -1, 0);   /* 动态字符串成员=指针 */
+                                    } else {
+                                        int mc2 = aa->mtype[k] >= 0 ? 0 : aa->mscode[k];
+                                        ir_emit(F, IR_LOAD, lv, a2, -1,
+                                                ir_load_width_imm(mc2));
+                                        if (mc2 == 1 || mc2 == 8) ir_set_double(lv);
+                                    }
+                                }
+                                arglist[argn++] = lv;
                             }
                         } else {
                             /* mr 调用（struct 返回）等：ir_expr 解析 → 从缓冲 LOAD 成员 */
                             int a = ir_expr(cs);
                             (void)a;
                             if (last_mr_buf >= 0) {
-                                int mc = agg_types[pti].mcount;
+                                IrAggType *ra = &agg_types[pti];
                                 int base = ir_new_vreg(F);
                                 ir_emit(F, IR_MOV, base, last_mr_buf, -1, 0);
-                                for (int k = 0; k < mc && argn < 64; k++) {
-                                    int off = ir_new_vreg(F);
-                                    ir_emit(F, IR_CONST, off, -1, -1, (long long)k * 8);
-                                    int addr = ir_new_vreg(F);
-                                    ir_emit(F, IR_ADD, addr, base, off, 0);
+                                for (int k = 0; k < ra->mcount && argn < 64; k++) {
+                                    int addr = ir_ptr_byte_off(base, ra->moff[k]);
                                     int lv = ir_new_vreg(F);
-                                    ir_emit(F, IR_LOAD, lv, addr, -1, 0);
+                                    int mc2 = ra->mtype[k] >= 0 ? 0 : ra->mscode[k];
+                                    ir_emit(F, IR_LOAD, lv, addr, -1,
+                                            ra->misarr[k] && ra->marr_len[k] <= 0
+                                                ? 0 : ir_load_width_imm(mc2));
+                                    if (mc2 == 1 || mc2 == 8) ir_set_double(lv);
                                     arglist[argn++] = lv;
                                 }
                                 last_mr_buf = -1;
@@ -2511,7 +2901,7 @@ static int ir_primary(CompilerState *cs)
             if (is_mr_call) {
                 /* 缓冲大小 = 返回聚合类型成员数（struct 返回用 ret_agg_ti） */
                 int ti = (mr_agg_ti >= 0) ? mr_agg_ti : agg_type_find("__mr");
-                long long sz = (ti >= 0) ? (long long)agg_types[ti].mslots * 8 : 8;
+                long long sz = (ti >= 0) ? (long long)agg_types[ti].bytes : 8;
                 int szv = ir_new_vreg(F);
                 ir_emit(F, IR_CONST, szv, -1, -1, sz);
                 ir_emit(F, IR_PARAM, -1, szv, -1, 0);
@@ -2750,16 +3140,28 @@ static int ir_primary(CompilerState *cs)
             ir_emit(F, IR_MOV, base, vt[vi], -1, 0);    /* p 槽值 = 目标地址（MOV 勿 LOAD） */
             /* off 为槽偏移：帧来源指针用方向感知的 ELEM_ADDR，堆/池来源用字节 ADD（PB-81） */
             int addr = ir_ptr_slot_off(vi, base, off);
+            if (agg_types[ti].misarr[last_fi] && agg_types[ti].marr_len[last_fi] > 0) {
+                /* PB-83：数组成员名退化为首元素地址 */
+                return addr;
+            }
             int vr = ir_new_vreg(F);
             /* PB-76(b)：标量成员按成员类型窄读（符号扩展）；位域成员保持 8 字节读 + AND */
             {
                 int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
-                          : agg_types[ti].mscode[last_fi];
+                          : ir_member_vcode(ti, last_fi);
                 ir_emit(F, IR_LOAD, vr, addr, -1, ir_load_width_imm(mcode));
                 if (mcode == 1 || mcode == 8) ir_set_double(vr);  /* PB-79：浮点成员读值标记 */
             }
             /* 位域成员：AND 掩码取低 N 位 */
             if (agg_types[ti].mbits[last_fi] > 0) {
+                int sh = ir_bf_shift(ti, last_fi);
+                if (sh > 0) {
+                    int sc = ir_new_vreg(F);
+                    ir_emit(F, IR_CONST, sc, -1, -1, sh);
+                    int r1 = ir_new_vreg(F);
+                    ir_emit(F, IR_SHR, r1, vr, sc, 0);
+                    vr = r1;
+                }
                 int mv = ir_bitmask(agg_types[ti].mbits[last_fi]);
                 int r2 = ir_new_vreg(F);
                 ir_emit(F, IR_AND, r2, vr, mv, 0);
@@ -2801,25 +3203,38 @@ static int ir_primary(CompilerState *cs)
             }
             int esize = 0;
             int addr;
-            if (cur_tok(cs) == TOK_LBRACKET) {
+            int had_bracket = (cur_tok(cs) == TOK_LBRACKET);
+            if (had_bracket) {
                 /* 数组成员读 p.name[0] */
                 addr = ir_member_elem_addr(cs, vi, ti, last_fi, off, fname, &esize);
                 if (addr < 0) return ir_new_vreg(F);
             } else {
-                addr = ir_new_vreg(F);
-                ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
+                addr = ir_member_addr(cs, vi, ti, last_fi, off);
+            }
+            if (!had_bracket &&
+                agg_types[ti].misarr[last_fi] && agg_types[ti].marr_len[last_fi] > 0) {
+                /* PB-83：数组成员名退化为首元素地址 */
+                return addr;
             }
             int vr = ir_new_vreg(F);
             if (esize == 1) ir_emit(F, IR_LOAD8, vr, addr, -1, 0);
             else {
                 /* PB-76(b)：标量成员按成员类型窄读（符号扩展）；位域保持 8 字节 + AND */
                 int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
-                          : agg_types[ti].mscode[last_fi];
+                          : ir_member_vcode(ti, last_fi);
                 ir_emit(F, IR_LOAD, vr, addr, -1, ir_load_width_imm(mcode));
                 if (mcode == 1 || mcode == 8) ir_set_double(vr);  /* PB-79：浮点成员读值标记 */
             }
             /* 位域成员：AND 掩码取低 N 位 */
             if (agg_types[ti].mbits[last_fi] > 0) {
+                int sh = ir_bf_shift(ti, last_fi);
+                if (sh > 0) {
+                    int sc = ir_new_vreg(F);
+                    ir_emit(F, IR_CONST, sc, -1, -1, sh);
+                    int r1 = ir_new_vreg(F);
+                    ir_emit(F, IR_SHR, r1, vr, sc, 0);
+                    vr = r1;
+                }
                 int mv = ir_bitmask(agg_types[ti].mbits[last_fi]);
                 int r2 = ir_new_vreg(F);
                 ir_emit(F, IR_AND, r2, vr, mv, 0);
@@ -4021,11 +4436,13 @@ static void ir_stmt_impl(CompilerState *cs)
                 if (cur_tok(cs) != TOK_RBRACE) {
                     for (;;) {
                         int v = ir_expr(cs);
-                        int off = ir_new_vreg(F);
-                        ir_emit(F, IR_CONST, off, -1, -1, (long long)k * 8);
-                        int addr = ir_new_vreg(F);
-                        ir_emit(F, IR_ADD, addr, vt[retvi], off, 0);
-                        ir_emit(F, IR_STORE, -1, addr, v, 0);
+                        IrAggType *ra2 = &agg_types[F->ret_agg_ti];
+                        int offb = (ra2->kind == 1) ? 0 :
+                                   (k < ra2->mcount ? ra2->moff[k] : k * 8);
+                        int addr = ir_ptr_byte_off(vt[retvi], offb);
+                        ir_emit(F, IR_STORE, -1, addr, v,
+                                k < ra2->mcount
+                                    ? ir_store_width(ra2->mscode[k]) : 0);
                         k++;
                         if (cur_tok(cs) != TOK_COMMA) break;
                         next_tok(cs);
@@ -4042,14 +4459,9 @@ static void ir_stmt_impl(CompilerState *cs)
                 int retvi = var_find("_mr_ret");
                 if (retvi >= 0) {
                     next_tok(cs);
-                    int mslots = agg_types[vty[rvi]].mslots;
-                    for (int k = 0; k < mslots; k++) {
-                        int off = ir_new_vreg(F);
-                        ir_emit(F, IR_CONST, off, -1, -1, (long long)k * 8);
-                        int addr = ir_new_vreg(F);
-                        ir_emit(F, IR_ADD, addr, vt[retvi], off, 0);
-                        ir_emit(F, IR_STORE, -1, addr, vt[rvi] + k, 0);
-                    }
+                    /* PB-83：聚合块（低地址起，向上）→ sret 缓冲（堆，向上） */
+                    ir_block_copy_bytes(vt[retvi], ir_agg_base(rvi),
+                                        agg_types[vty[rvi]].bytes);
                     ir_emit(F, IR_RET, -1, -1, -1, 0);
                 } else {
                     int vr = ir_expr(cs);
@@ -4110,11 +4522,10 @@ static void ir_stmt_impl(CompilerState *cs)
                 int src = var_find(cs->parser.lex->tok_str);
                 if (src >= 0 && vty[src] >= 0 &&
                     agg_types[vty[src]].kind == agg_types[vty[vi]].kind) {
-                    int n = agg_types[vty[vi]].kind == 1 ? 1 :
-                            agg_types[vty[vi]].mslots;
                     next_tok(cs);   /* src name */
-                    for (int k = 0; k < n; k++)
-                        ir_emit(F, IR_MOV, vt[vi] + k, vt[src] + k, -1, 0);
+                    /* PB-83：整块按字节复制（低地址端对齐，两后端同为向上） */
+                    ir_block_copy_bytes(ir_agg_base(vi), ir_agg_base(src),
+                                        agg_types[vty[vi]].bytes);
                     skip_newlines(cs);
                     return;
                 }
@@ -4468,7 +4879,7 @@ static void ir_stmt_impl(CompilerState *cs)
                         ir_emit(F, IR_MOV, caddr, vt[vi], -1, 0);
                         if (off > 0)
                             caddr = ir_ptr_slot_off(vi, caddr, off);   /* PB-81 */
-                        cur = ir_bf_load(caddr, bfbits);
+                        cur = ir_bf_load(caddr, ti, fi);
                     } else {
                         /* 普通成员当前值：LOAD(p 值 + off*8)，方向按来源（PB-81） */
                         int base = ir_new_vreg(F);
@@ -4486,10 +4897,10 @@ static void ir_stmt_impl(CompilerState *cs)
                 ir_emit(F, IR_MOV, base, vt[vi], -1, 0);
                 int addr = ir_ptr_slot_off(vi, base, off);
                 if (bfbits > 0) {
-                    ir_bf_store(addr, nv, bfbits);
+                    ir_bf_store(addr, nv, ti, fi);
                 } else {
                     /* PB-76(b)：非位域标量成员按成员宽窄写（位域仍走 RMW） */
-                    ir_emit(F, IR_STORE, -1, addr, nv, ir_store_width(agg_types[ti].mscode[fi]));
+                    ir_emit(F, IR_STORE, -1, addr, nv, ir_member_swidth(ti, fi));
                 }
                 skip_newlines(cs);
             } else {
@@ -4564,13 +4975,16 @@ static void ir_stmt_impl(CompilerState *cs)
                         if (esize == 1) ir_emit(F, IR_LOAD8, cur, elem_addr, -1, 0);
                         else ir_emit(F, IR_LOAD, cur, elem_addr, -1, 0);
                     } else if (bfbits > 0) {
-                        /* 位域复合赋值：基于位域值运算（LOAD+AND 取低 N 位） */
-                        int caddr = ir_new_vreg(F);
-                        ir_emit(F, IR_ADDR, caddr, vt[vi], -1, off);
-                        cur = ir_bf_load(caddr, bfbits);
+                        /* 位域复合赋值：基于位域值运算（存储单元 LOAD + 移位 + AND） */
+                        int caddr = ir_member_addr(cs, vi, ti, fi, off);
+                        cur = ir_bf_load(caddr, ti, fi);
                     } else {
+                        /* PB-83：成员当前值从字节地址按成员宽读取 */
                         cur = ir_new_vreg(F);
-                        ir_emit(F, IR_MOV, cur, vt[vi] + off, -1, 0);
+                        int mc0 = agg_types[ti].mscode[fi];
+                        int a0 = ir_member_addr(cs, vi, ti, fi, off);
+                        ir_emit(F, IR_LOAD, cur, a0, -1, ir_load_width_imm(mc0));
+                        if (mc0 == 1 || mc0 == 8) ir_set_double(cur);
                     }
                     nv = ir_new_vreg(F);
                     ir_emit(F, aop, nv, cur, b, 0);
@@ -4580,9 +4994,13 @@ static void ir_stmt_impl(CompilerState *cs)
                     if (esize == 1) ir_emit(F, IR_STORE8, -1, elem_addr, nv, 0);
                     else ir_emit(F, IR_STORE, -1, elem_addr, nv, 0);
                 } else {
-                    int addr = ir_new_vreg(F);
-                    ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
-                    ir_bf_store(addr, nv, bfbits);
+                    int addr = ir_member_addr(cs, vi, ti, fi, off);
+                    if (bfbits > 0) {
+                        ir_bf_store(addr, nv, ti, fi);
+                    } else {
+                        ir_emit(F, IR_STORE, -1, addr, nv,
+                                ir_member_swidth(ti, fi));
+                    }
                 }
                 skip_newlines(cs);
             } else {
@@ -4983,6 +5401,16 @@ static void ir_stmt_impl(CompilerState *cs)
                 (void)hi;
                 expect(cs, TOK_RBRACKET);
                 expect(cs, TOK_ASSIGN);
+                if (cur_tok(cs) == TOK_STRING_LITERAL) {
+                    /* PB-83：切片字符串赋值（数组侧，逐字节） */
+                    const char *lit = nihao_strdup(g_cs, cs->parser.lex->tok_str);
+                    next_tok(cs);
+                    int d = ir_elem_addr(cs, vi, vt[vi], idx, ir_elem_stride(vi),
+                                         vetyp[vi] == 8);
+                    ir_copy_literal(cs, d, lit);
+                    skip_newlines(cs);
+                    return;
+                }
                 if (cur_tok(cs) == TOK_LBRACE) {
                     next_tok(cs);
                     skip_newlines(cs);
@@ -5224,6 +5652,7 @@ static void ir_func_named(CompilerState *cs, const char *fname, int pre_vis, int
         if (ti >= 0) {
             int mcount = agg_types[ti].mcount;
             int vi = var_declare(pnames[pi], mcount, ti, pvis[pi], 0);
+            vaparam[vi] = 1;    /* PB-83：聚合参数按展平槽访问（base+fi） */
             for (int k = 0; k < mcount; k++) {
                 F->param_types[vpi + k] = 0;   /* 成员统一 8 字节槽 */
             }
@@ -5462,6 +5891,8 @@ static void ir_type_decl_named(CompilerState *cs, const char *tname)
             a->marr_esize[a->mcount] = 0;
             a->msize[a->mcount] = 0;
             a->mscode[a->mcount] = -1;
+            a->mbit[a->mcount] = -1;
+            a->misarr[a->mcount] = 0;
             if (cur_tok(cs) == TOK_IDENTIFIER) {
                 int ti2 = agg_type_find(cs->parser.lex->tok_str);
                 if (ti2 >= 0) {
@@ -5483,6 +5914,7 @@ static void ir_type_decl_named(CompilerState *cs, const char *tname)
                         next_tok(cs);
                     }
                     expect(cs, TOK_RBRACKET);
+                    a->misarr[a->mcount] = 1;
                     a->marr_len[a->mcount] = (int)n;
                     a->marr_esize[a->mcount] = esize > 0 ? esize : 1;
                 } else {

@@ -1,0 +1,4 @@
+bitfield ok
+bitfield rmw ok
+bitfield compound ok
+bitfield trunc ok

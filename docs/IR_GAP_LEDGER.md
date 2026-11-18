@@ -465,3 +465,26 @@ C 标量（`int64_t p; int64_t t1;`），`&p + 8` 落到两者之间的栈空隙
 **计数**：`IR_SUBSET` **67** / `IR_ONLY` 3 ⇒ pos **70/72、缺口 2**；err **25/34、缺口 9**。
 **剩余两份**：`ownerof`（四内置 + 位域位偏移）、`slice_str_infer`（`char[9]` 数组成员 + 动态 `char[]` 成员）
 ——都需要**聚合体内字节布局**（下一刀）。**边界**：聚合成员仍 8 字节槽。
+
+## 17. PB-83 实测：第 23 条收官——聚合体内字节布局（2026-11-18）
+
+**布局**：`moff` 改 C 布局字节偏移，新增 `align`/`bytes`/`mbit`/`misarr`；struct 按成员对齐
+（`Person{name char[]@0, age u8@8, score i32@12}` → 16B/8 对齐）、union 全 0、位域按同类型单元打包
+（`Packet`：type@0、len/flag 单元@1（bit 8/12）、data@4、tail 单元@8（bit 64））。
+
+**寻址**：统一「块首（最低地址）+ 字节偏移」——`&agg` 取块首（`IR_ADDR_LO`）、成员 = 块首+`moff`、
+`->`/`.(AggType).成员` = 指针值 + 字节偏移、聚合数组元素步长 = `bytes`；成员读写按真实宽
+（动态字符串成员 = 8 字节指针），修掉 8 字节写穿相邻成员。
+
+**值语义**：整体赋值 / sret 收发改字节块复制；`_mr_ret` 缓冲 = `bytes`；聚合参数展平按成员偏移取值
+（被调方按参数槽访问）。
+
+**新能力**：四个从属查询内置（`structof`/`holdof`/`unionof`/`bitoffsetof`）、`&聚合体.成员`、
+`.(AggType).成员`、数组成员名退化、切片字符串赋值（数组侧与链侧）、位域真实位偏移 RMW
+（`ir_bitfield` 补 `.expect`，从空比对档升 PASS）。
+
+**验证**：`ownerof` / `slice_str_infer` / `ir_bitfield` 与 `.expect` 逐字节相同；两交叉档 zig 链接 +
+qemu 实跑同输出；入/升名单后门禁 **62P/0F/9S、0 FAIL**。
+
+**计数**：`IR_SUBSET` **69** / `IR_ONLY` 3 ⇒ **pos IR 可编 72/72、缺口 0**；err **25/34、缺口 9**
+（E-a 3 文案 + E-b 6 依赖 A 侧判据）。**pos 线追平清零；后续工作转向 err 缺口、交叉覆盖与性能项。**
