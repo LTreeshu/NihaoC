@@ -1,2 +1,3 @@
 # build artifacts（跨轮草稿与产物，不入库）
 /build/
+/.xmake/
