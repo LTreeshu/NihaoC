@@ -87,8 +87,8 @@
 | ~~`len_builtin` / `array_capacity_tiers`~~ | **PB-67 已解**：多维数组声明、切片读入声明数组、开区间切片 rhs、字面量推断字符串的 `len()` 四处补齐后四档输出逐字相同，已入 `IR_SUBSET` | G1→放行 2 | — |
 | ~~`deref_slice`~~ | **PB-68 已解**：后缀链求值器落地后四档实跑输出逐字相同、与 `.expect` 逐字节相同（八行 ok），已入 `IR_SUBSET`。原快照留档：`ir: array dimension 1 must have a positive length`（`void[][]`）/ `expected ']', got '['`（`p3[][].(i32)`）——**PB-61 快照**；2026-11-11 PB-67 复测实况是 `array dimension 1 ...` + `array dimension 2 ...` / `ir: unexpected token ']' in expression` | G1→放行 1 | 真因确为「指针类型后缀档」而非容量档（PB-67 的改记成立）。**两条边界未解、登记不修**：① `char[9]` 在 IR 仍是 9 个 8 字节槽（A 侧 9 字节紧凑），`.(char[9])[k]` 按槽宽 8 寻址才与 IR 自己的 `arry[k]` 自洽 ⇒ 归待裁第 23 条；② 两交叉档新暴露的**帧生长方向分歧**（见 §5） |
 | `array_member_default` | `ir: unexpected token '[' in expression` | G3 | 数组元素默认值展开，需成员级真实偏移 |
-| `struct_member_default` | `ir: member default value: only simple constant supported` | G3 | 成员默认值只落了「简单常量」那一半，PA-49 / PA-56 家族未回灌完 |
-| `designator_init` | `ir: unexpected token '.' in expression`（198 条级联） | **G3**（PB-70 改归，原记 G1） | `.field = v` 指定式初值：**解析层缺口只是表象**，要落对必须知道成员真实偏移（A 侧靠 PA-49 / PA-56 的 C 指定初始化器），故根因是布局 |
+| `struct_member_default` | `ir: member default value: only simple constant supported` | G3 | 成员默认值只落了「简单常量」那一半，PA-49 / PA-56 家族未回灌完。**2026-11-18（PB-79）已解**：默认值表 + 无初值/未点名两处回填 + 指定式与浮点读值，入 `IR_SUBSET` |
+| `designator_init` | `ir: unexpected token '.' in expression`（198 条级联） | **G3**（PB-70 改归，原记 G1） | `.field = v` 指定式初值：**解析层缺口只是表象**，要落对必须知道成员真实偏移（A 侧靠 PA-49 / PA-56 的 C 指定初始化器），故根因是布局。**2026-11-18（PB-79）已解**：槽模型下按成员槽偏移落位即可（不需要字节偏移），入 `IR_SUBSET` |
 | ~~`features`~~ | ~~`ir: unsupported top-level token 'alias'`~~ | G1→放行 | **PB-66 已解**：顶层 `alias` + 顶层 `const` / `var` + `for` 声明式 init + `else if` 链 + struct 数组成员齐活，四档输出逐字相同，已入 `IR_SUBSET` |
 | ~~`mathmod` / `transfer`~~ | ~~`unsupported top-level token 'const'` / `'flow'`~~ | G1→放行 | **PB-66 已解**：顶层变量声明（含带可见性前缀的 `flow`）落成 `IrProg` 全局池，`transfer` 的 `flow create() void` 顶层函数声明一并放行 |
 | ~~`for_init_forms`~~ | ~~`ir: unexpected top-level identifier 'count'`~~ | G1→放行 | **PB-66 已解**：顶层变量 + `for` 的三种 init 形态（`i i32 = 0` / `i = 0` / `i (i32) = 0`）+ 任意表达式 step（`i++` / `i--` / `j = j - 1` / `tick()`）全部放行，step 改为 body 之后执行 |
@@ -382,3 +382,27 @@ C 标量（`int64_t p; int64_t t1;`），`&p + 8` 落到两者之间的栈空隙
 （`deref_slice` 等既有声明型 void 指针零回归）；**交叉两档 7/8 行 ok，仅 `void arrow bad`**
 ——`q->y` 与 `type_forms` 同因（第 33 条帧方向），故两者继续留在名单外。
 **计数不变**：`IR_SUBSET` 60 / `IR_ONLY` 3 ⇒ pos 63/72、缺口 9；err 25/34、缺口 9。
+
+## 13. PB-79 实测：聚合成员默认值 + 指定式初值（2026-11-18）
+
+**复测**：`struct_member_default` 卡在 `ratio f64 = 1.5`（默认值只认整型/标识符/字符串），
+`designator_init` 卡在 `.field = v` 解析；更根本的是 IR **对默认值一直「解析后忽略」**，
+能编也不会生效。
+
+**落地**：
+- `IrAggType` 补 `mdef_kind`（0 无 / 1 整型 / 2 浮点 / 3 字符串）、`mdef_int`、`mdef_dbl`、`mdef_str`；
+  解析扩到整型（可负）/浮点/字符串字面量/枚举常量。
+- 回填两处：**无初值声明**（`ir_agg_decl` else）与**初值列表未点名成员**（`ir_agg_init` 收尾）；
+  union 只取首个默认成员、用户给过初值就不补（共享槽 0 会被覆盖）。
+- 指定式 `.member = expr` 按成员名落位（`seen[]` 记账），可与默认值混用；嵌套聚合默认值递归回填。
+- 连带：浮点成员**读值**补 double 标记；ir-c 的 `puts(变量)` 补 `(char*)(intptr_t)` cast
+  （字符串变量槽里的池地址不是 `LD_ADDR` 直连，严格 clang 报 int→pointer 硬错误）。
+
+**验证**：`struct_member_default` 七行、`designator_init` 五行与 `.expect` 逐字节相同；
+两交叉档 zig 链接 + qemu 实跑同输出 ⇒ 两份入 `IR_SUBSET`；门禁 **54P/0F/16S、0 FAIL**
+（PASS 52→54、SKIP 18→16），产物 C 严格档 0 error。
+
+**计数**：`IR_SUBSET` **62** / `IR_ONLY` 3 ⇒ pos **65/72、缺口 7**；err **25/34、缺口 9**。
+**剩余 7 份**：`type_forms` / `void_slot_infer`（交叉档待裁 33）、`array_member_default`（聚合数组）、
+`ownerof`（四内置）、`slice_str_infer` / `str_array_init`（数组成员真实宽）、`multi_arr_decl`（char 数组成员字节布局）——
+后五份均属第 23 条家族。

@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### P2 聚合初始化补齐（PB-79：成员默认值 + 指定式初值 `.field = v`；两份用例入名单；2026-11-18）
+
+- **缺陷与根因**：IR 前端对成员默认值一直是「解析后忽略」，`designator_init` 的 `.field = v` 也解析不了（`ir_agg_init` 只认位置式）。`struct_member_default` 还额外卡在 `ratio f64 = 1.5`——默认值解析只接受整型/标识符/字符串。
+- **机制**：`IrAggType` 新增 `mdef_kind` / `mdef_int` / `mdef_dbl` / `mdef_str`；默认值解析扩到整型（可负）/浮点/字符串字面量/枚举常量。落地两处：**无初值声明**直接回填；**初值列表未点名的成员**在列表结束后回填（union 只取首个带默认值的成员，且用户给了初值就不补——union 共享槽 0，补写会覆盖用户值）。指定式初值按成员名查表落位，可与默认值混用。嵌套聚合成员的默认值按递归回填。
+- **连带两处**：① 浮点成员的**读值**补 double 标记（此前 `c.ratio == 1.5` 会把位模式当整数比较）；② ir-c 的 `puts(变量)` 补 `(char*)(intptr_t)` cast——字符串变量的槽里存池地址但不是 LD_ADDR 直连，`is_str_addr` 认不出，产物 C 在 clang 严格档下是 int→pointer 硬错误。
+- **验证**：`struct_member_default` 七行、`designator_init` 五行与 `.expect` 逐字节相同；两交叉档（riscv64 / loongarch64）zig 链接 + qemu 实跑输出同样逐字相同；两份入 `IR_SUBSET` ⇒ **ir-c / ir-native 54P/0F/16S、0 FAIL**（PASS 52→54、SKIP 18→16），clang 严格档 0 error。
+- **计数**：`IR_SUBSET` **62** / `IR_ONLY` 3 ⇒ pos IR 可编 **65 / 72、缺口 7**；err 覆盖 **25 / 34、缺口 9**。剩余 7 份：`type_forms` / `void_slot_infer`（交叉档待裁第 33 条）、`array_member_default`（聚合数组）、`ownerof`、`slice_str_infer` / `str_array_init`（数组成员真实宽）、`multi_arr_decl`（char 数组字节布局）——后五份同属第 23 条家族。
+
 ### P2 语义补齐（PB-78：`void` 指针在声明处记录指向类型——`q void = &pt` 的 `->` 可用；2026-11-18）
 
 - **缺陷与根因**：`q void = &pt`（pt 是聚合体）之后 `q->x` 报 `'q' is not a pointer to aggregate (assign &var first)`。赋值语句路径 `p = &pt` 早已登记 `pt[]` 指向类型，**声明路径 `name type = &var` 漏了这一步**，于是 `->` 拿不到聚合类型索引。

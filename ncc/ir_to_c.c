@@ -401,9 +401,14 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                            (in->sym && strcmp(in->sym, "malloc") == 0) ?
                                "(int64_t)(intptr_t)" : "",
                            in->sym);
+                    /* PB-79：puts 的实参可能是字符串变量（char[]/string，槽里存池地址），
+                     * 不是 LD_ADDR 直连，is_str_addr 认不出来 ⇒ 对 puts 的实参统一包指针 cast，
+                     * 否则产物 C 在 clang 严格档下是 int→pointer 硬错误。 */
+                    int puts_arg = (in->sym && strcmp(in->sym, "puts") == 0);
                     for (int k = start; k < tc; k++) {
                         cb_put(&b, "%s%s", k > start ? ", " : "",
-                               is_str_addr(f, temp[k]) ? "(char*)" : "");
+                               is_str_addr(f, temp[k]) ? "(char*)" :
+                               (puts_arg && k == start) ? "(char*)(intptr_t)" : "");
                         cb_put(&b, "%s", vrid[temp[k]]);
                     }
                     cb_put(&b, ");\n");

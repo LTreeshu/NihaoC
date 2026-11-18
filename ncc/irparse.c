@@ -385,6 +385,10 @@ typedef struct {
     int marr_esize[IR_MAX_MEMB];       /* 数组成员的元素字节宽（1/2/4/8） */
     int msize[IR_MAX_MEMB];            /* 标量成员的字节宽（1/2/4/8；0=聚合成员）（PB-74 补） */
     int mscode[IR_MAX_MEMB];           /* 标量成员类型码（0=i64 1=f64 2=i8 … 8=f32；-1=聚合成员）（PB-76 补） */
+    int mdef_kind[IR_MAX_MEMB];        /* 成员默认值形态：0=无 1=整型 2=浮点 3=字符串（PB-79） */
+    long long mdef_int[IR_MAX_MEMB];
+    double mdef_dbl[IR_MAX_MEMB];
+    const char *mdef_str[IR_MAX_MEMB];
     int mcount;
     int mslots;                        /* 类型总槽数（递归；union=1 enum=1） */
 } IrAggType;
@@ -536,30 +540,146 @@ static void ir_bf_store(int addr, int v, int bits)
 /* 聚合初始化列表（嵌套递归）：{e0, e1, ...} 或 {{...}, {...}}
  * ti=当前类型，base=当前类型在聚合变量中的槽起点；成员 k 的槽起点 =
  * base + moff[k]（union 共享 base）。聚合成员遇 { 递归填充。 */
+/* PB-79：默认值落地。结构/联合定义处的 `= 常量` 在
+ * ① 变量无初值声明、② 聚合初值列表未点名的成员 两处生效。
+ * kind：0=无 1=整型 2=浮点 3=字符串字面量（存字符串池地址）。 */
+static int agg_has_defaults(int ti)
+{
+    IrAggType *a = &agg_types[ti];
+    for (int i = 0; i < a->mcount; i++)
+        if (a->mdef_kind[i]) return 1;
+    for (int i = 0; i < a->mcount; i++)
+        if (a->mtype[i] >= 0 && agg_has_defaults(a->mtype[i])) return 1;
+    return 0;
+}
+
+static void ir_member_default_store(CompilerState *cs, int vi, int ti, int fi, int off)
+{
+    IrAggType *a = &agg_types[ti];
+    int v = -1;
+    int w = ir_store_width(a->mscode[fi]);
+    if (a->mdef_kind[fi] == 1) {
+        v = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, v, -1, -1, a->mdef_int[fi]);
+    } else if (a->mdef_kind[fi] == 2) {
+        union { double d; int64_t i; } u;
+        u.d = a->mdef_dbl[fi];
+        v = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, v, -1, -1, u.i);
+        ir_set_double(v);
+        w = 0;              /* double 走 8 字节存储（后端按 vreg_type 发 double*） */
+    } else if (a->mdef_kind[fi] == 3) {
+        int si = ir_add_string(P, a->mdef_str[fi]);
+        v = ir_new_vreg(F);
+        IrIns *ld = &F->ins[ir_emit(F, IR_LD_ADDR, v, -1, -1, 0)];
+        ld->sym = P->str_syms[si];
+        w = 0;              /* 动态字符串成员槽里存池地址 */
+    } else {
+        return;
+    }
+    int addr = ir_new_vreg(F);
+    ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
+    ir_emit(F, IR_STORE, -1, addr, v, w);
+    (void)cs;
+}
+
+/* 递归补默认值：struct 逐成员；union 只取首个带默认值的成员 */
+static void ir_agg_defaults(CompilerState *cs, int vi, int ti, int base)
+{
+    IrAggType *a = &agg_types[ti];
+    if (a->kind == 1) {
+        for (int i = 0; i < a->mcount; i++)
+            if (a->mdef_kind[i]) {
+                ir_member_default_store(cs, vi, ti, i, base);
+                return;
+            }
+        return;
+    }
+    for (int i = 0; i < a->mcount; i++) {
+        int off = base + a->moff[i];
+        if (a->mtype[i] >= 0) {
+            if (agg_has_defaults(a->mtype[i]))
+                ir_agg_defaults(cs, vi, a->mtype[i], off);
+        } else if (a->mdef_kind[i]) {
+            ir_member_default_store(cs, vi, ti, i, off);
+        }
+    }
+}
+
 static void ir_agg_init(CompilerState *cs, int vi, int ti, int base)
 {
     IrAggType *a = &agg_types[ti];
     int k = 0;
+    int seen[IR_MAX_MEMB];
+    int any = 0;
+    for (int i = 0; i < a->mcount; i++) seen[i] = 0;
     next_tok(cs);           /* { */
     if (cur_tok(cs) != TOK_RBRACE) {
         for (;;) {
-            if (k >= a->mcount) break;
-            int mt = a->mtype[k];
-            int off = base + ((a->kind == 1) ? 0 : a->moff[k]);
-            if (mt >= 0 && cur_tok(cs) == TOK_LBRACE) {
-                ir_agg_init(cs, vi, mt, off);
+            if (cur_tok(cs) == TOK_DOT) {
+                /* PB-79：指定式初值 `.member = expr`（BNF §5 <designator>） */
+                next_tok(cs);   /* . */
+                if (cur_tok(cs) != TOK_IDENTIFIER) {
+                    nihao_error(cs, "ir: expected member name after '.' in initializer");
+                    break;
+                }
+                int fi = agg_member_find(ti, cs->parser.lex->tok_str);
+                if (fi < 0) {
+                    nihao_error(cs, "ir: no member '%s' in type '%s'",
+                                cs->parser.lex->tok_str, a->name);
+                    next_tok(cs);
+                    break;
+                }
+                next_tok(cs);   /* field */
+                expect(cs, TOK_ASSIGN);
+                int off = base + ((a->kind == 1) ? 0 : a->moff[fi]);
+                if (a->mtype[fi] >= 0 && cur_tok(cs) == TOK_LBRACE) {
+                    ir_agg_init(cs, vi, a->mtype[fi], off);
+                } else {
+                    int v = ir_expr(cs);
+                    int addr = ir_new_vreg(F);
+                    ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
+                    ir_emit(F, IR_STORE, -1, addr, v,
+                            ir_store_width(a->mscode[fi]));
+                }
+                seen[fi] = 1;
             } else {
-                int v = ir_expr(cs);
-                int addr = ir_new_vreg(F);
-                ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
-                ir_emit(F, IR_STORE, -1, addr, v, 0);
+                if (k >= a->mcount) break;
+                int mt = a->mtype[k];
+                int off = base + ((a->kind == 1) ? 0 : a->moff[k]);
+                if (mt >= 0 && cur_tok(cs) == TOK_LBRACE) {
+                    ir_agg_init(cs, vi, mt, off);
+                } else {
+                    int v = ir_expr(cs);
+                    int addr = ir_new_vreg(F);
+                    ir_emit(F, IR_ADDR, addr, vt[vi], -1, off);
+                    ir_emit(F, IR_STORE, -1, addr, v,
+                            ir_store_width(a->mscode[k]));
+                }
+                seen[k] = 1;
+                k++;
             }
-            k++;
+            any = 1;
             if (cur_tok(cs) != TOK_COMMA) break;
             next_tok(cs);
         }
     }
     expect(cs, TOK_RBRACE);
+    /* PB-79：未点名的成员补默认值；union 只在整份无初值时取首个默认成员
+     * （union 成员共享槽 0，有用户初值后再补默认会把它覆盖掉） */
+    if (a->kind == 1) {
+        if (!any) ir_agg_defaults(cs, vi, ti, base);
+        return;
+    }
+    for (int i = 0; i < a->mcount; i++) {
+        if (seen[i]) continue;
+        if (a->mtype[i] >= 0) {
+            if (agg_has_defaults(a->mtype[i]))
+                ir_agg_defaults(cs, vi, a->mtype[i], base + a->moff[i]);
+        } else if (a->mdef_kind[i]) {
+            ir_member_default_store(cs, vi, ti, i, base + a->moff[i]);
+        }
+    }
 }
 
 /* 聚合类型声明：name Type [= {...}|= expr]
@@ -594,6 +714,9 @@ static void ir_agg_decl(CompilerState *cs, const char *name, int ti, int vis)
                 ir_emit(F, IR_MOV, vt[vi], v, -1, 0);
             }
         }
+    } else {
+        /* PB-79：无初值 → 定义处成员默认值（A 侧 PA-49 / PA-56 同口径） */
+        ir_agg_defaults(cs, vi, ti, 0);
     }
 }
 
@@ -1355,6 +1478,7 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
                 int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
                           : agg_types[ti].mscode[last_fi];
                 ir_emit(F, IR_LOAD, v, addr, -1, ir_load_width_imm(mcode));
+                if (mcode == 1 || mcode == 8) ir_set_double(v);   /* PB-79：浮点成员读值标记 */
             }
             if (agg_types[ti].mbits[last_fi] > 0) {
                 int mv = ir_bitmask(agg_types[ti].mbits[last_fi]);
@@ -1421,6 +1545,7 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
                 int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
                           : agg_types[ti].mscode[last_fi];
                 ir_emit(F, IR_LOAD, v, addr, -1, ir_load_width_imm(mcode));
+                if (mcode == 1 || mcode == 8) ir_set_double(v);   /* PB-79：浮点成员读值标记 */
             }
             if (agg_types[ti].mbits[last_fi] > 0) {
                 int mv = ir_bitmask(agg_types[ti].mbits[last_fi]);
@@ -2352,6 +2477,7 @@ static int ir_primary(CompilerState *cs)
                 int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
                           : agg_types[ti].mscode[last_fi];
                 ir_emit(F, IR_LOAD, vr, addr, -1, ir_load_width_imm(mcode));
+                if (mcode == 1 || mcode == 8) ir_set_double(vr);  /* PB-79：浮点成员读值标记 */
             }
             /* 位域成员：AND 掩码取低 N 位 */
             if (agg_types[ti].mbits[last_fi] > 0) {
@@ -2411,6 +2537,7 @@ static int ir_primary(CompilerState *cs)
                 int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
                           : agg_types[ti].mscode[last_fi];
                 ir_emit(F, IR_LOAD, vr, addr, -1, ir_load_width_imm(mcode));
+                if (mcode == 1 || mcode == 8) ir_set_double(vr);  /* PB-79：浮点成员读值标记 */
             }
             /* 位域成员：AND 掩码取低 N 位 */
             if (agg_types[ti].mbits[last_fi] > 0) {
@@ -5063,11 +5190,36 @@ static void ir_type_decl(CompilerState *cs)
                     next_tok(cs);
                 }
             }
-            if (cur_tok(cs) == TOK_ASSIGN) {       /* 默认值：仅支持简单常量 */
+            if (cur_tok(cs) == TOK_ASSIGN) {
+                /* PB-79：默认值——整型 / 浮点 / 字符串字面量 / 枚举常量（可带负号）。
+                 * 此前只「解析后忽略」，默认值从不生效。 */
+                int mi = a->mcount;
                 next_tok(cs);
-                if (cur_tok(cs) == TOK_MINUS) next_tok(cs);
-                if (cur_tok(cs) == TOK_INT_CONST || cur_tok(cs) == TOK_IDENTIFIER ||
-                    cur_tok(cs) == TOK_STRING_LITERAL) {
+                int neg = 0;
+                if (cur_tok(cs) == TOK_MINUS) { neg = 1; next_tok(cs); }
+                if (cur_tok(cs) == TOK_INT_CONST) {
+                    long long iv = cs->parser.lex->tok_val.i;
+                    a->mdef_int[mi] = neg ? -iv : iv;
+                    a->mdef_kind[mi] = 1;
+                    next_tok(cs);
+                } else if (cur_tok(cs) == TOK_FLOAT_CONST) {
+                    double dv = cs->parser.lex->tok_val.f;
+                    a->mdef_dbl[mi] = neg ? -dv : dv;
+                    a->mdef_kind[mi] = 2;
+                    next_tok(cs);
+                } else if (!neg && cur_tok(cs) == TOK_STRING_LITERAL) {
+                    a->mdef_str[mi] = nihao_strdup(g_cs, cs->parser.lex->tok_str);
+                    a->mdef_kind[mi] = 3;
+                    next_tok(cs);
+                } else if (!neg && cur_tok(cs) == TOK_IDENTIFIER) {
+                    long long ev = 0;
+                    if (enum_const_find(cs->parser.lex->tok_str, &ev)) {
+                        a->mdef_int[mi] = ev;
+                        a->mdef_kind[mi] = 1;
+                    } else {
+                        nihao_error(cs, "ir: member default value: unknown identifier '%s'",
+                                    cs->parser.lex->tok_str);
+                    }
                     next_tok(cs);
                 } else {
                     nihao_error(cs, "ir: member default value: only simple constant supported");

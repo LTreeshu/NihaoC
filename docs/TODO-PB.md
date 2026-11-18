@@ -553,6 +553,13 @@
   - **验证**：八行与 `.expect` 逐字相同；门禁 52P/0F/18S ×2、0 FAIL 不变（`deref_slice` 的声明型 void 指针零回归）。**交叉 7/8**：`q->y` 仍撞待裁第 33 条（帧方向）⇒ 仍不入名单（与 `type_forms` 同闸门）。
   - 计数不变：`IR_SUBSET` 60 / `IR_ONLY` 3 / pos 缺口 9 / err 缺口 9。
 
+- [x] **PB-79 聚合成员默认值 + 指定式初值（2026-11-18 完成，第 100 项；`struct_member_default` / `designator_init` 入名单）**
+  - **复测**：`struct_member_default` 首错是 `ratio f64 = 1.5` 的 `member default value: only simple constant supported`（默认值只认整型/标识符/字符串）；`designator_init` 首错是 `unexpected token '.' in expression`（`ir_agg_init` 只认位置式）。更根本的是：**IR 对默认值一直是「解析后忽略」**——即便能编，`c Cfg` 也不会拿到 800/600/1.5。
+  - **实现**：`IrAggType` 补 `mdef_kind`/`mdef_int`/`mdef_dbl`/`mdef_str` 四张表；解析扩到整型（可负）/浮点/字符串/枚举常量。落地两处——**无初值声明**（`ir_agg_decl` 的 else 分支）与**初值列表未点名成员**（`ir_agg_init` 收尾回填）；union 只取首个带默认值的成员、且用户给过初值就不补（共享槽 0）。指定式 `.field = v` 按成员名落位，`seen[]` 记录已点名成员；嵌套聚合默认值递归回填。
+  - **连带两处**：① 浮点成员读值补 `ir_set_double`（此前 `c.ratio == 1.5` 把 double 位模式当整数比较）；② ir-c 的 `puts(变量)` 补 `(char*)(intptr_t)` cast（字符串变量槽里存池地址但不是 `LD_ADDR` 直连，`is_str_addr` 认不出 ⇒ clang 严格档 int→pointer 硬错误）。
+  - **验证**：两份输出与 `.expect` 逐字节相同；两交叉档 zig 链接 + qemu 实跑同输出；入 `IR_SUBSET` 后门禁 **54P/0F/16S、0 FAIL**（PASS 52→54、SKIP 18→16），产物 C 的 clang 严格档 0 error。
+  - **计数**：`IR_SUBSET` **62** / `IR_ONLY` 3 ⇒ pos 可编 **65/72、缺口 7**；err **25/34、缺口 9**。剩余 7 份全部挂布局或待裁 33。
+
 ## 待 ltree 裁定清单（2026-10-27 汇总，PB-43）
 
 > 汇总动机：PB-33 的 **P13** 卡在 `PA-61`，本分支连续五轮（PB-38 ~ PB-42）都在做「不需要新裁定就能推进」的事，现已推完（两档发射器专属缺陷清零、根因全部定位）。下面把**所有等裁事项集中一处**，每条给出选项、实测代价与证据出处，方便一次批阅定夺；顺序按「卡住的广度」排，不按提出时间。引用一律用符号名与配置标识符（源码行号只写在 `IMPLEMENTATION_STATUS.md`）。
