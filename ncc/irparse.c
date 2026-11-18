@@ -1578,7 +1578,11 @@ static int ir_agg_elem_read(CompilerState *cs, int vi)
     int vr = ir_new_vreg(F);
     int mcode = (agg_types[cur_ti].mbits[last_fi] > 0) ? 0
               : ir_member_vcode(cur_ti, last_fi);
-    ir_emit(F, IR_LOAD, vr, addr, -1, ir_load_width_imm(mcode));
+    /* PB-84：位域按存储单元宽读（u8 单位=1 字节） */
+                ir_emit(F, IR_LOAD, vr, addr, -1,
+                        agg_types[ti].mbits[last_fi] > 0
+                            ? (ir_bf_unit(ti, last_fi) == 8 ? 0 : ir_bf_unit(ti, last_fi))
+                            : ir_load_width_imm(mcode));
     if (mcode == 1 || mcode == 8) ir_set_double(vr);
     return vr;
 }
@@ -2052,7 +2056,11 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
             {
                 int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
                           : ir_member_vcode(ti, last_fi);
-                ir_emit(F, IR_LOAD, v, addr, -1, ir_load_width_imm(mcode));
+                /* PB-84：位域按存储单元宽读（u8 单位=1 字节） */
+                ir_emit(F, IR_LOAD, v, addr, -1,
+                        agg_types[ti].mbits[last_fi] > 0
+                            ? (ir_bf_unit(ti, last_fi) == 8 ? 0 : ir_bf_unit(ti, last_fi))
+                            : ir_load_width_imm(mcode));
                 if (mcode == 1 || mcode == 8) ir_set_double(v);   /* PB-79：浮点成员读值标记 */
             }
             if (agg_types[ti].mbits[last_fi] > 0) {
@@ -2158,7 +2166,11 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
                 /* PB-76(b)：标量成员按成员类型窄读（符号扩展）；位域保持 8 字节 + AND */
                 int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
                           : ir_member_vcode(ti, last_fi);
-                ir_emit(F, IR_LOAD, v, addr, -1, ir_load_width_imm(mcode));
+                /* PB-84：位域按存储单元宽读（u8 单位=1 字节） */
+                ir_emit(F, IR_LOAD, v, addr, -1,
+                        agg_types[ti].mbits[last_fi] > 0
+                            ? (ir_bf_unit(ti, last_fi) == 8 ? 0 : ir_bf_unit(ti, last_fi))
+                            : ir_load_width_imm(mcode));
                 if (mcode == 1 || mcode == 8) ir_set_double(v);   /* PB-79：浮点成员读值标记 */
             }
             if (agg_types[ti].mbits[last_fi] > 0) {
@@ -3204,7 +3216,11 @@ static int ir_primary(CompilerState *cs)
             {
                 int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
                           : ir_member_vcode(ti, last_fi);
-                ir_emit(F, IR_LOAD, vr, addr, -1, ir_load_width_imm(mcode));
+                /* PB-84：位域按存储单元宽读（u8 单位=1 字节） */
+                ir_emit(F, IR_LOAD, vr, addr, -1,
+                        agg_types[ti].mbits[last_fi] > 0
+                            ? (ir_bf_unit(ti, last_fi) == 8 ? 0 : ir_bf_unit(ti, last_fi))
+                            : ir_load_width_imm(mcode));
                 if (mcode == 1 || mcode == 8) ir_set_double(vr);  /* PB-79：浮点成员读值标记 */
             }
             /* 位域成员：AND 掩码取低 N 位 */
@@ -3277,7 +3293,11 @@ static int ir_primary(CompilerState *cs)
                 /* PB-76(b)：标量成员按成员类型窄读（符号扩展）；位域保持 8 字节 + AND */
                 int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
                           : ir_member_vcode(ti, last_fi);
-                ir_emit(F, IR_LOAD, vr, addr, -1, ir_load_width_imm(mcode));
+                /* PB-84：位域按存储单元宽读（u8 单位=1 字节） */
+                ir_emit(F, IR_LOAD, vr, addr, -1,
+                        agg_types[ti].mbits[last_fi] > 0
+                            ? (ir_bf_unit(ti, last_fi) == 8 ? 0 : ir_bf_unit(ti, last_fi))
+                            : ir_load_width_imm(mcode));
                 if (mcode == 1 || mcode == 8) ir_set_double(vr);  /* PB-79：浮点成员读值标记 */
             }
             /* 位域成员：AND 掩码取低 N 位 */

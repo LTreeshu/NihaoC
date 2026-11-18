@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### 位域读宽修复（PB-85：表达式路径的位域读按存储单元宽，不再 8 字节整槽读；ASan 全清；2026-11-18）
+
+- **缺陷**：PB-83 的位域真实位偏移落地后，表达式路径的位域读仍发 8 字节 `LOAD`（此前 `mcode=0` 的兜底），对 `u8` 存储单元会越过聚合体尾部（ASan：`READ of size 8` 越出 `Packet` 8 字节块）。语句复合赋值路径用的是单元宽 `ir_bf_load`，未受影响。
+- **修复**：四处表达式读（链 `->`/`.`、primary `->`/`.`）在位域成员上按 `ir_bf_unit`（1/2/4；8 走整槽）发窄读，再右移掩码。
+- **验证**：`ir_bitfield` 输出不变；两交叉档 qemu 输出与 ir-c 逐字相同；**聚合相关 14 份产物的 ASan 抽检 14/14 CLEAN**；门禁 **71P/0F/0S ×2、0 FAIL** 不变。
+
 ### err 缺口清零（PB-84：九份 err 诊断补齐——cooking/`is` 文案/void 成员/越界读/冻结转移/切片容量/默认值守卫；**门禁 71P/0F/0S**；2026-11-18）
 
 - **已报错但文案不对齐（4 份）**：`cooking_bare_var` 的裸 `<var-decl>` 改为即时报 `unsupported cooking item`（只跳该 item）；`is_dangling_range` / `is_empty_range` 文案对齐为 `invalid 'is' range: expected an integer upper bound` / `empty 'is' range (...)`；`void_member_unknown` 对通用 `void` 指针的 `->` 改报 `cannot access a member of the generic 'void' pointer` 并吞掉本行剩余 token（消除 `->` 级联误报）。
