@@ -1279,6 +1279,29 @@ static void ir_copy_literal(CompilerState *cs, int dst, const char *str)
     (void)cs;
 }
 
+/* PB-89：string / char[] 绑定字面量 → 复制到可写内存（malloc(len+1) + 逐字节含 NUL），
+ * 使元素写 `d[1] = x` 成立（此前直接指向只读字符串池，musl 下 SIGSEGV）。
+ * 字符串模型暂不追踪释放（与既有动态字符串一致，所有权/释放仍属待定项）。 */
+static int ir_strlit_copy(CompilerState *cs, const char *lit)
+{
+    int n = (int)strlen(lit);
+    int sz = ir_new_vreg(F);
+    ir_emit(F, IR_CONST, sz, -1, -1, (long long)n + 1);
+    ir_emit(F, IR_PARAM, -1, sz, -1, 0);
+    int p = ir_new_vreg(F);
+    IrIns *ci = &F->ins[ir_emit(F, IR_CALL, p, -1, -1, 1)];
+    ci->sym = "malloc";
+    ci->fn = -1;
+    for (int i = 0; i <= n; i++) {
+        int cv = ir_new_vreg(F);
+        ir_emit(F, IR_CONST, cv, -1, -1, (unsigned char)(i < n ? lit[i] : 0));
+        int a = ir_ptr_byte_off(p, i);
+        ir_emit(F, IR_STORE8, -1, a, cv, 0);
+    }
+    (void)cs;
+    return p;
+}
+
 /* 聚合体成员地址：普通变量按字节布局；聚合参数按参数槽（base+fi） */
 static int ir_member_addr(CompilerState *cs, int vi, int ti, int fi, int off)
 {
@@ -2269,7 +2292,15 @@ static void ir_chain_assign(CompilerState *cs, int vi)
         skip_newlines(cs);
         return;
     }
-    int b = ir_expr(cs);
+    int b;
+    if (!is_compound && cur_tok(cs) == TOK_STRING_LITERAL && ch.elem < 0) {
+        /* PB-89：动态字符串成员/通用指针赋字面量 → 可写副本 */
+        const char *lit = nihao_strdup(g_cs, cs->parser.lex->tok_str);
+        next_tok(cs);
+        b = ir_strlit_copy(cs, lit);
+    } else {
+        b = ir_expr(cs);
+    }
     int v;
     if (!is_compound) {
         v = b;
@@ -4035,11 +4066,13 @@ static void ir_multi_decl(CompilerState *cs, int vis)
                 ir_arr_store(addr, cv, 1);
             }
         } else if (has_bracket && arr_cap == 0 && misstr[k]) {
-            /* PB-82：动态 `char[]` 多变量声明——登记长度与字节寻址（与单变量同口径） */
+            /* PB-82：动态 `char[]` 多变量声明——登记长度与字节寻址（与单变量同口径）
+             * PB-89：字面量复制到可写内存（元素写须成立） */
             vetyp[vi] = 8;
             ve[vi] = mslen[k];
             vlen_known[vi] = 1;
-            ir_emit(F, IR_MOV, vt[vi], minits[k], -1, 0);
+            int cp = ir_strlit_copy(cs, mstrs[k]);
+            ir_emit(F, IR_MOV, vt[vi], cp, -1, 0);
         } else {
             ir_emit(F, IR_MOV, vt[vi], minits[k], -1, 0);
         }
@@ -4707,12 +4740,22 @@ static void ir_stmt_impl(CompilerState *cs)
                 vlen_known[vi] = 1;   /* PB-72 */
                 if (fresh) vetyp[vi] = 8;
             }
+            int str_copy = (cur_tok(cs) == TOK_STRING_LITERAL && vetyp[vi] == 8);
+            const char *str_lit = str_copy
+                ? nihao_strdup(g_cs, cs->parser.lex->tok_str) : NULL;
             int vfrm_src = -1;      /* PB-81：`r = s` 的指针来源传播 */
             if (cur_tok(cs) == TOK_IDENTIFIER) {
                 int s = var_find(cs->parser.lex->tok_str);
                 if (s >= 0) vfrm_src = vfrm[s];
             }
-            int vr = ir_expr(cs);
+            int vr;
+            if (str_copy) {
+                /* PB-89：动态字符串赋字面量 → 可写副本（元素写须成立） */
+                next_tok(cs);
+                vr = ir_strlit_copy(cs, str_lit);
+            } else {
+                vr = ir_expr(cs);
+            }
             /* PB-1 补缺（2026-09-01）：窄整数目标此前只在「声明初始化」路径经
              * ir_coerce 截断，普通赋值直接落槽 —— `b u8 = 0; b = 300` 在 IR 后端
              * 得到 300 而 A 方案（C 语义）得到 44。此处统一补目标类型协调。 */
@@ -4949,7 +4992,16 @@ static void ir_stmt_impl(CompilerState *cs)
             else if (at == TOK_PERCENT_ASSIGN) { aop = IR_MOD; is_compound = 1; }
             if (at == TOK_ASSIGN || is_compound) {
                 next_tok(cs);
-                int b = ir_expr(cs);
+                int b;
+                if (!is_compound && cur_tok(cs) == TOK_STRING_LITERAL &&
+                    agg_types[ti].misarr[fi] && agg_types[ti].marr_len[fi] <= 0) {
+                    /* PB-89：动态字符串成员赋字面量 → 可写副本 */
+                    const char *lit = nihao_strdup(g_cs, cs->parser.lex->tok_str);
+                    next_tok(cs);
+                    b = ir_strlit_copy(cs, lit);
+                } else {
+                    b = ir_expr(cs);
+                }
                 int nv;
                 int bfbits = agg_types[ti].mbits[fi];
                 if (!is_compound) {
@@ -5045,7 +5097,16 @@ static void ir_stmt_impl(CompilerState *cs)
             else if (at == TOK_PERCENT_ASSIGN) { aop = IR_MOD; is_compound = 1; }
             if (at == TOK_ASSIGN || is_compound) {
                 next_tok(cs);
-                int b = ir_expr(cs);
+                int b;
+                if (!is_compound && cur_tok(cs) == TOK_STRING_LITERAL &&
+                    agg_types[ti].misarr[fi] && agg_types[ti].marr_len[fi] <= 0) {
+                    /* PB-89：动态字符串成员赋字面量 → 可写副本 */
+                    const char *lit = nihao_strdup(g_cs, cs->parser.lex->tok_str);
+                    next_tok(cs);
+                    b = ir_strlit_copy(cs, lit);
+                } else {
+                    b = ir_expr(cs);
+                }
                 int nv;
                 int bfbits = agg_types[ti].mbits[fi];
                 if (!is_compound) {
@@ -5327,19 +5388,21 @@ static void ir_stmt_impl(CompilerState *cs)
                     ir_arr_store(addr, cv, 1);
                 }
             } else if (vetyp[vi] == 8 && cur_tok(cs) == TOK_STRING_LITERAL) {
-                /* 动态字符串 char[] = "lit"：记录逻辑长度（len() 用），存池地址 */
-                ve[vi] = (int)strlen(cs->parser.lex->tok_str);
+                /* PB-89：char[] 绑定字面量 → 复制到可写内存（元素写须成立） */
+                const char *lit = nihao_strdup(g_cs, cs->parser.lex->tok_str);
+                ve[vi] = (int)strlen(lit);
                 vlen_known[vi] = 1;   /* PB-72 */
-                int vr = ir_expr(cs);
+                next_tok(cs);
+                int vr = ir_strlit_copy(cs, lit);
                 ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             } else if (nt == TOK_STRING && cur_tok(cs) == TOK_STRING_LITERAL) {
                 /* PB-70：声明型 `s string = "lit"` 也要登记逻辑长度。
-                 * PB-67 只覆盖了「字面量推断」与 `char[]` 两条路径，声明型 string 的
-                 * ve[] 一直是 0 ⇒ len(s) 静默给 0（能编能跑但答案是错的）。
-                 * 只登记长度，不改 vetyp/寻址宽度——string 的字节布局仍属待裁第 23 条。 */
-                ve[vi] = (int)strlen(cs->parser.lex->tok_str);
+                 * PB-89：同样复制到可写内存（string 元素写成立）。 */
+                const char *lit = nihao_strdup(g_cs, cs->parser.lex->tok_str);
+                ve[vi] = (int)strlen(lit);
                 vlen_known[vi] = 1;   /* PB-72 */
-                int vr = ir_expr(cs);
+                next_tok(cs);
+                int vr = ir_strlit_copy(cs, lit);
                 ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             } else {
                 /* 切片读入声明数组：cp i32[3] = arr[1..4] —— 按目标容量复制
