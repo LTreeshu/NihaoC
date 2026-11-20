@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### `const` 决定可写性（PB-90：const 字符串/数组/聚合体自有存储拒写；2026-11-18）
+
+- **裁定落地**：字符串默认按 (a) 可写（PB-89 的可写副本），**可不可改写由 `const` 决定**：
+  - `const s char[] = "…"` / `const s string = "…"` **不再复制**，直接绑只读字符串池（零分配）；
+  - const 变量的**自有存储**写入一律编译期拒绝：`s[i] = …`、切片字符串赋值、`a[i] = …`、`agg.member = …`、`x op=` / `x++`、以及链式下标/成员写；诊断 `ir: cannot modify the const '<name>'` / `ir: cannot assign to the const '<name>'`；
+  - **指针的指向内存不受 const 限制**（`const p void` 仍可 `p.() = …`），const 只约束变量自身的重绑定与自有存储。
+- **配套**：新增按行恢复助手 `ir_skip_line`（函数体内无 NEWLINE token，按行号吞行），const 诊断只报一条、不级联。
+- **验证**：新增 err 用例 `const_store`（string/数组/聚合体成员写）与 `const_rebind`（重绑定）入 `IR_ERR_COVERED`；`ir_str` 等正向用例不变；门禁 **73P/0F/0S、0 FAIL**（PASS 71→73）；两交叉档同诊断；正向探针（const 字符串读、const void 指针写指向内存）行为正确。
+
 ### `string` / `char[]` 字面量可写副本（PB-89：`ir_str` 交叉转为一致；2026-11-18）
 
 - **语义裁定落地（按 §5.1 用例语义，`d[1] = 120` 须成立）**：`string` / 动态 `char[]` 绑定字符串字面量时，不再直接指向只读字符串池，而是**分配 `len+1` 字节并逐字节复制（含 NUL）**——字面量参数（`puts`/`print`）仍走只读池，不受影响。

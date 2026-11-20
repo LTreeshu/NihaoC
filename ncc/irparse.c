@@ -162,6 +162,28 @@ static void ir_vis_check_writable(CompilerState *cs, int vi)
     ir_vis_check_usable(cs, vi);
 }
 
+/* PB-90：吞掉当前物理行剩余 token（函数体内没有 NEWLINE token，按行号判断）。
+ * 作为诊断后的恢复动作，避免残余 token 在下一语句里级联报错。 */
+static void ir_skip_line(CompilerState *cs)
+{
+    int ln = cs->parser.lex->last_line_num;
+    while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF &&
+           cs->parser.lex->last_line_num == ln)
+        next_tok(cs);
+    skip_newlines(cs);
+}
+/* PB-90：const 变量的**自有存储**不可写（string/char[]/定长数组/聚合体内容）。
+ * 指针变量的「指向内存」不受 const 限制（如 `const p void` 仍可写 `p.()`），
+ * 故调用方只对非指针类变量调用本检查。 */
+static int ir_check_const_store(CompilerState *cs, int vi)
+{
+    if (vi >= 0 && vvis[vi] == VIS_CONST) {
+        nihao_error(cs, "ir: cannot modify the const '%s'", vn[vi]);
+        return 0;
+    }
+    return 1;
+}
+
 /* 调用点参数检查：dst_vis = 被调函数参数可见性（来自 IrFn.param_vis，属被调函数
  * 作用域，调用方无法直接索引其 vi）。仅对指针类实参（vptr[src_vi]）生效。
  * 返回 1 表示发生借用（源被冻结），调用结束后须解冻源；0 表示转移/无变化。 */
@@ -2244,6 +2266,12 @@ static void ir_chain_assign(CompilerState *cs, int vi)
         skip_newlines(cs);
         return;
     }
+    if (vvis[vi] == VIS_CONST && !vptr[vi] && vmode[vi] != VM_PTRARR) {
+        /* PB-90：const 变量的自有存储不可写（指针指向内存不受限） */
+        nihao_error(cs, "ir: cannot modify the const '%s'", vn[vi]);
+        ir_skip_line(cs);
+        return;
+    }
     int sc = (ch.elem >= 0) ? ch.elem : vtype[vi];
     /* PB-82：链上元素的字节宽（动态字符串按 1；标量按类型码；未知按整槽 0） */
     int ldw = ir_load_width_imm(sc);
@@ -2633,6 +2661,7 @@ static int ir_primary(CompilerState *cs)
             nihao_error(cs, "ir: undeclared variable '%s'", pname);
             return ir_new_vreg(F);
         }
+        ir_check_const_store(cs, pvi);   /* PB-90：const 不可 ++/-- */
         int one = ir_new_vreg(F);
         ir_emit(F, IR_CONST, one, -1, -1, 1);
         int nv = ir_new_vreg(F);
@@ -4071,7 +4100,8 @@ static void ir_multi_decl(CompilerState *cs, int vis)
             vetyp[vi] = 8;
             ve[vi] = mslen[k];
             vlen_known[vi] = 1;
-            int cp = ir_strlit_copy(cs, mstrs[k]);
+            int cp = (vvis[vi] == VIS_CONST) ? minits[k]
+                                             : ir_strlit_copy(cs, mstrs[k]);
             ir_emit(F, IR_MOV, vt[vi], cp, -1, 0);
         } else {
             ir_emit(F, IR_MOV, vt[vi], minits[k], -1, 0);
@@ -4624,6 +4654,12 @@ static void ir_stmt_impl(CompilerState *cs)
                     return;
                 }
             }
+            if (vi >= 0 && vvis[vi] == VIS_CONST) {
+                /* PB-90：const 变量不可重绑定 */
+                nihao_error(cs, "ir: cannot assign to the const '%s'", name);
+                ir_skip_line(cs);
+                return;
+            }
             int fresh = 0;
             if (vi < 0) { vi = var_declare(name, 0, -1, VIS_VAR, 0); fresh = 1; }
             if (vty[vi] >= 0 && agg_types[vty[vi]].kind != 2 &&
@@ -4740,7 +4776,8 @@ static void ir_stmt_impl(CompilerState *cs)
                 vlen_known[vi] = 1;   /* PB-72 */
                 if (fresh) vetyp[vi] = 8;
             }
-            int str_copy = (cur_tok(cs) == TOK_STRING_LITERAL && vetyp[vi] == 8);
+            int str_copy = (cur_tok(cs) == TOK_STRING_LITERAL &&
+                            vetyp[vi] == 8 && vvis[vi] != VIS_CONST);
             const char *str_lit = str_copy
                 ? nihao_strdup(g_cs, cs->parser.lex->tok_str) : NULL;
             int vfrm_src = -1;      /* PB-81：`r = s` 的指针来源传播 */
@@ -4778,6 +4815,12 @@ static void ir_stmt_impl(CompilerState *cs)
             next_tok(cs);           /* name */
             next_tok(cs);           /* op= */
             int vi = var_find(name);
+            if (vi >= 0 && vvis[vi] == VIS_CONST) {
+                /* PB-90：const 变量不可修改 */
+                nihao_error(cs, "ir: cannot modify the const '%s'", name);
+                ir_skip_line(cs);
+                return;
+            }
             if (vi < 0) {
                 int gi = global_find(name);
                 if (gi >= 0) {
@@ -5046,6 +5089,12 @@ static void ir_stmt_impl(CompilerState *cs)
             /* 成员赋值 s.field = e / s.field op= e */
             next_tok(cs);           /* name */
             int vi = var_find(name);
+            if (vi >= 0 && vvis[vi] == VIS_CONST) {
+                /* PB-90：const 聚合体的自有存储不可写 */
+                nihao_error(cs, "ir: cannot modify the const '%s'", name);
+                ir_skip_line(cs);
+                return;
+            }
             if (vi < 0 || vty[vi] < 0) {
                 nihao_error(cs, "ir: '%s' is not an aggregate variable", name);
                 skip_newlines(cs);
@@ -5392,8 +5441,13 @@ static void ir_stmt_impl(CompilerState *cs)
                 const char *lit = nihao_strdup(g_cs, cs->parser.lex->tok_str);
                 ve[vi] = (int)strlen(lit);
                 vlen_known[vi] = 1;   /* PB-72 */
-                next_tok(cs);
-                int vr = ir_strlit_copy(cs, lit);
+                int vr;
+                if (vvis[vi] == VIS_CONST) {
+                    vr = ir_expr(cs);           /* PB-90：const 绑只读池，无需副本 */
+                } else {
+                    next_tok(cs);
+                    vr = ir_strlit_copy(cs, lit);
+                }
                 ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             } else if (nt == TOK_STRING && cur_tok(cs) == TOK_STRING_LITERAL) {
                 /* PB-70：声明型 `s string = "lit"` 也要登记逻辑长度。
@@ -5401,8 +5455,13 @@ static void ir_stmt_impl(CompilerState *cs)
                 const char *lit = nihao_strdup(g_cs, cs->parser.lex->tok_str);
                 ve[vi] = (int)strlen(lit);
                 vlen_known[vi] = 1;   /* PB-72 */
-                next_tok(cs);
-                int vr = ir_strlit_copy(cs, lit);
+                int vr;
+                if (vvis[vi] == VIS_CONST) {
+                    vr = ir_expr(cs);           /* PB-90：const 绑只读池，无需副本 */
+                } else {
+                    next_tok(cs);
+                    vr = ir_strlit_copy(cs, lit);
+                }
                 ir_emit(F, IR_MOV, vt[vi], vr, -1, 0);
             } else {
                 /* 切片读入声明数组：cp i32[3] = arr[1..4] —— 按目标容量复制
@@ -5533,6 +5592,11 @@ static void ir_stmt_impl(CompilerState *cs)
                 skip_newlines(cs);
                 return;
             }
+            if (!vptr[vi] && vmode[vi] != VM_PTRARR && !ir_check_const_store(cs, vi)) {
+                /* PB-90：const 数组/字符串的自有存储不可写 */
+                ir_skip_line(cs);
+                return;
+            }
             if (ir_chain_needs_new(cs, vi)) {   /* PB-68：多步链 / 新形态 */
                 ir_chain_assign(cs, vi);
                 return;
@@ -5618,6 +5682,10 @@ static void ir_stmt_impl(CompilerState *cs)
         if (vi < 0) {
             nihao_error(cs, "ir: undeclared variable '%s'", name);
             skip_newlines(cs);
+            return;
+        }
+        if (!ir_check_const_store(cs, vi)) {   /* PB-90：const 不可 ++/-- */
+            ir_skip_line(cs);
             return;
         }
         next_tok(cs);

@@ -570,3 +570,17 @@ ASan（PB-85）：聚合相关 14 份产物 **14/14 CLEAN**。**全语料门禁 
 
 **边界**：副本**不追踪释放**（字符串所有权未定项）；若改为「元素写不成立」需 design 层裁定并改
 本实现与 `ir_str` 用例。
+
+## 24. PB-90 实测：`const` 决定可写性（2026-11-18）
+
+**裁定**：字符串默认按 (a) 可写（PB-89 的字面量可写副本），**可写性由 `const` 决定**。
+
+**实现**：`const s char[]` / `const s string` 绑字面量时**不复制**、直接走只读池；
+const 变量的**自有存储**写入全部即时报错——元素写、切片字符串赋值、数组成员写、聚合体成员写、
+`op=` / `++` / `--`、链式下标/成员写（诊断 `cannot modify the const '<name>'`），重绑定报
+`cannot assign to the const`；**指针指向内存不受限**（`const p void` 可 `p.() = …`）。
+新增 `ir_skip_line`（按行号吞行；函数体内无 NEWLINE token）避免级联。
+
+**验证**：新增 `err/const_store`（string/数组/成员写）与 `err/const_rebind`（重绑定）入名单；
+门禁 **73P/0F/0S ×2、0 FAIL**（err 34→36）；两交叉档同诊断；正向探针（const 字符串读、
+const void 指针写指向内存）行为正确；`ir_str` 等正向用例不受影响。
