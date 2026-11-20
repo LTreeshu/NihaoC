@@ -2926,24 +2926,12 @@ static int ir_primary(CompilerState *cs)
                         if (avi >= 0 && vty[avi] >= 0 && nxt != TOK_LPAREN) {
                             next_tok(cs);
                             IrAggType *aa = &agg_types[vty[avi]];
-                            for (int k = 0; k < aa->mcount && argn < 64; k++) {
+                            int chunks = aa->bytes > 0 ? (aa->bytes + 7) / 8 : 1;
+                            int base = ir_agg_base(avi);
+                            for (int k = 0; k < chunks && argn < 64; k++) {
+                                int a2 = ir_ptr_byte_off(base, (long long)k * 8);
                                 int lv = ir_new_vreg(F);
-                                if (vaparam[avi]) {
-                                    int a2 = ir_new_vreg(F);
-                                    ir_emit(F, IR_ADDR, a2, vt[avi], -1, k);
-                                    ir_emit(F, IR_LOAD, lv, a2, -1, 0);
-                                } else {
-                                    int a2 = ir_ptr_byte_off(ir_agg_base(avi),
-                                                             aa->moff[k]);
-                                    if (aa->misarr[k] && aa->marr_len[k] <= 0) {
-                                        ir_emit(F, IR_LOAD, lv, a2, -1, 0);   /* 动态字符串成员=指针 */
-                                    } else {
-                                        int mc2 = aa->mtype[k] >= 0 ? 0 : aa->mscode[k];
-                                        ir_emit(F, IR_LOAD, lv, a2, -1,
-                                                ir_load_width_imm(mc2));
-                                        if (mc2 == 1 || mc2 == 8) ir_set_double(lv);
-                                    }
-                                }
+                                ir_emit(F, IR_LOAD, lv, a2, -1, 0);
                                 arglist[argn++] = lv;
                             }
                         } else {
@@ -2952,16 +2940,13 @@ static int ir_primary(CompilerState *cs)
                             (void)a;
                             if (last_mr_buf >= 0) {
                                 IrAggType *ra = &agg_types[pti];
+                                int chunks = ra->bytes > 0 ? (ra->bytes + 7) / 8 : 1;
                                 int base = ir_new_vreg(F);
                                 ir_emit(F, IR_MOV, base, last_mr_buf, -1, 0);
-                                for (int k = 0; k < ra->mcount && argn < 64; k++) {
-                                    int addr = ir_ptr_byte_off(base, ra->moff[k]);
+                                for (int k = 0; k < chunks && argn < 64; k++) {
+                                    int addr = ir_ptr_byte_off(base, (long long)k * 8);
                                     int lv = ir_new_vreg(F);
-                                    int mc2 = ra->mtype[k] >= 0 ? 0 : ra->mscode[k];
-                                    ir_emit(F, IR_LOAD, lv, addr, -1,
-                                            ra->misarr[k] && ra->marr_len[k] <= 0
-                                                ? 0 : ir_load_width_imm(mc2));
-                                    if (mc2 == 1 || mc2 == 8) ir_set_double(lv);
+                                    ir_emit(F, IR_LOAD, lv, addr, -1, 0);
                                     arglist[argn++] = lv;
                                 }
                                 last_mr_buf = -1;
@@ -2970,7 +2955,8 @@ static int ir_primary(CompilerState *cs)
                                 if (argn < 64) arglist[argn++] = ir_new_vreg(F);
                             }
                         }
-                        argi += agg_types[pti].mcount;
+                        argi += agg_types[pti].bytes > 0
+                                    ? (agg_types[pti].bytes + 7) / 8 : 1;
                     } else {
                         /* 标量实参：M2 参数前缀检查（flow→失效, var/const→冻结） */
                         int src_vi = -1;
@@ -5872,35 +5858,31 @@ static void ir_func_named(CompilerState *cs, const char *fname, int pre_vis, int
         F->param_vis[pi] = pvis[pi];     /* M2 调用点检查用（声明序，与 param 对齐） */
         int ti = ptype_ti[pi];
         if (ti >= 0) {
-            int mcount = agg_types[ti].mcount;
+            /* PB-88/0.2.2：聚合参数按 **8 字节块** 展平（chunks = ceil(bytes/8)）。
+             * 入参槽只作 ABI 载体（合成名）；真正的聚合参数变量另建字节布局块，
+             * 把各块按 8 字节搬入——嵌套聚合/大聚合的尾部字节不再被「按成员展平」截断。 */
+            int chunks = agg_types[ti].bytes > 0 ? (agg_types[ti].bytes + 7) / 8 : 1;
             int pstart = vpi;
-            /* PB-88：入参槽只作 ABI 载体（合成名，保持参数序号与调用约定不变）；
-             * 真正的聚合参数变量另建「字节布局块」，并把入参值逐成员搬入——
-             * 这样被调方内部成员访问/sret 返回与普通聚合体完全同构
-             * （此前直接把入参槽当成员槽，汇编档槽向下生长会把布局反序）。 */
-            for (int k = 0; k < mcount; k++) {
-                char pn[64];
-                snprintf(pn, sizeof(pn), "__parg%d_%d", pi, k);
+            for (int k = 0; k < chunks; k++) {
+                /* 名字必须堆分配：var_declare 存的是指针，栈缓冲会在下一轮被覆写，
+                 * 三次声明撞成同名 → 只分配一个槽（0.2.2 实测踩到）。 */
+                char *pn = nihao_malloc(g_cs, 64);
+                snprintf(pn, 64, "__parg%d_%d", pi, k);
                 var_declare(pn, 0, -1, VIS_VAR, 0);
-                F->param_types[vpi + k] = 0;   /* 成员统一 8 字节槽 */
+                F->param_types[vpi + k] = 0;
             }
-            F->param_agg_ti[pstart] = ti;      /* 记录聚合起始（其余展开槽 -1） */
-            for (int k = 1; k < mcount; k++) F->param_agg_ti[pstart + k] = -1;
+            F->param_agg_ti[pstart] = ti;
+            for (int k = 1; k < chunks; k++) F->param_agg_ti[pstart + k] = -1;
             {
-                IrAggType *pa = &agg_types[ti];
-                int slots = pa->bytes > 0 ? (pa->bytes + 7) / 8 : 1;
-                int vi = var_declare(pnames[pi], slots, ti, pvis[pi], 0);
-                vblk[vi] = slots;
-                for (int k = 0; k < mcount; k++) {
+                int vi = var_declare(pnames[pi], chunks, ti, pvis[pi], 0);
+                vblk[vi] = chunks;
+                for (int k = 0; k < chunks; k++) {
                     int src = pstart + k;
-                    int addr = ir_ptr_byte_off(ir_agg_base(vi), pa->moff[k]);
-                    int w = (pa->mtype[k] >= 0 ||
-                             (pa->misarr[k] && pa->marr_len[k] <= 0))
-                                ? 0 : ir_store_width(pa->mscode[k]);
-                    ir_emit(F, IR_STORE, -1, addr, src, w);
+                    int addr = ir_ptr_byte_off(ir_agg_base(vi), (long long)k * 8);
+                    ir_emit(F, IR_STORE, -1, addr, src, 0);
                 }
             }
-            vpi += mcount;
+            vpi += chunks;
         } else {
             int vi = var_declare(pnames[pi], 0, -1, pvis[pi], 0);
             if (pptr[pi]) vptr[vi] = 1;       /* 指针类参数（void）：标记所有权语义 */

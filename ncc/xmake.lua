@@ -3,7 +3,7 @@
 set_project("nihao")
 -- 编译器版本单一真源：发布时只改这一处，set_version 与注入 C 的 NIHAO_VERSION 都由它派生
 -- 2026-11-12 A 线退役、仓库收敛 IR-only 单一管线 ⇒ 版本进入 0.2 线
-local nihao_version = "0.2.1"
+local nihao_version = "0.2.2"
 set_version(nihao_version)
 add_defines("NIHAO_VERSION_TAG=" .. nihao_version)
 
@@ -290,7 +290,7 @@ end
 -- + `.(AggType)` 成员访问 + 数组成员名退化；两份与 .expect 相同、两交叉档 qemu 同输出 ⇒ 入名单。
 -- 同时给 ir_bitfield 补 .expect（此前无期望、比对档是空的）⇒ 该份升为 PASS 档。
 -- IR 侧 PASS 59→62、SKIP 11→9。**pos 覆盖 72/72（IR_ONLY 之外全覆盖）**。
-local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true, fx_types = true, malloc_demo = true, flow = true, flow_no_free = true, borrow = true, flow_move = true, features = true, for_init_forms = true, transfer = true, mathmod = true, module_top_forms = true, len_builtin = true, array_capacity_tiers = true, deref_slice = true, is_pattern_forms = true, stmt_terminators = true, literal_forms = true, is_no_fallthrough = true, use_mod = true, alignof_builtin = true, struct_member_default = true, designator_init = true, array_member_default = true, type_forms = true, void_slot_infer = true, str_array_init = true, multi_arr_decl = true, ownerof = true, slice_str_infer = true, ir_sparam = true}
+local IR_SUBSET = {hello = true, ir_demo = true, ir_expr = true, ir_loop = true, p0_case = true, ir_fptr = true, p0_link = true, ir_array = true, ir_narray = true, ir_struct = true, ir_vis = true, ir_switch = true, ir_narrow = true, ir_conv = true, ir_str = true, ir_float = true, ir_fcall = true, ir_multi = true, ir_prefix = true, ir_bitfield = true, ir_ptr = true, ir_ptr2 = true, ir_goto = true, ir_nested = true, ir_is = true, ir_arrow = true, ir_dynarr = true, ir_trunc = true, param_prefix = true, return_flow = true, static_param_share = true, ir_cook = true, cooking_ct_func = true, bracket_attrs = true, is_vis_patterns = true, pattern = true, array_capacity_1d = true, struct_param_prefix = true, ir_mr = true, goto_forms = true, fx_types = true, malloc_demo = true, flow = true, flow_no_free = true, borrow = true, flow_move = true, features = true, for_init_forms = true, transfer = true, mathmod = true, module_top_forms = true, len_builtin = true, array_capacity_tiers = true, deref_slice = true, is_pattern_forms = true, stmt_terminators = true, literal_forms = true, is_no_fallthrough = true, use_mod = true, alignof_builtin = true, struct_member_default = true, designator_init = true, array_member_default = true, type_forms = true, void_slot_infer = true, str_array_init = true, multi_arr_decl = true, ownerof = true, slice_str_infer = true, ir_sparam = true, nested_agg_value = true}
 local IR_ONLY = {ir_builtin = true, ir_slice = true}
 -- IR_ERR_COVERED: err 用例中 IR 前端已实现对应诊断的（未列出的非 m2 用例仍在 IR 侧跳过）
 -- cooking_bare_var 刻意不入：IR 前端对块内裸 <var-decl> 只给 `ir: undeclared variable 'K'`，
