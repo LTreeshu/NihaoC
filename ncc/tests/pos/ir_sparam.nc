@@ -1,8 +1,8 @@
 module main
 
 Person struct {
-    age
-    score
+    age i32
+    score i32
 }
 
 /* struct 返回（聚合变量 return p，sret 缓冲） */

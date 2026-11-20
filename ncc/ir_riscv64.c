@@ -16,9 +16,40 @@
 /* 当前函数帧大小（prologue 设置，IR_RET/epilogue 恢复 sp 用） */
 static int g_rv_frame = 0;
 
+/* PB-87：槽寻址分三个 2040 字节窗口（12 位立即数上限 2047）：
+ *   [0,2040) -> s0；[2040,4080) -> s1=s0-2040；[4080,6120) -> s2=s1-2040。
+ * 大帧（>2047）时 prologue 才保存/建立 s1/s2；上限 max_frame=6000。 */
 static void rv_slot(NBuf *b, int vreg, const TargetBackend *tb)
 {
-    nb_put(b, "-%d(s0)", tb->slot_stride * (vreg + 1));
+    long long d = (long long)tb->slot_stride * (vreg + 1);
+    int k = (int)(d / 2040);
+    int rem = (int)(d - (long long)k * 2040);
+    const char *base = k == 0 ? "s0" : k == 1 ? "s1" : "s2";
+    nb_put(b, "-%d(%s)", rem, base);
+}
+
+/* PB-87：s0 相对偏移 d 的地址（>6120 时退化为 li+add） */
+static void rv_addr_imm(NBuf *b, long long d)
+{
+    int k = (int)(d / 2040);
+    int rem = (int)(d - (long long)k * 2040);
+    if (k <= 2)
+        nb_put(b, "  addi a0, %s, -%d\n",
+               k == 0 ? "s0" : k == 1 ? "s1" : "s2", rem);
+    else
+        nb_put(b, "  li a0, -%lld\n  add a0, s0, a0\n", d);
+}
+
+/* PB-87：统一帧恢复（ra/s0 必存；大帧另存 s1/s2，sp 用 li+add 调整） */
+static void rv_fn_restore(NBuf *b)
+{
+    nb_put(b, "  ld ra, 8(sp)\n  ld s0, 0(sp)\n");
+    if (g_rv_frame > 2040) nb_put(b, "  ld s1, 16(sp)\n");
+    if (g_rv_frame > 4080) nb_put(b, "  ld s2, 24(sp)\n");
+    if (g_rv_frame > 2047)
+        nb_put(b, "  li t0, %d\n  add sp, sp, t0\n  ret\n", g_rv_frame);
+    else
+        nb_put(b, "  addi sp, sp, %d\n  ret\n", g_rv_frame);
 }
 
 /* 装载 a=slot(x)，a1=slot(y) 到 a0/a1 */
@@ -182,16 +213,13 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             rv_store_a0(b, in->dst, tb);
             break;
         case IR_ADDR:
-            /* 地址 = s0 - stride*(a+imm+1)（槽向下生长，槽号偏移 imm） */
-            nb_put(b, "  addi a0, s0, -%d\n",
-                   tb->slot_stride * (in->a + (int)in->imm + 1));
+            /* 地址 = s0 - stride*(a+imm+1)（大帧窗口化） */
+            rv_addr_imm(b, (long long)tb->slot_stride * (in->a + (int)in->imm + 1));
             rv_store_a0(b, in->dst, tb);
             break;
         case IR_ADDR_LO:
             /* PB-82：紧凑字节块首地址（块最低槽）；块内字节按 +k 向上寻址 */
-            nb_put(b, "  addi a0, s0, -%d
-",
-                   tb->slot_stride * (in->a + (int)in->imm));
+            rv_addr_imm(b, (long long)tb->slot_stride * (in->a + (int)in->imm));
             rv_store_a0(b, in->dst, tb);
             break;
         case IR_ELEM_ADDR:
@@ -311,8 +339,7 @@ static void rv_emit_ins(NBuf *b, const IrIns *in, const TargetBackend *tb,
             } else {
                 nb_put(b, "  li a0, 0\n");
             }
-            nb_put(b, "  ld ra, 8(sp)\n  ld s0, 0(sp)\n  addi sp, sp, %d\n  ret\n",
-                   g_rv_frame);
+            rv_fn_restore(b);
             break;
         default:
             break;
@@ -324,10 +351,20 @@ static void rv_fn_prologue(NBuf *b, const TargetBackend *tb,
                            const IrFn *f, int frame)
 {
     g_rv_frame = frame;
-    nb_put(b, "  addi sp, sp, -%d\n", frame);
+    if (frame > 2047)
+        nb_put(b, "  li t0, %d\n  sub sp, sp, t0\n", frame);
+    else
+        nb_put(b, "  addi sp, sp, -%d\n", frame);
     nb_put(b, "  sd ra, 8(sp)\n");
     nb_put(b, "  sd s0, 0(sp)\n");
-    nb_put(b, "  addi s0, sp, %d\n", frame);
+    if (frame > 2040) nb_put(b, "  sd s1, 16(sp)\n");
+    if (frame > 4080) nb_put(b, "  sd s2, 24(sp)\n");
+    if (frame > 2047)
+        nb_put(b, "  li t0, %d\n  add s0, sp, t0\n", frame);
+    else
+        nb_put(b, "  addi s0, sp, %d\n", frame);
+    if (frame > 2040) nb_put(b, "  addi s1, s0, -2040\n");
+    if (frame > 4080) nb_put(b, "  addi s2, s1, -2040\n");
     /* 参数装载（PB-浮点 ABI）：int → a0-a7（sd 槽），double → fa0-fa7（fsd 槽） */
     int ii = 0, fi = 0;
     for (int i = 0; i < f->param_count; i++) {
@@ -359,8 +396,7 @@ static void rv_fn_epilogue(NBuf *b, const TargetBackend *tb,
         } else {
             nb_put(b, "  li a0, 0\n");
         }
-        nb_put(b, "  ld ra, 8(sp)\n  ld s0, 0(sp)\n  addi sp, sp, %d\n  ret\n",
-               g_rv_frame);
+        rv_fn_restore(b);
     }
 }
 
@@ -372,8 +408,8 @@ const TargetBackend riscv64_backend = {
     .slot_stride  = 8,
     .stack_dir    = -1,
     .callee_align = 16,
-    .frame_extra  = 16,           /* ra + s0 保存 */
-    .max_frame    = 2047,         /* addi/sd/ld 只用 12 位带符号立即数寻址（PB-35） */
+    .frame_extra  = 32,           /* ra + s0 + 大帧窗口基址 s1/s2 保存（PB-87） */
+    .max_frame    = 6000,         /* 三个 2040 字节窗口（s0/s1/s2）覆盖上限（PB-87） */
     .int_arg_regs = rv_int_arg_regs,
     .int_arg_count = 8,
     .fp_arg_regs  = rv_fp_arg_regs,

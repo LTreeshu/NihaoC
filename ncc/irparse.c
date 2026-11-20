@@ -5742,14 +5742,33 @@ static void ir_func_named(CompilerState *cs, const char *fname, int pre_vis, int
         int ti = ptype_ti[pi];
         if (ti >= 0) {
             int mcount = agg_types[ti].mcount;
-            int vi = var_declare(pnames[pi], mcount, ti, pvis[pi], 0);
-            vaparam[vi] = 1;    /* PB-83：聚合参数按展平槽访问（base+fi） */
+            int pstart = vpi;
+            /* PB-88：入参槽只作 ABI 载体（合成名，保持参数序号与调用约定不变）；
+             * 真正的聚合参数变量另建「字节布局块」，并把入参值逐成员搬入——
+             * 这样被调方内部成员访问/sret 返回与普通聚合体完全同构
+             * （此前直接把入参槽当成员槽，汇编档槽向下生长会把布局反序）。 */
             for (int k = 0; k < mcount; k++) {
+                char pn[64];
+                snprintf(pn, sizeof(pn), "__parg%d_%d", pi, k);
+                var_declare(pn, 0, -1, VIS_VAR, 0);
                 F->param_types[vpi + k] = 0;   /* 成员统一 8 字节槽 */
             }
-            F->param_agg_ti[vpi] = ti;         /* 记录聚合起始（其余展开槽 -1） */
-            for (int k = 1; k < mcount; k++) F->param_agg_ti[vpi + k] = -1;
-            (void)vi;
+            F->param_agg_ti[pstart] = ti;      /* 记录聚合起始（其余展开槽 -1） */
+            for (int k = 1; k < mcount; k++) F->param_agg_ti[pstart + k] = -1;
+            {
+                IrAggType *pa = &agg_types[ti];
+                int slots = pa->bytes > 0 ? (pa->bytes + 7) / 8 : 1;
+                int vi = var_declare(pnames[pi], slots, ti, pvis[pi], 0);
+                vblk[vi] = slots;
+                for (int k = 0; k < mcount; k++) {
+                    int src = pstart + k;
+                    int addr = ir_ptr_byte_off(ir_agg_base(vi), pa->moff[k]);
+                    int w = (pa->mtype[k] >= 0 ||
+                             (pa->misarr[k] && pa->marr_len[k] <= 0))
+                                ? 0 : ir_store_width(pa->mscode[k]);
+                    ir_emit(F, IR_STORE, -1, addr, src, w);
+                }
+            }
             vpi += mcount;
         } else {
             int vi = var_declare(pnames[pi], 0, -1, pvis[pi], 0);
@@ -5989,6 +6008,13 @@ static void ir_type_decl_named(CompilerState *cs, const char *tname)
                 if (ti2 >= 0) {
                     a->mtype[a->mcount] = ti2;
                     next_tok(cs);
+                } else {
+                    /* PB-88：成员缺类型（`age` 后直接接下一成员名）——与 A 后端同判据 */
+                    int ln = cs->parser.lex->last_line_num;
+                    nihao_error(cs, "ir: unknown type '%s'", cs->parser.lex->tok_str);
+                    while (cur_tok(cs) != TOK_RBRACE && cur_tok(cs) != TOK_EOF &&
+                           cs->parser.lex->last_line_num == ln)
+                        next_tok(cs);
                 }
             } else if (is_type_token(cur_tok(cs))) {
                 int esize = (int)type_size_token(cur_tok(cs));

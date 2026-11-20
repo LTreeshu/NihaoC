@@ -601,6 +601,11 @@
   - 全 pos × 两交叉档 zig+qemu：**SAME 128/128**；帧护栏拒 5（`array_capacity_tiers`/`array_member_default`/`deref_slice`/`ir_slice`/`ir_str`）；NOC 4（两份模块型 ×2）；DIFF 2 = `ir_sparam`（IR_ONLY 非法用例）。
   - 记录见台账 §20；门禁 71P/0F/0S 不变。
 
+- [x] **PB-87 大帧出码 + PB-88 聚合参数字节布局（2026-11-18 完成，第 108/109 项；`ir_sparam` 转正）**
+  - **PB-87**：槽寻址分三个 2040 字节窗口（s0/s1/s2），大帧 prologue 用 `li/sub` 调整 sp 并保存窗口基址，`IR_RET`/epilogue 统一恢复；`IR_ADDR`/`ADDR_LO` 立即数窗口化；`frame_extra=32`、帧上限 6000。顺带修 loongarch `ADDR_LO` 发射串的真换行。
+  - **PB-88**：聚合参数改为「入参槽（合成名）作 ABI 载体 + 另建字节布局块逐成员搬入」，成员访问/sret 与普通聚合体同构，`vaparam` 特例退役；补「成员缺类型」诊断；`ir_sparam` 补类型并 `IR_ONLY → IR_SUBSET`。
+  - **验证**：72/72 pos 全部出交叉汇编；69 份可执行 × 两档 **138/138 SAME（DIFF 0）**；仅 `ir_str` 既有 SIGSEGV（`string` 写只读字面量，待裁项）、2 份模块型无 main。门禁 **71P/0F/0S** 不变。
+
 ## 待 ltree 裁定清单（2026-10-27 汇总，PB-43）
 
 > 汇总动机：PB-33 的 **P13** 卡在 `PA-61`，本分支连续五轮（PB-38 ~ PB-42）都在做「不需要新裁定就能推进」的事，现已推完（两档发射器专属缺陷清零、根因全部定位）。下面把**所有等裁事项集中一处**，每条给出选项、实测代价与证据出处，方便一次批阅定夺；顺序按「卡住的广度」排，不按提出时间。引用一律用符号名与配置标识符（源码行号只写在 `IMPLEMENTATION_STATUS.md`）。
