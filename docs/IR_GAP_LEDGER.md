@@ -598,3 +598,24 @@ const void 指针写指向内存）行为正确；`ir_str` 等正向用例不受
 两交叉档 qemu 同输出、ASan 0 report；全量交叉 **71 可执行 × 2 = 142/142 SAME（DIFF/RUNFAIL/LINKFAIL 0）**；
 门禁 **74P/0F/0S**（pos 73/73 + err 36/36）。
 **边界**：块 ABI 为编译器内部约定，不承诺外部链接兼容。
+
+## 26. 0.2.3 实测：门禁判别力加固（两处回归修复，2026-11-20）
+
+**动机**：给 35 份缺 `.expect` 的 pos 用例补期望时，先跑输出，暴露出三份「无声失败」的用例。
+
+**回归一（0.2.2 参数注册顺序）**：聚合参数的字节布局块 `var_declare` 紧跟其合成 ABI 槽之后，
+块成员 vreg 占住参数索引区间；再跟标量参数时标量被绑进块首槽（生成 C 中 `p[0] = arg1;`，
+`extra` 永无赋值）。修复：参数注册分两遍——第一遍登记全部 ABI 槽（聚合 `ceil(bytes/8)` 个合成槽、
+标量槽），第二遍再声明聚合块并逐块 `IR_STORE` 搬入；`param_count` 仍为 ABI 槽总数。
+
+**回归二（i8 元素读符号）**：1 字节元素读一律 `IR_LOAD8`（`lbu` / `*(uint8_t*)`）零扩展，
+`a[1] = 255` 后 `a[1] == -1` 判假。修复：`ir_load1(dst, addr, vcode)` 按元素类型码取
+`ir_load_width_imm`：负宽走 `IR_LOAD`（`lb` 符号扩展），u8/未知仍 `LOAD8`；数组读、聚合数组成员读、
+指针链读、成员复合赋值当前值四处同步。`char` 在 NihaoC 映射 i8，同样符号扩展。
+
+**门禁**：35 份 pos 补 `.expect`（CRLF，内容为实跑输出；两份模块型 `mathmod` / `module_top_forms`
+无产物，维持一致性比对），门禁 PASS **74 → 109**（pos 73/73 + err 36/36 均有判据）。
+
+**验证**：门禁 **109P/0F/0S ×2**；全量交叉重扫 **142/142 SAME（DIFF/RUNFAIL/LINKFAIL 全 0，
+NOC=4 即两份模块型×两档）**；`ir_narray` / `ir_sparam` / `struct_param_prefix` / `ir_str`
+产物 ASan **0 report**。

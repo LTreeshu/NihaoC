@@ -1,0 +1,9 @@
+dtoi ok
+dtoi neg ok
+itod ok
+dtoi expr ok
+dtoi narrow ok
+dtoi arr ok
+itod arr ok
+neg f ok
+not f ok

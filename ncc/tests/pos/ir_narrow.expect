@@ -1,0 +1,10 @@
+i8 ok
+i8 neg ok
+u8 ok
+i16 ok
+i16 inc ok
+i16 pp ok
+i32 ok
+u32 ok
+i8 param ok
+mix ok

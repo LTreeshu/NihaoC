@@ -1,0 +1,5 @@
+float ok
+float sub ok
+float div ok
+fcmp ok
+f32 strict ok

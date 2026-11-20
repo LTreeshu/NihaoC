@@ -1,0 +1,5 @@
+sret var ok
+struct param ok
+sret chain ok
+multi struct ok
+mutate ok

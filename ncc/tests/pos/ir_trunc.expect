@@ -1,0 +1,10 @@
+decl-init ok
+assign u8 ok
+assign i8 ok
+assign i16 ok
+assign u16 ok
+assign u32 ok
+compound u8 ok
+incr u8 ok
+f64 assign ok
+f64 compound ok

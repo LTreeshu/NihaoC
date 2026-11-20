@@ -6,6 +6,17 @@
 
 （开发中）
 
+## [v0.2.3] - 2026-11-20
+
+### 门禁判别力加固（35 份 pos 补 `.expect`；修 0.2.2 参数注册回归 + i8 元素符号扩展；2026-11-20）
+
+- **缺陷一（0.2.2 回归）**：聚合参数注册把「字节布局块变量」紧跟在其合成 ABI 槽之后声明，块成员 vreg 因此落在参数索引区间内——后面再跟标量参数时，标量会被绑进块的首槽（`p[0] = arg1`，而 `extra` 永无赋值）。`ir_sparam` 打 `struct param bad` / `sret chain bad`、`struct_param_prefix` 打 `struct param prefix bad`；这些用例当时无 `.expect`，门禁结构上看不见。
+  修复：参数注册改**两遍**——第一遍只登记全部 ABI 槽（聚合按 `ceil(bytes/8)` 个合成槽、标量槽），第二遍再为聚合参数建字节布局块并逐块搬入，块变量一律落在参数区之后。
+- **缺陷二**：1 字节数组/成员元素读取一律走 `IR_LOAD8`（零扩展），i8 元素读到 `255` 而非 `-1`（`a[1] = 255` 后 `a[1] == -1` 判假）。修复：新增 `ir_load1`，按元素类型码走 `IR_LOAD` 负宽（`lb` 符号扩展），u8/未知类型仍 `LOAD8`；数组读、成员数组成员读、指针链读、成员复合赋值四处同步。
+- **门禁加固**：给 35 份缺 `.expect` 的 pos 用例补期望（含 `ir_narray` / `ir_sparam` / `struct_param_prefix` / `ir_str` / `flow_move` 等），门禁 PASS 由 **74 → 109**（pos 73/73 + err 36/36 全部有判据）。
+- **验证**：门禁 **109P/0F/0S ×2**；全量交叉重扫 **142/142 SAME（DIFF/RUNFAIL/LINKFAIL 全 0）**；`ir_narray` / `ir_sparam` / `struct_param_prefix` / `ir_str` 产物 ASan **0 report**。
+- **边界**：1 字节元素符号以元素类型码为准；`char` 在 NihaoC 映射 i8（有符号）。
+
 ## [v0.2.2] - 2026-11-18
 
 ### 嵌套聚合值语义（聚合参数改「8 字节块」展平；新增 `nested_agg_value` 回归用例；2026-11-18）

@@ -1,0 +1,8 @@
+sizeof i32 ok
+sizeof i64 ok
+sizeof struct ok
+array sizeof ok
+offsetof ok
+typeof ok
+malloc ok
+malloc write ok

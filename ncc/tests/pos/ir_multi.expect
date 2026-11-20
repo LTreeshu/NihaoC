@@ -1,0 +1,4 @@
+multi ok
+multi write ok
+const multi ok
+expr init ok

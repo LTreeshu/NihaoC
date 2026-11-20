@@ -1,0 +1,6 @@
+const ok
+var ok
+flow ok
+static ok
+undef ok
+is const ok

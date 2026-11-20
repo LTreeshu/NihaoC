@@ -1,0 +1,10 @@
+ptr read ok
+ptr write ok
+ptr double ok
+ptr narrow ok
+ptr arith ok
+ptr compound ok
+ptr double compound ok
+ptr narrow compound ok
+ptr mul ok
+ptr sub ok

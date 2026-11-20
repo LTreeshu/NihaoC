@@ -1380,12 +1380,21 @@ static int ir_arr_const_addr(int vi, long long idx)
     return a;
 }
 
-/* 按元素步长读/写（1/2/4/8）。1 字节与历史一致用 LOAD8/STORE8；
+/* 1 字节元素窄读：有符号（i8/char）→ IR_LOAD 负宽符号扩展；
+ * 无符号/未知 → LOAD8 零扩展。此前一律 LOAD8，i8 元素读到 255 而非 -1。 */
+static void ir_load1(int dst, int addr, int vcode)
+{
+    int64_t w = ir_load_width_imm(vcode);
+    if (w < 0) ir_emit(F, IR_LOAD, dst, addr, -1, w);
+    else ir_emit(F, IR_LOAD8, dst, addr, -1, 0);
+}
+
+/* 按元素步长读/写（1/2/4/8）。1 字节按元素类型定符号扩展；
  * 2/4 用窄存取（宽度与符号按元素类型码）；8 走完整槽。 */
 static void ir_arr_load(int dst, int addr, int es, int vcode)
 {
     if (es == 1) {
-        ir_emit(F, IR_LOAD8, dst, addr, -1, 0);
+        ir_load1(dst, addr, vcode);
         return;
     }
     if (es == 2 || es == 4) {
@@ -1942,7 +1951,7 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
                 continue;
             }
             int v = ir_new_vreg(F);
-            if (ch->width == 1) ir_emit(F, IR_LOAD8, v, addr, -1, 0);
+            if (ch->width == 1) ir_load1(v, addr, ch->elem);
             else ir_emit(F, IR_LOAD, v, addr, -1, 0);
             if (ch->elem == 1 || ch->elem == 8) ir_set_double(v);
             else if (ch->elem > 0) v = ir_coerce(v, ch->elem);
@@ -2206,7 +2215,7 @@ static int ir_chain(CompilerState *cs, int vi, IrChain *ch)
                 return addr;
             }
             int v = ir_new_vreg(F);
-            if (esize == 1) ir_emit(F, IR_LOAD8, v, addr, -1, 0);
+            if (esize == 1) ir_load1(v, addr, ir_member_vcode(ti, last_fi));
             else {
                 /* PB-76(b)：标量成员按成员类型窄读（符号扩展）；位域保持 8 字节 + AND */
                 int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
@@ -3334,7 +3343,7 @@ static int ir_primary(CompilerState *cs)
                 return addr;
             }
             int vr = ir_new_vreg(F);
-            if (esize == 1) ir_emit(F, IR_LOAD8, vr, addr, -1, 0);
+            if (esize == 1) ir_load1(vr, addr, ir_member_vcode(ti, last_fi));
             else {
                 /* PB-76(b)：标量成员按成员类型窄读（符号扩展）；位域保持 8 字节 + AND */
                 int mcode = (agg_types[ti].mbits[last_fi] > 0) ? 0
@@ -5151,7 +5160,7 @@ static void ir_stmt_impl(CompilerState *cs)
                     if (elem_addr >= 0) {
                         /* 数组成员复合赋值：当前值取元素地址处的内容 */
                         cur = ir_new_vreg(F);
-                        if (esize == 1) ir_emit(F, IR_LOAD8, cur, elem_addr, -1, 0);
+                        if (esize == 1) ir_load1(cur, elem_addr, ir_member_vcode(ti, fi));
                         else ir_emit(F, IR_LOAD, cur, elem_addr, -1, 0);
                     } else if (bfbits > 0) {
                         /* 位域复合赋值：基于位域值运算（存储单元 LOAD + 移位 + AND） */
@@ -5854,34 +5863,28 @@ static void ir_func_named(CompilerState *cs, const char *fname, int pre_vis, int
         F->param_agg_ti[0] = -1;
         vpi = 1;
     }
+    /* 两遍注册（0.2.2 回归修复）：第一遍只登记 ABI 参数槽（聚合按 8 字节块），
+     * 保证前 vpi 个 vreg 恰为参数槽；第二遍再为聚合参数建字节布局块并搬入——
+     * 块变量必须落在参数区之后，否则后续标量参数会被绑进块成员里。 */
+    int aggn = 0, agg_pi[32], agg_ti[32], agg_st[32];
     for (int pi = 0; pi < nparam; pi++) {
         F->param_vis[pi] = pvis[pi];     /* M2 调用点检查用（声明序，与 param 对齐） */
         int ti = ptype_ti[pi];
         if (ti >= 0) {
-            /* PB-88/0.2.2：聚合参数按 **8 字节块** 展平（chunks = ceil(bytes/8)）。
-             * 入参槽只作 ABI 载体（合成名）；真正的聚合参数变量另建字节布局块，
-             * 把各块按 8 字节搬入——嵌套聚合/大聚合的尾部字节不再被「按成员展平」截断。 */
             int chunks = agg_types[ti].bytes > 0 ? (agg_types[ti].bytes + 7) / 8 : 1;
-            int pstart = vpi;
+            if (aggn < 32) {
+                agg_pi[aggn] = pi; agg_ti[aggn] = ti; agg_st[aggn] = vpi; aggn++;
+            }
             for (int k = 0; k < chunks; k++) {
                 /* 名字必须堆分配：var_declare 存的是指针，栈缓冲会在下一轮被覆写，
-                 * 三次声明撞成同名 → 只分配一个槽（0.2.2 实测踩到）。 */
+                 * 三轮声明撞成同名 → 只分配一个槽（0.2.2 实测踩到）。 */
                 char *pn = nihao_malloc(g_cs, 64);
                 snprintf(pn, 64, "__parg%d_%d", pi, k);
                 var_declare(pn, 0, -1, VIS_VAR, 0);
                 F->param_types[vpi + k] = 0;
             }
-            F->param_agg_ti[pstart] = ti;
-            for (int k = 1; k < chunks; k++) F->param_agg_ti[pstart + k] = -1;
-            {
-                int vi = var_declare(pnames[pi], chunks, ti, pvis[pi], 0);
-                vblk[vi] = chunks;
-                for (int k = 0; k < chunks; k++) {
-                    int src = pstart + k;
-                    int addr = ir_ptr_byte_off(ir_agg_base(vi), (long long)k * 8);
-                    ir_emit(F, IR_STORE, -1, addr, src, 0);
-                }
-            }
+            F->param_agg_ti[vpi] = ti;
+            for (int k = 1; k < chunks; k++) F->param_agg_ti[vpi + k] = -1;
             vpi += chunks;
         } else {
             int vi = var_declare(pnames[pi], 0, -1, pvis[pi], 0);
@@ -5895,6 +5898,17 @@ static void ir_func_named(CompilerState *cs, const char *fname, int pre_vis, int
                 vtype[vi] = ptypes[pi]; /* 窄整数参数记录类型（值已符号扩展，入槽无需截断） */
             }
             vpi++;
+        }
+    }
+    /* 第二遍：聚合参数块（在参数区之后分配），把 ABI 块搬入字节布局块 */
+    for (int a = 0; a < aggn; a++) {
+        int pi = agg_pi[a], ti = agg_ti[a], pstart = agg_st[a];
+        int chunks = agg_types[ti].bytes > 0 ? (agg_types[ti].bytes + 7) / 8 : 1;
+        int vi = var_declare(pnames[pi], chunks, ti, pvis[pi], 0);
+        vblk[vi] = chunks;
+        for (int k = 0; k < chunks; k++) {
+            int addr = ir_ptr_byte_off(ir_agg_base(vi), (long long)k * 8);
+            ir_emit(F, IR_STORE, -1, addr, pstart + k, 0);
         }
     }
     F->param_count = vpi;

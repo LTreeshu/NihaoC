@@ -1,0 +1,8 @@
+char arr ok
+char lit ok
+char write ok
+str pool ok
+string alias ok
+char trunc ok
+dyn str ok
+dyn str write ok

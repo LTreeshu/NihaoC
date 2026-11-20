@@ -1,0 +1,7 @@
+cmp ok
+neg ok
+inc ok
+dec ok
+bitnot ok
+tern ok
+tern2 ok
