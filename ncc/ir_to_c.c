@@ -396,14 +396,19 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                     /* 收集：由紧随其后的 CALL 处理 */
                     break;
                 case IR_CALL: {
-                    /* 取本 CALL 前最近的 nargs 个 PARAM */
+                    /* 取本 CALL 前最近的 nargs 个 PARAM。
+                     * SH-3：此前是「从头扫到 i、只收前 64 条 PARAM」——函数里 PARAM 累计
+                     * 超过 64 条后，之后每次调用都会拿到第 62/63 条这类陈旧实参
+                     * （实测：4 实参调用之后紧跟的 2 实参调用被编译成前一次的后两个参数，
+                     * 产物 C 不报错、运行期算错/崩溃）。改为**从后往前**收最近 nargs 条。 */
                     int nargs = (int)in->imm;
+                    if (nargs > 64) nargs = 64;
+                    if (nargs < 0) nargs = 0;
                     int temp[64];
                     int tc = 0;
-                    for (int k = 0; k < i && tc < 64; k++) {
+                    for (int k = i - 1; k >= 0 && tc < nargs; k--) {
                         if (f->ins[k].op == IR_PARAM) temp[tc++] = f->ins[k].a;
                     }
-                    int start = tc > nargs ? tc - nargs : 0;
                     /* malloc 返回 void* → 显式 (int64_t)(intptr_t) 消除警告 */
                     cb_put(&b, "    %s = %s%s(", vrid[in->dst],
                            (in->sym && strcmp(in->sym, "malloc") == 0) ?
@@ -413,27 +418,29 @@ int irgen_c_emit(IrProg *p, const char *outfile)
                      * 不是 LD_ADDR 直连，is_str_addr 认不出来 ⇒ 对 puts 的实参统一包指针 cast，
                      * 否则产物 C 在 clang 严格档下是 int→pointer 硬错误。 */
                     int puts_arg = (in->sym && strcmp(in->sym, "puts") == 0);
-                    for (int k = start; k < tc; k++) {
-                        cb_put(&b, "%s%s", k > start ? ", " : "",
+                    /* temp 是倒序收集的：按 tc-1 .. 0 正向输出 */
+                    for (int k = tc - 1; k >= 0; k--) {
+                        cb_put(&b, "%s%s", k < tc - 1 ? ", " : "",
                                is_str_addr(f, temp[k]) ? "(char*)" :
-                               (puts_arg && k == start) ? "(char*)(intptr_t)" : "");
+                               (puts_arg && k == tc - 1) ? "(char*)(intptr_t)" : "");
                         cb_put(&b, "%s", vrid[temp[k]]);
                     }
                     cb_put(&b, ");\n");
                     break;
                 }
                 case IR_CALLI: {
-                    /* 间接调用：dst = call *(a)，旧式无原型函数指针 */
+                    /* 间接调用：dst = call *(a)，旧式无原型函数指针（同上：从后往前收） */
                     int nargs = (int)in->imm;
+                    if (nargs > 64) nargs = 64;
+                    if (nargs < 0) nargs = 0;
                     int temp[64];
                     int tc = 0;
-                    for (int k = 0; k < i && tc < 64; k++) {
+                    for (int k = i - 1; k >= 0 && tc < nargs; k--) {
                         if (f->ins[k].op == IR_PARAM) temp[tc++] = f->ins[k].a;
                     }
-                    int start = tc > nargs ? tc - nargs : 0;
                     cb_put(&b, "    %s = ((int64_t (*)())%s)(", vrid[in->dst], vrid[in->a]);
-                    for (int k = start; k < tc; k++) {
-                        cb_put(&b, "%s%s", k > start ? ", " : "",
+                    for (int k = tc - 1; k >= 0; k--) {
+                        cb_put(&b, "%s%s", k < tc - 1 ? ", " : "",
                                is_str_addr(f, temp[k]) ? "(char*)" : "");
                         cb_put(&b, "%s", vrid[temp[k]]);
                     }
