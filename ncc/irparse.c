@@ -5312,7 +5312,12 @@ static void ir_stmt_impl(CompilerState *cs)
                     elems = (int)total;
                 }
             }
-            expect(cs, TOK_ASSIGN); /* 消费 =（expect 已推进） */
+            /* 自举准备（SH-1）：初值可省略。此前这里无条件 `expect(=)`，于是
+             * `buf char[64]` 这种「只要一块缓冲」的声明在 IR 线直接语法错，
+             * 后面整条语句级联失败——写编译器的人都得先声明缓冲。
+             * 无初值时按下一条分支做**确定性零填充**（不依赖栈上残留）。 */
+            int has_init = (cur_tok(cs) == TOK_ASSIGN);
+            if (has_init) next_tok(cs);
             int src_vi = -1;
             int call_ret_vis = -1;          /* PB-27：RHS 是函数调用时记录 callee->ret_vis */
             const char *call_name = NULL;    /* PB-27：函数名（错误消息用） */
@@ -5384,7 +5389,35 @@ static void ir_stmt_impl(CompilerState *cs)
             } else {
                 vtype[vi] = vt_code;    /* 窄整数：赋值时截断（IR_TRUNC） */
             }
-            if (cur_tok(cs) == TOK_LBRACE) {
+            if (!has_init) {
+                /* SH-1：无初值声明的确定性零填充。数组用运行期小循环
+                 * （~12 条 IR，与容量无关），标量/字符指针槽直接写 0。 */
+                int zero = ir_new_vreg(F);
+                ir_emit(F, IR_CONST, zero, -1, -1, 0);
+                if (elems > 0) {
+                    int zi = ir_new_vreg(F);
+                    ir_emit(F, IR_CONST, zi, -1, -1, 0);
+                    int ltop = ir_new_label(F);
+                    int lend = ir_new_label(F);
+                    ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+                    F->ins[F->ins_count - 1].label = ltop;
+                    int cond = emit_is_cmp_with_const(zi, IR_CMP_LT, elems);
+                    ir_emit(F, IR_JZ, -1, cond, -1, 0);
+                    F->ins[F->ins_count - 1].label = lend;
+                    int es = ir_elem_stride(vi);
+                    int addr = ir_elem_addr(cs, vi, vt[vi], zi, es, vetyp[vi] == 8);
+                    ir_arr_store(addr, zero, es);
+                    int one = ir_new_vreg(F);
+                    ir_emit(F, IR_CONST, one, -1, -1, 1);
+                    ir_emit(F, IR_ADD, zi, zi, one, 0);
+                    ir_emit(F, IR_JMP, -1, -1, -1, 0);
+                    F->ins[F->ins_count - 1].label = ltop;
+                    ir_emit(F, IR_LABEL, -1, -1, -1, 0);
+                    F->ins[F->ins_count - 1].label = lend;
+                } else {
+                    ir_emit(F, IR_MOV, vt[vi], zero, -1, 0);
+                }
+            } else if (cur_tok(cs) == TOK_LBRACE) {
                 /* 数组初始化列表 {e0, e1, ...}：逐个 STORE 到元素槽；
                  * 多维（PB-67）按维度递归填槽（行主序摊平） */
                 next_tok(cs);
@@ -6441,11 +6474,39 @@ static void ir_parse_top_level(CompilerState *cs)
             /* use 模块导入：把模块顶层声明内联进同一 IrProg（PB-73） */
             ir_use_decl(cs);
         } else if (cur_tok(cs) == TOK_LINK) {
-            /* link "lib" [as] alias：静态库导入——IR 单文件模型解析跳过 */
+            /* link "lib" [as alias]：SH-2 起真正接入链接命令行。
+             * 此前只做解析跳过 —— 于是 `link` 在 IR 线上是空语句，
+             * 外部库只能靠「未知标识符当外部符号」碰运气。 */
             next_tok(cs);
-            if (cur_tok(cs) == TOK_STRING_LITERAL) next_tok(cs);
+            char libname[128];
+            libname[0] = 0;
+            if (cur_tok(cs) == TOK_STRING_LITERAL) {
+                snprintf(libname, sizeof(libname), "%s", cs->parser.lex->tok_str);
+                next_tok(cs);
+            }
+            char aliasbuf[128];
+            aliasbuf[0] = 0;
+            /* 两种写法都收：`link "lib" alias`（历史形态，p0_link.nc）与
+             * `link "lib" as alias`（BNF 形态） */
             if (cur_tok(cs) == TOK_AS) next_tok(cs);
-            if (cur_tok(cs) == TOK_IDENTIFIER) next_tok(cs);
+            if (cur_tok(cs) == TOK_IDENTIFIER) {
+                snprintf(aliasbuf, sizeof(aliasbuf), "%s", cs->parser.lex->tok_str);
+                next_tok(cs);
+            }
+            if (!libname[0]) {
+                nihao_error(cs, "ir: link expects a library name string");
+            } else {
+                int dup = 0;
+                for (int k = 0; k < cs->link_lib_count; k++)
+                    if (strcmp(cs->link_libs[k].name, libname) == 0) dup = 1;
+                if (!dup && cs->link_lib_count < MAX_LINK_LIBS) {
+                    LinkLib *ll = &cs->link_libs[cs->link_lib_count++];
+                    ll->name = nihao_strdup(g_cs, libname);
+                    ll->alias = aliasbuf[0] ? nihao_strdup(g_cs, aliasbuf) : NULL;
+                    ll->path = NULL;
+                    ll->is_static = 0;
+                }
+            }
             if (cur_tok(cs) == TOK_NEWLINE) next_tok(cs);
         } else if (cur_tok(cs) == TOK_ALIGN) {
             /* 对齐块：IR 槽模型下跳过 */
@@ -6535,6 +6596,14 @@ int ir_compile(CompilerState *cs, const char *filename, int backend, int verbose
     char cmd[1600];
     snprintf(cmd, sizeof(cmd), "tcc \"%s\" -o \"%s\"", out,
              cs->output_file ? cs->output_file : "a.out");
+    /* SH-2：`link "lib"` 收集到的库交给链接器（此前整条语句被跳过）。
+     * 注意平台差异：libc/libm 这类在 Windows 的 tcc 里没有独立库名
+     * （`-lm` 会报 library 'm' not found），所以只写真正需要的外部库。 */
+    for (int li = 0; li < cs->link_lib_count; li++) {
+        size_t clen = strlen(cmd);
+        if (clen + 8 >= sizeof(cmd)) break;
+        snprintf(cmd + clen, sizeof(cmd) - clen, " -l%s", cs->link_libs[li].name);
+    }
     if (cs->verbose) printf("Invoking: %s\n", cmd);
     int rc = system(cmd);
     return rc == 0 ? 0 : -1;

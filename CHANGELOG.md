@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 自举准备（SH-1 声明初值可省略 + SH-2 `link` 接入链接命令行；2026-11-21）
+
+- **SH-1**：声明路径不再无条件 `expect('=')`。`buf char[64]` 这类「只要一块缓冲」的声明此前在 IR 前端
+  直接语法错并把后续语句整条级联带死（写编译器第一步就卡住）。现在初值可省略，无初值时确定性零填充：
+  数组走运行期小循环逐元素写 0（与容量无关，约 12 条 IR），标量 / `char[]` 指针槽直接写 0。
+  新增 `pos/decl_no_init`（含 `.expect`）入 `IR_SUBSET`，门禁 **109 → 110P/0F/0S**（双后端）。
+- **SH-2**：`link "lib" [as alias]` 从「解析即跳过」改为真正收集库名（去重）并在最终 `tcc` 命令上追加
+  `-l<lib>`；历史写法 `link "lib" alias`（`p0_link.nc`）与 BNF 写法 `link "lib" as alias` 都收。
+  平台差异：Windows tcc 无独立 `libm`，`link "m"` 报 `library 'm' not found`（实测），`link "kernel32"` 正常。
+- **动机与能力矩阵**：见 `docs/SELFHOST.md`。自举编译器本体在仓库外 `NihaoC-selfhost/` 开发。
+
 （开发中）
 
 ## [v0.2.3] - 2026-11-20
